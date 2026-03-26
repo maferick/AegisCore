@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JobContract",
+  "description": "Complete metadata contract for a registered job in the authoritative registry",
+  "type": "object",
+  "required": [
+    "job_key",
+    "processor_id",
+    "tier",
+    "owner",
+    "batch_config",
+    "checkpoint_config"
+  ],
+  "properties": {
+    "job_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "processor_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tier": {
+      "type": "integer",
+      "enum": [1, 2, 3]
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "default": ""
+    },
+    "batch_config": {
+      "type": "object",
+      "required": ["batch_size", "max_duration_seconds"],
+      "properties": {
+        "batch_size": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 100000
+        },
+        "max_duration_seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 3600
+        },
+        "memory_limit_mb": {
+          "type": ["integer", "null"],
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "checkpoint_config": {
+      "type": "object",
+      "required": ["checkpoint_type"],
+      "properties": {
+        "checkpoint_type": {
+          "type": "string",
+          "enum": ["id_cursor", "timestamp_watermark", "composite_cursor"]
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "retry_policy": {
+      "type": "object",
+      "properties": {
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "backoff_strategy": {
+          "type": "string",
+          "enum": ["exponential", "linear", "fixed"]
+        },
+        "base_backoff_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "max_backoff_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "retryable_errors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["transient", "permanent", "data_quality", "contract_violation"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "schedule_cron": {
+      "type": ["string", "null"]
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false
+}

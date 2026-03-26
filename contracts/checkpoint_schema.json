@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CheckpointState",
+  "description": "Serialized checkpoint state for resumable job execution",
+  "type": "object",
+  "required": ["checkpoint_type", "value", "updated_at"],
+  "properties": {
+    "checkpoint_type": {
+      "type": "string",
+      "enum": ["id_cursor", "timestamp_watermark", "composite_cursor"]
+    },
+    "value": {
+      "type": "string",
+      "description": "Serialized cursor value. Format depends on checkpoint_type."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

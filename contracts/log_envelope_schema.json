@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogEnvelope",
+  "description": "Structured log envelope for AegisCore job execution (Appendix A)",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "job_key",
+    "run_id",
+    "execution_mode",
+    "batch_size",
+    "rows_processed",
+    "duration_ms",
+    "outcome"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp"
+    },
+    "job_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "execution_mode": {
+      "type": "string",
+      "enum": ["worker", "scheduler", "cli"]
+    },
+    "batch_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rows_processed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "failure", "partial"]
+    },
+    "error_type": {
+      "type": ["string", "null"],
+      "enum": ["transient", "permanent", "data_quality", "contract_violation", null]
+    },
+    "error_message": {
+      "type": ["string", "null"]
+    },
+    "checkpoint_before": {
+      "type": ["string", "null"]
+    },
+    "checkpoint_after": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": false
+}
