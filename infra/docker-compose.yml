@@ -159,7 +159,11 @@ services:
       start_period: 10s
     networks: [aegiscore]
 
-  php-fpm:
+  # Shared config for PHP containers (php-fpm + scheduler). YAML anchor lives
+  # on php-fpm; scheduler merges it with `<<: *php-common`. Any new PHP-side
+  # worker (future Horizon container, queue isolation, etc.) merges the same
+  # anchor so env + volumes can't drift between planes by accident.
+  php-fpm: &php-common
     image: aegiscore/php-fpm:0.1.1
     build:
       context: ./php
@@ -221,6 +225,10 @@ services:
     volumes:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/php/conf.d:/usr/local/etc/php/conf.d/aegiscore:ro
+      # Read-only mount of the repo's pinned SDE version marker. The daily
+      # `reference:check-sde-version` command reads /var/www/sde/version.txt
+      # and compares it against upstream.
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/infra/sde:/var/www/sde:ro
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
       interval: 15s
@@ -233,6 +241,20 @@ services:
       redis:
         condition: service_healthy
     networks: [aegiscore]
+
+  scheduler:
+    # Laravel task scheduler. `schedule:work` is a long-running process that
+    # internally runs `schedule:run` once a minute — no host cron required.
+    # Scheduled tasks (e.g. `reference:check-sde-version` in routes/console.php)
+    # dispatch Horizon jobs; the actual work runs on php-fpm's queue workers.
+    <<: *php-common
+    container_name: scheduler
+    # Inherits php-fpm's entrypoint (which chowns storage/ + bootstrap/cache
+    # then execs whatever the container CMD is). No fpm listener, so drop the
+    # healthcheck — the container either runs schedule:work or it doesn't.
+    command: ["php", "artisan", "schedule:work"]
+    healthcheck:
+      disable: true
 
   nginx:
     image: nginx:1.27-alpine

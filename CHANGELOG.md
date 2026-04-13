@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Daily SDE version-drift check** (first concrete piece of the ADR-0001
+  reference-data plumbing). A new `scheduler` compose service runs
+  `php artisan schedule:work` as a long-running process — no host cron.
+  `routes/console.php` registers `reference:check-sde-version` at 08:00
+  UTC daily, which dispatches the `CheckSdeVersion` Horizon job. The job
+  HEADs CCP's pinned SDE tarball URL, reads the repo-pinned marker at
+  `/var/www/sde/version.txt` (bind-mounted from `infra/sde/`), and inserts
+  one row into the new `sde_version_checks` table (id, checked_at,
+  pinned/upstream/etag/last_modified, is_bump_available, http_status,
+  notes). One HTTP HEAD + one insert — well inside the plane-boundary
+  budget. New Filament dashboard widget (`SdeVersionStatusWidget`)
+  surfaces four states with the EVE HUD palette: never-checked (gray) /
+  up-to-date (cyan) / bump-available (amber) / stalled (red). New
+  Filament page at `/admin/sde-status` embeds the widget and paginates
+  the full check history. `make sde-check` triggers an inline run that
+  prints the result — useful on deploy / for smoke-testing the pipe.
+  The scaffold for the cross-cutting `app/app/Reference/` module lands
+  with this PR (Jobs / Models / Console), documented as "not a pillar"
+  in parallel with `app/Outbox/`. The actual SDE importer (Python,
+  `make sde-import`) is scoped to a later PR — this PR only reports
+  drift, never loads it.
+- **YAML anchor refactor of `php-fpm` in `infra/docker-compose.yml`**.
+  The php-fpm service now carries `&php-common`; the new `scheduler`
+  service merges it with `<<: *php-common`. Any future PHP-side worker
+  (dedicated Horizon container, queue isolation) folds in the same
+  anchor so env + volumes can't drift between services by accident.
+
 - **ADR series** started under `docs/adr/`. First entry,
   [ADR-0001](docs/adr/0001-static-reference-data.md), locks the store
   placement for EVE static reference data (SDE): MariaDB `ref_*` tables are

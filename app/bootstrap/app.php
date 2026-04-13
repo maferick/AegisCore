@@ -12,6 +12,12 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
+    ->withCommands([
+        // Commands that live outside app/Console/Commands must be
+        // registered explicitly — the framework only auto-discovers
+        // the default path.
+        \App\Reference\Console\CheckSdeVersionCommand::class,
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting
         // X-Forwarded-Proto=https. Without this trustProxies() call Laravel

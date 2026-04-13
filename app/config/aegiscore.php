@@ -78,4 +78,35 @@ return [
         'max_job_rows' => 100,
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | EVE Static Data (SDE)
+    |--------------------------------------------------------------------------
+    | Upstream SDE tarball URL (pinned JSONL-zip from CCP's developer site)
+    | and the on-disk path to the currently pinned version marker. The daily
+    | `reference:check-sde-version` command HEADs the upstream URL, reads the
+    | local marker, and records both in `sde_version_checks` so the admin
+    | widget can show "you're N days / Last-Modified behind".
+    |
+    | The actual SDE importer (Python, `make sde-import`) is scoped to a
+    | later PR — this config only drives the version-drift check.
+    |
+    | See docs/adr/0001-static-reference-data.md for the data-ownership
+    | rationale (MariaDB canonical, Neo4j + OpenSearch as derived projections).
+    */
+    'sde' => [
+        'source_url' => env(
+            'SDE_SOURCE_URL',
+            'https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip',
+        ),
+        // In-container path for the pinned version marker. `infra/sde/` is
+        // bind-mounted read-only at /var/www/sde in both php-fpm and
+        // scheduler. Missing / empty file = no snapshot loaded yet, which
+        // the widget surfaces as "SDE not loaded".
+        'version_file' => env('SDE_VERSION_FILE', '/var/www/sde/version.txt'),
+        // HTTP client timeout for the daily HEAD check. Keep tight — this
+        // runs inside the plane-boundary < 2s budget.
+        'check_timeout_seconds' => 10,
+    ],
+
 ];

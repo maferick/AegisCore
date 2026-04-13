@@ -34,6 +34,8 @@ help:
 	@echo "    make test              run phpunit via artisan test"
 	@echo "    make lint              pint --test"
 	@echo ""
+	@echo "  make sde-check    run the SDE version-drift check now (inline)"
+	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
 up:
@@ -95,7 +97,7 @@ bootstrap:
 	sudo chown -R 7474:7474 $(AEGISCORE_ROOT)/docker/neo4j
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check
 build:
 	$(COMPOSE) build
 
@@ -167,6 +169,11 @@ laravel-fix-perms:
 horizon-publish:
 	$(COMPOSE) exec php-fpm php artisan vendor:publish --tag=horizon-config --force
 	$(COMPOSE) exec php-fpm php artisan vendor:publish --tag=horizon-assets --force
+
+# Run the SDE version-drift check inline (bypasses Horizon, prints result).
+# Scheduled version runs daily at 08:00 UTC via the `scheduler` container.
+sde-check:
+	$(COMPOSE) exec php-fpm php artisan reference:check-sde-version --sync
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
