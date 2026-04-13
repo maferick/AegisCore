@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Nginx container no longer reports `unhealthy` while serving IPv4 traffic.
+  Root cause: busybox `wget` resolves `localhost` to IPv6 `::1`, and the
+  shipped nginx config only listened on IPv4 `0.0.0.0:80`. The healthcheck
+  now uses `127.0.0.1` explicitly (belt), and `nginx/conf.d/aegiscore.conf`
+  adds `listen [::]:80 default_server` (braces).
+- `/health` response no longer carries a duplicate `Content-Type` header
+  (`application/octet-stream` + `text/plain`). Switched the location from
+  `add_header Content-Type` to `default_type text/plain`, which nginx
+  treats as a content-negotiation hint instead of appending a second header.
+
+### Changed
+- `infra/notes.md` calls out that `AEGISCORE_ROOT` is case-sensitive and
+  must match the on-disk project path exactly — the silent fallback to
+  `/opt/aegiscore` on typo produces an empty bind-mount shadow and makes
+  nginx/PHP serve nothing. Added a matching troubleshooting entry.
+
 ### Added
 - GitHub Actions CI (`.github/workflows/ci.yml`):
   - `docker compose config` against `.env.example`

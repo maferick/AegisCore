@@ -29,6 +29,15 @@ All bind-mount paths in `infra/docker-compose.yml` resolve via
 `${AEGISCORE_ROOT:-/opt/aegiscore}`, so you can point the stack at a different
 root on dev laptops by setting `AEGISCORE_ROOT` in `.env`.
 
+> ⚠️ **`AEGISCORE_ROOT` is case-sensitive.** It must match the on-disk path
+> exactly. If the var is unset (or misspelled) compose silently falls back to
+> the default `/opt/aegiscore` and Docker auto-creates an **empty** shadow
+> tree at that path, then bind-mounts those empty dirs into every container.
+> Symptoms: nginx starts with no config (`default.conf is not a file`), PHP
+> sees an empty `/var/www/html`, logs disappear. Check with
+> `grep AEGISCORE_ROOT .env` — the value must exactly match the project dir
+> casing (e.g. `/opt/AegisCore`, not `/opt/aegiscore`).
+
 ## First-time setup
 
 Run `make bootstrap` to create the `docker/*` dirs with correct ownership:
@@ -116,3 +125,12 @@ only lives in a derived store.
   `pull_policy: build` on the php-fpm service prevents the pull attempt. If
   you still see this, you're on an older compose; run `make build` manually
   before `make up` on first deploy.
+- **Nginx container shows `unhealthy` but curl works:** busybox `wget`
+  resolves `localhost` to IPv6 `::1` before trying IPv4. If the nginx config
+  doesn't include `listen [::]:80`, the healthcheck gets `Connection refused`
+  from inside the container even though IPv4 works fine. The shipped config
+  listens on both stacks and the healthcheck uses `127.0.0.1` explicitly —
+  if you edit either, keep that invariant.
+- **Empty response from `curl http://localhost/` after a clean boot:** almost
+  always a path-casing mismatch between `AEGISCORE_ROOT` and the on-disk
+  project dir. See the warning at the top of this file.
