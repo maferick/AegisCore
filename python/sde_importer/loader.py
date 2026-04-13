@@ -165,6 +165,17 @@ def _extract(col: Column, row: dict) -> Any:
 
     raw = _dotted(row, col.source)
     if raw is None:
+        # Boolean columns in the ref_* tables are all declared NOT NULL
+        # with a DB-side default (false on most, true on a handful like
+        # `stackable` and `high_is_good`). CCP's SDE omits boolean flags
+        # when they're false (a system that's not a trade hub has no
+        # `hub` key; a module that isn't published has no `published`
+        # key). Coerce missing → False so we satisfy NOT NULL without a
+        # schema churn; the raw row survives in the `data` JSON catch-all
+        # so downstream code can distinguish "CCP said false" from "CCP
+        # didn't tell us" if it ever matters.
+        if col.kind == "bool":
+            return False
         return None
 
     kind = col.kind
