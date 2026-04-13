@@ -41,6 +41,22 @@ return [
         // deployment wants richer profile info on login.
         'login_scopes' => env('EVE_SSO_LOGIN_SCOPES', 'publicData'),
 
+        // Scopes requested for the elevated /auth/eve/service-redirect
+        // flow — the "service character" SSO that admins kick off from
+        // /admin/eve-service-character. Tokens land in eve_service_tokens
+        // (encrypted) for the Python execution-plane poller to consume.
+        // Default covers the read-only set the polling roadmap needs;
+        // operators trim or extend per deployment. Space- or
+        // comma-separated. See ADR-0002 § Token kinds + phase-2 amendment.
+        'service_scopes' => env(
+            'EVE_SSO_SERVICE_SCOPES',
+            'publicData esi-location.read_location.v1 esi-location.read_ship_type.v1 '
+            .'esi-search.search_structures.v1 esi-universe.read_structures.v1 '
+            .'esi-markets.structure_markets.v1 esi-characters.read_corporation_roles.v1 '
+            .'esi-corporations.read_corporation_membership.v1 '
+            .'esi-corporations.read_structures.v1 esi-alliances.read_contacts.v1',
+        ),
+
         // EVE SSO v2 endpoints. Pinned here so a routing change from CCP
         // is a config edit, not a code search.
         'authorize_url' => 'https://login.eveonline.com/v2/oauth/authorize/',

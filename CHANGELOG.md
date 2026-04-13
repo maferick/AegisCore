@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **AegisCore brand mark — SVG logo + favicon.** Pointy-top hex shield
+  in cyan (the EVE HUD "go / friendly / selected" colour from the
+  landing palette), with an inset gold hex frame, four cardinal HUD
+  reticle ticks pointing inward, and a cyan "intel signature" core dot.
+  Reads as "Aegis (defensive shield) + Core (sensing centre)" — a
+  defensive intel platform for New Eden, which is exactly what the
+  product is. Same SVG ships as the browser-tab favicon and as an
+  inline lockup in the landing page header. No raster assets — pure
+  SVG scales cleanly from 16px tab icons to large UI marks. Removed
+  the previous zero-byte placeholder `favicon.ico`; modern browsers
+  honour `<link rel="icon" type="image/svg+xml">` directly.
+- **EVE service character SSO flow** (admin-only, elevated scopes,
+  encrypted token storage). Phase-2 work landing early — see
+  ADR-0002 § Token kinds + the implementation-checklist amendment.
+  - New `eve_service_tokens` table (one row per stack, keyed on
+    `character_id`, upserted on re-auth). `access_token` and
+    `refresh_token` ride Laravel's `'encrypted'` cast (APP_KEY =
+    encryption key) so a `SELECT *` leak is ciphertext, not bearer
+    tokens. Model also marks them `$hidden` so a stray `->toArray()`
+    can't dump them into a response.
+  - New admin-only route `/auth/eve/service-redirect` requests the
+    scope set from `EVE_SSO_SERVICE_SCOPES` (default covers
+    `publicData`, location, search, structure-markets,
+    corporation-membership/structures, and alliance-contacts —
+    enough for the planned polling). Both the login flow and the
+    service flow share `/auth/eve/callback`; a session-stashed
+    `flow` marker (`'login'` vs `'service'`) routes to the right
+    finisher so the registered CCP app only needs one redirect URI.
+  - New Filament page `/admin/eve-service-character` shows the
+    current stored token (character + scopes + freshness +
+    audit-trail) and a one-button (re)authorise CTA. Diff-highlights
+    scopes the env asks for that the stored token doesn't grant.
+  - Admin user-menu gets an "Authorise EVE service character" entry
+    pointing at the page; replaces the old "Log in with EVE Online"
+    user-menu item, which (in the admin context) was confusing
+    because the operator is already logged in.
+
+### Changed
+- **Landing page rebuild.** Inline brand-mark SVG + wordmark in the
+  header (links back to home), with a hover-glow filter on the mark.
+  Right side of the header now hosts both the new authenticated user
+  badge (portrait pulled from `images.evetech.net` + character name
+  + inline sign-out form) and the existing env badge. Hero CTAs are
+  gated three ways:
+  - Guest with SSO configured → "Log in with EVE Online" (gold)
+  - Logged-in admin (per `User::canAccessPanel`) → "Admin →" (cyan)
+  - Logged-in non-admin → no primary CTA — landing page becomes a
+    content surface for them, not a doorway to a 403
+- **EVE SSO post-login redirect splits by admin status.** Admins
+  (per `EVE_SSO_ADMIN_CHARACTER_IDS` allow-list, or the bootstrap
+  no-character escape hatch) land on `/admin`; everyone else lands
+  on `/` (the landing page, which now welcomes them with the
+  identity badge). Previously every successful login dumped users
+  on `/admin`, where non-admins hit a 403.
+- **Filament admin user-menu gets a "Back to landing page" entry.**
+  The Filament brand link in the topbar goes to `/admin`, so there
+  was no obvious way out of the admin area back to the marketing
+  surface without typing a URL. New menu item closes the gap.
+- **POST `/logout` route** for the landing-page sign-out form.
+  Invalidates the session, regenerates the CSRF token, redirects to
+  `/`. Filament's panel-scoped logout keeps working for users in
+  `/admin`; this one exists for the marketing surface.
+
 ### Fixed
 - **EVE SSO + ESI env vars never reached the PHP container.** The
   `php-fpm` service in `infra/docker-compose.yml` carries an explicit

@@ -84,29 +84,34 @@ class AdminPanelProvider extends PanelProvider
                     ->group('Monitoring')
                     ->sort(100),
             ])
-            // User-menu (top-right dropdown) entry point for re-running the
-            // EVE SSO flow from inside admin. The callback upserts on
-            // character_id and `Auth::login()`s into whichever user that
-            // character is linked to (or creates a new user for an
-            // unfamiliar character) — so this is effectively "switch
-            // identity via EVE", not "attach an alt to my current user".
-            // True alt-linking that mutates the current session's user_id
-            // belongs in a phase-2 PR alongside the alts UI; this menu
-            // entry just exposes the same one button the login page
-            // already has.
+            // User-menu (top-right dropdown) — two operator entries:
             //
-            // Hidden when SSO isn't configured (same predicate as the
-            // login-form button) so it doesn't dead-end clicks.
-            ->userMenuItems(
+            //   1. "Back to landing page" — always present. The Filament
+            //      brand link in the topbar goes to `/admin`, which means
+            //      there's no obvious way out of the admin area back to
+            //      the marketing surface without typing a URL. This menu
+            //      item closes that gap.
+            //
+            //   2. "Authorise EVE service character" — only when SSO is
+            //      configured. Replaces the old "Log in with EVE Online"
+            //      entry, which (in the admin context) was confusing
+            //      because the operator is already logged in. The
+            //      service-character flow is the right reason for an
+            //      authenticated admin to round-trip through SSO again
+            //      — to grant the app elevated scopes for ESI polling.
+            //      See ADR-0002 § Token kinds + phase-2 amendment.
+            ->userMenuItems(array_values(array_filter([
+                MenuItem::make()
+                    ->label('Back to landing page')
+                    ->url(fn (): string => url('/'))
+                    ->icon('heroicon-o-arrow-left-on-rectangle'),
                 EveSsoClient::isConfigured()
-                    ? [
-                        MenuItem::make()
-                            ->label('Log in with EVE Online')
-                            ->url(fn (): string => route('auth.eve.redirect'))
-                            ->icon('heroicon-o-rocket-launch'),
-                    ]
-                    : [],
-            )
+                    ? MenuItem::make()
+                        ->label('Authorise EVE service character')
+                        ->url(fn (): string => route('filament.admin.pages.eve-service-character'))
+                        ->icon('heroicon-o-key')
+                    : null,
+            ])))
             // "Log in with EVE" button rendered under the default Filament
             // login form — only when the three required EVE_SSO_* env vars
             // are populated. Without that gate, clicking the button just
