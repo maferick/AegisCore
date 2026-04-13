@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (dedicated Horizon container, queue isolation) folds in the same
   anchor so env + volumes can't drift between services by accident.
 
+### Fixed
+- **`/admin/sde-status` rendered unstyled** — the widget summary text
+  ran together and the history "table" was concatenated plaintext. Root
+  cause: the hand-rolled Blade used Tailwind utility classes
+  (`space-y-3`, `grid-cols-2`, `flex`, `gap-3`, `px-3`) that aren't in
+  Filament's bundled CSS, and we deliberately don't ship a Vite/Tailwind
+  build step in phase 1. Fix: swap the custom views for Filament's
+  native primitives — `SdeVersionStatusWidget` now extends
+  `StatsOverviewWidget` (three stats: status / pinned / upstream, with
+  EVE-palette colours and Heroicon status icons), and the `SdeStatus`
+  page implements `HasTable` and uses Filament's table builder with
+  typed columns (icon column for the bump flag, badge column for HTTP
+  status, sortable `checked_at`, ternary filter for bumps-only). Both
+  render through Filament's own CSS bundle with zero build step.
+
 - **ADR series** started under `docs/adr/`. First entry,
   [ADR-0001](docs/adr/0001-static-reference-data.md), locks the store
   placement for EVE static reference data (SDE): MariaDB `ref_*` tables are
