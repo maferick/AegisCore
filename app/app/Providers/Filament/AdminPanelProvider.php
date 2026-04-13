@@ -6,6 +6,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\NavigationItem;
 use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
@@ -58,6 +59,19 @@ class AdminPanelProvider extends PanelProvider
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
                 Widgets\AccountWidget::class,
+            ])
+            // Horizon lives in the sidebar as a plain nav item (not a Page)
+            // because it ships its own Vue SPA that replaces Filament's
+            // layout entirely. Rendering it inside a Filament panel iframe
+            // would fight its router. Clicking this just full-navigates to
+            // /horizon, which is gated on the same canAccessPanel() check —
+            // see App\Providers\HorizonServiceProvider.
+            ->navigationItems([
+                NavigationItem::make('Horizon')
+                    ->url('/horizon')
+                    ->icon('heroicon-o-queue-list')
+                    ->group('Monitoring')
+                    ->sort(100),
             ])
             ->middleware([
                 EncryptCookies::class,
