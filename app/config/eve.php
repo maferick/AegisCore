@@ -83,6 +83,20 @@ return [
         // before being re-learned.
         'cache_store' => env('ESI_CACHE_STORE', 'redis'),
         'cache_ttl_seconds' => (int) env('ESI_CACHE_TTL_SECONDS', 86400),
+
+        // Reactive rate-limit throttle (App\Services\Eve\Esi\EsiRateLimiter).
+        //
+        //   safety_margin: refuse to send when the limiter's last-known
+        //     `X-Ratelimit-Remaining` for the URL's group has dropped to or
+        //     below this. Reserves a buffer for retries / out-of-band
+        //     traffic so we never burn the final tokens speculatively.
+        //
+        //   max_wait_seconds: the EsiClient will sleep in-process for waits
+        //     up to this many seconds (controllers, cron). Anything longer
+        //     throws EsiRateLimitException with the wait time so Horizon
+        //     callers can `release($seconds)` instead of pinning a worker.
+        'rate_limit_safety_margin' => (int) env('ESI_RATE_LIMIT_SAFETY_MARGIN', 5),
+        'rate_limit_max_wait_seconds' => (int) env('ESI_RATE_LIMIT_MAX_WAIT_SECONDS', 5),
     ],
 
 ];

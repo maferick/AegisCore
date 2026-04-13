@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ESI rate-limit module** — `App\Services\Eve\Esi\EsiRateLimiter`,
+  Redis-backed reactive throttle that the `EsiClient` now consults
+  before every request. Three pieces of state per group, all with
+  TTLs so they self-evict:
+  - `state` (`remaining`, `reset_at`) reseeded from `X-Ratelimit-*`
+    headers on every response (including 304 + 4xx — those still
+    cost tokens).
+  - `backoff` epoch set when CCP returns 429/420; per-group when the
+    response says which group, plus a global belt-and-braces hold so
+    a subsequent first-time URL also waits.
+  - `url_group` map populated from response headers so pre-flight can
+    look up the group from the URL alone for repeat calls.
+  Pre-flight returns seconds-to-wait. EsiClient sleeps in-process for
+  short waits (`ESI_RATE_LIMIT_MAX_WAIT_SECONDS`, default 5s); longer
+  holds throw `EsiRateLimitException` so Horizon callers can
+  `release($seconds)`. Reactive (CCP's `Remaining` is the source of
+  truth, no local token counting) so we don't compound drift across
+  parallel workers; not a distributed lock — `safety_margin` (default
+  5 tokens) absorbs the small overshoot from races and 429-backoff is
+  the safety net. ADR-0002 § ESI client revised; OpenAPI-spec ingestion
+  for pre-flight limit map stays out of scope (the reactive learner
+  re-discovers windows on its own when CCP rotates routes).
 - **EVE login button on the landing page + admin user menu.** Two new
   surfaces for the existing `/auth/eve` route, both gated on
   `EveSsoClient::isConfigured()` (so they vanish on deployments that
