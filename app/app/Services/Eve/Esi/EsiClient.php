@@ -10,9 +10,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Thin HTTP client for esi.evetech.net.
+ * HTTP client for esi.evetech.net.
  *
- * Phase-1 scope (ADR-0002 § ESI client):
+ * Scope (see ADR-0002 § ESI client):
  *
  *   - Sends the CCP-required `User-Agent` on every call.
  *   - Attaches `Authorization: Bearer <token>` when the caller supplies one.
@@ -20,16 +20,20 @@ use Illuminate\Support\Facades\Log;
  *     store, auto-attaches `If-None-Match` / `If-Modified-Since` on the next
  *     request. 3XX responses cost half the tokens of 2XX on ESI's published
  *     rate-limit math, so repeat fetches get noticeably cheaper.
- *   - Logs `X-Ratelimit-*` on every response (debug channel) for offline
- *     analysis; no pre-flight throttling yet — that belongs with the Python
- *     polling plane where it matters.
- *   - On 429 / 420: throws `EsiRateLimitException` carrying `Retry-After`.
- *     Callers decide whether to `release($seconds)` (Horizon) or bubble.
+ *   - Reactive rate-limit throttle via {@see EsiRateLimiter}: pre-flight
+ *     blocks (or throws) when a known group is in 429 cooldown or running
+ *     below `safety_margin` tokens. State is reseeded from
+ *     `X-Ratelimit-*` headers on every response.
+ *   - On 429 / 420: tells the limiter to back the group off, then throws
+ *     `EsiRateLimitException` carrying `Retry-After`. Callers decide
+ *     whether to `release($seconds)` (Horizon) or bubble.
+ *   - Logs `X-Ratelimit-*` on every response (debug channel).
  *
- * Explicitly NOT in scope for phase 1:
+ * Still NOT in scope:
  *
- *   - Per-group pre-flight throttling (needs ingest of the OpenAPI spec's
- *     `x-rate-limit` extension; ADR-0002 punts this to the Python poller).
+ *   - OpenAPI-spec-derived pre-flight limit map (the limiter learns each
+ *     group's window from the first response instead — cheaper, no
+ *     deploy-time spec ingestion).
  *   - Token refresh — login tokens aren't stored in phase 1.
  *   - Pagination helpers.
  *
@@ -43,6 +47,9 @@ final class EsiClient
         private readonly int $timeoutSeconds,
         private readonly string $cacheStore,
         private readonly int $cacheTtlSeconds,
+        private readonly EsiRateLimiter $rateLimiter,
+        /** Maximum seconds we'll sleep synchronously when pre-flight says wait. */
+        private readonly int $maxWaitSeconds,
     ) {}
 
     /**
@@ -59,6 +66,8 @@ final class EsiClient
             timeoutSeconds: (int) ($cfg['timeout_seconds'] ?? 10),
             cacheStore: (string) ($cfg['cache_store'] ?? 'redis'),
             cacheTtlSeconds: (int) ($cfg['cache_ttl_seconds'] ?? 86400),
+            rateLimiter: EsiRateLimiter::fromConfig(),
+            maxWaitSeconds: (int) ($cfg['rate_limit_max_wait_seconds'] ?? 5),
         );
     }
 
@@ -71,12 +80,20 @@ final class EsiClient
      *
      * @param array<string, scalar|array<int, scalar>> $query
      *
-     * @throws EsiRateLimitException  on 429 / 420
+     * @throws EsiRateLimitException  on 429 / 420 (also raised pre-flight when
+     *                                a known group is in cooldown longer than
+     *                                `rate_limit_max_wait_seconds`).
      * @throws EsiException           on any other 4xx / 5xx
      */
     public function get(string $path, array $query = [], ?string $bearerToken = null): EsiResponse
     {
         $url = $this->resolveUrl($path);
+
+        // Pre-flight: ask the limiter how long we should wait. If it's a
+        // sleep we can absorb in-process, do so; otherwise bubble as a
+        // rate-limit exception so Horizon callers can `release($s)`.
+        $this->awaitRateLimit($url);
+
         $cacheKey = $this->cacheKeyFor($url, $query);
         $validators = $this->loadValidators($cacheKey);
 
@@ -104,6 +121,44 @@ final class EsiClient
         $this->logRateLimit($url, $response);
 
         return $this->handleResponse($url, $cacheKey, $response);
+    }
+
+    /**
+     * Block (or throw) until the rate-limiter says this URL can go.
+     *
+     * Sleeps for short waits (under `maxWaitSeconds`) — useful for ad-hoc
+     * controller calls where the burst is small. Longer holds throw
+     * `EsiRateLimitException` carrying the wait time, so Horizon jobs can
+     * `release($seconds)` instead of pinning a worker.
+     */
+    private function awaitRateLimit(string $url): void
+    {
+        $wait = $this->rateLimiter->preflight($url);
+        if ($wait <= 0.0) {
+            return;
+        }
+
+        $waitSeconds = (int) ceil($wait);
+
+        if ($waitSeconds > $this->maxWaitSeconds) {
+            throw new EsiRateLimitException(
+                message: "ESI rate-limit cooldown active ({$waitSeconds}s > max wait {$this->maxWaitSeconds}s)",
+                retryAfter: $waitSeconds,
+                status: 429,
+                responseBody: '',
+                url: $url,
+            );
+        }
+
+        // PHP `sleep()` only takes whole seconds. Sub-second tail isn't
+        // worth chasing — the limiter is reactive to real headers and the
+        // safety margin already accounts for clock skew between us and
+        // CCP's edge.
+        Log::debug('esi rate-limit pre-flight wait', [
+            'url' => $url,
+            'wait_seconds' => $waitSeconds,
+        ]);
+        sleep($waitSeconds);
     }
 
     // ----------------------------------------------------------------------
@@ -139,9 +194,14 @@ final class EsiClient
         $rateLimit = $this->extractRateLimitHeaders($response);
 
         if ($status === 429 || $status === 420) {
+            $retryAfter = $this->retryAfterSeconds($response);
+            // Tell the limiter so the next pre-flight on this URL (or any
+            // URL in the same group) waits without us bouncing 429 off CCP.
+            $this->rateLimiter->backoff($url, $rateLimit['X-Ratelimit-Group'] ?? null, $retryAfter);
+
             throw new EsiRateLimitException(
                 message: "ESI rate-limited: HTTP {$status} on {$url}",
-                retryAfter: $this->retryAfterSeconds($response),
+                retryAfter: $retryAfter,
                 status: $status,
                 responseBody: $response->body(),
                 url: $url,
@@ -151,7 +211,7 @@ final class EsiClient
         if ($status === 304) {
             // Conditional-GET cache hit. Body is empty on the wire; caller
             // MUST check `notModified` before using the body field.
-            return new EsiResponse(
+            $esiResponse = new EsiResponse(
                 status: 304,
                 body: null,
                 notModified: true,
@@ -160,9 +220,25 @@ final class EsiClient
                 expires: $response->header('Expires') ?: null,
                 rateLimit: $rateLimit,
             );
+            $this->rateLimiter->record($url, $esiResponse);
+
+            return $esiResponse;
         }
 
         if ($status >= 400) {
+            // 4xx still carries rate-limit headers — record so the limiter
+            // sees the (smaller) remaining budget after this errored call.
+            $errorResponse = new EsiResponse(
+                status: $status,
+                body: null,
+                notModified: false,
+                etag: null,
+                lastModified: null,
+                expires: null,
+                rateLimit: $rateLimit,
+            );
+            $this->rateLimiter->record($url, $errorResponse);
+
             throw new EsiException(
                 message: "ESI error: HTTP {$status} on {$url}",
                 status: $status,
@@ -175,7 +251,7 @@ final class EsiClient
         $lastModified = $response->header('Last-Modified') ?: null;
         $this->storeValidators($cacheKey, $etag, $lastModified);
 
-        return new EsiResponse(
+        $esiResponse = new EsiResponse(
             status: $status,
             body: $response->json(),
             notModified: false,
@@ -184,6 +260,9 @@ final class EsiClient
             expires: $response->header('Expires') ?: null,
             rateLimit: $rateLimit,
         );
+        $this->rateLimiter->record($url, $esiResponse);
+
+        return $esiResponse;
     }
 
     private function storeValidators(string $cacheKey, ?string $etag, ?string $lastModified): void

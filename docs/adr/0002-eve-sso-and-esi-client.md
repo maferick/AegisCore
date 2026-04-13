@@ -89,22 +89,38 @@ client. Phase 1 scope:
   3XX responses are half-price in token cost, so this pays for itself on
   repeat fetches.
 - Logs `X-Ratelimit-Group`, `X-Ratelimit-Remaining`, `X-Ratelimit-Used` on
-  every response. No pre-flight throttling yet.
-- On 429 or 420: throws `EsiRateLimitException` carrying the `Retry-After`
-  value. The caller decides — Horizon jobs call `release($seconds)`,
+  every response.
+- Reactive per-group throttle via `App\Services\Eve\Esi\EsiRateLimiter`
+  (added in a follow-up to this ADR — the original phase-1 plan punted
+  this to Python, but real Laravel-side import callers landed first):
+  - State (`remaining`, `reset_at`) and 429 backoffs live in the same
+    Redis store as the conditional-GET cache, with TTLs that match the
+    window so stale entries fall out automatically.
+  - Pre-flight: blocks (or throws) when the URL's group is in 429
+    cooldown or has dropped to/below `safety_margin` remaining tokens.
+    First-time URLs (no group learned yet) only check the global
+    cooldown — the response then populates the group map for next time.
+  - Reactive learning: every response (including 304 + 4xx) reseeds the
+    group's state from `X-Ratelimit-*` headers. We deliberately don't
+    count tokens locally — CCP's `Remaining` is the source of truth, and
+    re-counting compounds drift on every parallel worker.
+  - Not a distributed lock. Two workers can race past `preflight()`;
+    the safety margin absorbs small overshoots and the 429 → backoff is
+    the safety net. A Lua-script-backed atomic counter is on the table
+    when concurrent imports demonstrate the margin isn't enough.
+- On 429 or 420: tells the limiter to back off (per-group + global),
+  then throws `EsiRateLimitException` carrying the `Retry-After` value.
+  The caller decides — Horizon jobs call `release($seconds)`,
   synchronous code bubbles the error.
 
-Explicitly **not** in phase 1:
+Still **not** in scope:
 
-- Per-group pre-flight throttling (tracker in Redis keyed by group).
-- OpenAPI-spec-derived limit map (`x-rate-limit` extension).
+- OpenAPI-spec-derived limit map (`x-rate-limit` extension). The reactive
+  limiter learns each group's window from the first response — cheaper
+  than ingesting the spec at deploy time and re-discovers the window
+  when CCP rotates routes.
 - Token refresh, because login tokens aren't stored.
 - Distributed locks on refresh.
-
-These all arrive together when the Python execution plane starts polling.
-The Laravel-side `EsiClient` stays the thin "one-shot" helper it is now; the
-Python side gets the full machinery when there's a real caller that needs
-it.
 
 ### JWT verification
 
