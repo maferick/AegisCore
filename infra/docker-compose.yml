@@ -132,6 +132,41 @@ services:
       start_period: 60s
     networks: [aegiscore]
 
+  php-fpm:
+    image: php:8.4-fpm-alpine
+    container_name: php-fpm
+    restart: unless-stopped
+    environment:
+      # Exposed to PHP via getenv() / $_ENV; keep this list intentional.
+      AEGISCORE_ENV: "${AEGISCORE_ENV:-dev}"
+      MARIADB_HOST: mariadb
+      MARIADB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      MARIADB_USER: "${MARIADB_USER:-aegiscore}"
+      MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
+      OPENSEARCH_HOST: "https://opensearch:9200"
+      OPENSEARCH_USERNAME: admin
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      INFLUXDB_HOST: "http://influxdb2:8086"
+      INFLUXDB_TOKEN: "${INFLUXDB_ADMIN_TOKEN}"
+      INFLUXDB_ORG: "${INFLUXDB_ORG:-aegiscore}"
+      INFLUXDB_BUCKET: "${INFLUXDB_BUCKET:-primary}"
+      NEO4J_HOST: "bolt://neo4j:7687"
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+    volumes:
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/php/conf.d:/usr/local/etc/php/conf.d/aegiscore:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx
@@ -143,7 +178,10 @@ services:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/nginx/conf.d:/etc/nginx/conf.d:ro
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/nginx/certs:/etc/nginx/certs:ro
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/nginx/logs:/var/log/nginx
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html:ro
     depends_on:
+      php-fpm:
+        condition: service_healthy
       opensearch-dashboards:
         condition: service_started
       influxdb2:

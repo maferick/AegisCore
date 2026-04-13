@@ -2,7 +2,10 @@
 
 ## Planes
 - **Control Plane (PHP):** UI / API / settings / auth / light orchestration.
+  Runs as `php-fpm` (8.4-alpine) behind the `nginx` front door. Source lives
+  in `app/`.
 - **Execution Plane (Python):** ingestion / compute / jobs / graph pipelines.
+  Not in Phase 1; containers will be added under the same compose stack.
 
 PHP never runs heavy compute. Python never owns user-facing UI.
 

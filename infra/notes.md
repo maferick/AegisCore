@@ -11,6 +11,10 @@
 │   ├── influxdb2/{data,config}
 │   ├── neo4j/{data,logs,import,plugins}
 │   └── nginx/logs
+├── app/                         ← PHP control plane source
+│   └── public/index.php         ← front controller (served by nginx + php-fpm)
+├── php/
+│   └── conf.d/aegiscore.ini     ← custom php.ini overrides, read-only mount
 ├── nginx/
 │   ├── conf.d/aegiscore.conf    ← mounted read-only into nginx container
 │   └── certs/                   ← TLS material (gitignored)
@@ -52,6 +56,17 @@ MariaDB is canonical. Neo4j / OpenSearch / InfluxDB are derived stores — they
 can be rebuilt from MariaDB + external sources. Don't add business logic that
 only lives in a derived store.
 
+## PHP control plane
+- Image: `php:8.4-fpm-alpine`.
+- App source: `$AEGISCORE_ROOT/app/`, mounted **read-write** into php-fpm and
+  **read-only** into nginx. PHP should not write to `app/` at runtime — any
+  writable state goes under `docker/php/` (add a volume when needed).
+- PHP overrides live in `$AEGISCORE_ROOT/php/conf.d/*.ini` and are mounted at
+  `/usr/local/etc/php/conf.d/aegiscore/` inside the container.
+- Backend credentials reach PHP via env vars in the compose file — the service
+  names (`mariadb`, `opensearch`, `influxdb2`, `neo4j`) are resolvable inside
+  the `aegiscore` network.
+
 ## Troubleshooting
 - **OpenSearch won't start, "config not found":** don't bind-mount
   `/usr/share/opensearch/config` unless you pre-seed it with the image's files.
@@ -61,5 +76,9 @@ only lives in a derived store.
   in the shipped compose file).
 - **Neo4j OOM on small host:** lower `NEO4J_HEAP_*` and `NEO4J_PAGECACHE` in
   `.env`. Dev defaults target a laptop; prod defaults are in the comments.
+- **Nginx returns 404 for `/`:** make sure `app/public/index.php` exists and
+  `$AEGISCORE_ROOT/app` is mounted — both nginx and php-fpm need to see it.
+- **PHP changes don't show up:** OPcache revalidates every 2 seconds in the
+  shipped `aegiscore.ini`; wait a moment or `make restart` php-fpm.
 - **`make bootstrap` fails with permission denied:** the target uses `sudo` on
   purpose because `/opt/aegiscore` is typically root-owned.

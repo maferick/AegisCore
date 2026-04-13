@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `php-fpm` (php:8.4-fpm-alpine) container for the PHP control plane.
+- Nginx now serves `app/public/` and proxies `*.php` to `php-fpm:9000`.
+- Stub `app/public/index.php` front controller returning the `{data, meta}` envelope.
+- `php/conf.d/aegiscore.ini` with sane PHP defaults + OPcache.
+- `AEGISCORE_ENV` variable surfaced to PHP.
+- `make php-shell` target.
+
 ## [0.1.0] — 2026-04-13
 
 ### Added

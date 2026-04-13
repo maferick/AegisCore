@@ -17,6 +17,7 @@ help:
 	@echo "  make logs         tail logs from all services"
 	@echo "  make logs-<svc>   tail logs from one service (e.g. make logs-neo4j)"
 	@echo "  make pull         pull latest pinned images"
+	@echo "  make php-shell    open a shell in the php-fpm container"
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
 up:
@@ -59,6 +60,10 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/docker/opensearch $(AEGISCORE_ROOT)/docker/influxdb2
 	sudo chown -R 7474:7474 $(AEGISCORE_ROOT)/docker/neo4j
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
+
+.PHONY: php-shell
+php-shell:
+	$(COMPOSE) exec php-fpm sh
 
 clean-logs:
 	sudo truncate -s 0 $(AEGISCORE_ROOT)/docker/nginx/logs/access.log 2>/dev/null || true
