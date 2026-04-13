@@ -35,6 +35,19 @@ to derived stores. The rule is enforced at code review.
 4. `outbox` rows are written **inside the same MariaDB transaction** as the
    business change — never post-commit.
 
+### Job placement — PR review checklist
+
+Ask three questions of every new job:
+
+1. Could this block user-facing responsiveness if delayed or retried?
+2. Could data size grow 10× and make this unsafe in a Laravel queue?
+3. Is this part of domain-data ingestion or projection?
+
+**Yes to any → prefer Python.** The trigger still originates in Laravel as an
+outbox row; the work itself runs in the execution plane. Full placement
+criteria (what stays in PHP, what moves to Python) live in
+[`AGENTS.md`](../AGENTS.md#job-placement-rule).
+
 ### Why outbox
 
 - **Atomicity.** Business change + trigger commit together, or not at all.
