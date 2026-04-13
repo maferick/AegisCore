@@ -94,6 +94,10 @@ Derived stores must be rebuildable from MariaDB + external sources.
   nginx, php-fpm)
 - Health endpoints
 - Laravel skeleton + 4-pillar module layout (separate PR)
+- Filament admin panel at `/admin` — shell only; Resources land as pillars
+  mature. Access: `make filament-user` seeds an operator account; every
+  authenticated user is admin in phase 1 (tightens to a role check on the
+  `users` table when spatie/laravel-permission gets wired).
 - One E2E reference pipeline (killmails)
 - Other 3 pillars are stubs only
 

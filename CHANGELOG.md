@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Filament admin panel at `/admin`** (Filament 5). Phase-1 shell: stock
+  dashboard behind a login screen, orange primary accent matching the
+  landing page, empty auto-discovery roots for `Resources/`, `Pages/`, and
+  `Widgets/` (filled as pillars mature). Registered via
+  `app/Providers/Filament/AdminPanelProvider.php`.
+  - `App\Models\User` now implements `FilamentUser` with a phase-1
+    `canAccessPanel(): true` policy — the only seed path is
+    `make filament-user`, which is operator-run on the host. Tightens to a
+    role check when `UsersCharacters` wires `spatie/laravel-permission`.
+  - `make filament-user` wraps `php artisan make:filament-user` (interactive).
+  - Landing page CTAs reshuffled: **Admin** is the primary action, Horizon
+    and GitHub stay as secondaries.
+
 - **Job placement rule** codified in `AGENTS.md` § Plane boundary. Concrete
   "keep in PHP" / "move to Python" criteria (runtime, row count, derived-store
   writes, concurrency) plus a three-question PR-review heuristic. Mirrored in

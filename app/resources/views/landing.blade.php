@@ -219,7 +219,8 @@
             </div>
 
             <div class="actions">
-                <a href="/horizon" class="btn btn-primary">Horizon &rarr;</a>
+                <a href="/admin" class="btn btn-primary">Admin &rarr;</a>
+                <a href="/horizon" class="btn">Horizon</a>
                 <a href="https://github.com/maferick/AegisCore" class="btn" rel="noopener">GitHub</a>
             </div>
         </div>
