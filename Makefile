@@ -35,6 +35,7 @@ help:
 	@echo "    make lint              pint --test"
 	@echo ""
 	@echo "  make sde-check    run the SDE version-drift check now (inline)"
+	@echo "  make sde-import   download CCP's SDE and load all ref_* tables (one-shot)"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -97,7 +98,7 @@ bootstrap:
 	sudo chown -R 7474:7474 $(AEGISCORE_ROOT)/docker/neo4j
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import
 build:
 	$(COMPOSE) build
 
@@ -174,6 +175,15 @@ horizon-publish:
 # Scheduled version runs daily at 08:00 UTC via the `scheduler` container.
 sde-check:
 	$(COMPOSE) exec php-fpm php artisan reference:check-sde-version --sync
+
+# Download CCP's SDE JSONL zip and load all ref_* tables in one transaction.
+# One-shot container — the `tools` profile keeps it out of `docker compose up`.
+# Builds the image the first time; subsequent runs reuse the cached image.
+# Overrides:
+#   SDE_ARGS="--only-download"            # fetch + extract, skip DB load
+#   SDE_ARGS="--skip-download --extract-dir=/tmp/sde/extracted"   # iterate on loaders
+sde-import:
+	$(COMPOSE) --profile tools run --rm sde_importer $(SDE_ARGS)
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
