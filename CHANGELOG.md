@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **OpenSearch security plugin disabled** for phase 1
+  (`DISABLE_SECURITY_PLUGIN=true`, `DISABLE_INSTALL_DEMO_CONFIG=true`). The
+  demo config's self-signed TLS broke APOC → OpenSearch integration from
+  Neo4j (cert validation failures) and added friction with zero security
+  gain on an internal Docker network. Dashboards and PHP now talk plain
+  `http://opensearch:9200` with no auth header. Trade-off and restore path
+  are documented in `infra/notes.md` § OpenSearch security posture.
+- Dropped `OPENSEARCH_ADMIN_PASSWORD` from `.env.example` and the compose
+  file. Restore it when re-enabling the security plugin for prod.
+
 ### Fixed
 - Nginx container no longer reports `unhealthy` while serving IPv4 traffic.
   Root cause: busybox `wget` resolves `localhost` to IPv6 `::1`, and the

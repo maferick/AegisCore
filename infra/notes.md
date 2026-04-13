@@ -70,6 +70,26 @@ MariaDB is canonical. Neo4j / OpenSearch / InfluxDB are derived stores — they
 can be rebuilt from MariaDB + external sources. Don't add business logic that
 only lives in a derived store.
 
+## OpenSearch security posture (phase 1)
+The security plugin is **disabled** on both `opensearch` and
+`opensearch-dashboards`:
+
+- `DISABLE_SECURITY_PLUGIN=true` on the opensearch service
+- `DISABLE_SECURITY_DASHBOARDS_PLUGIN=true` on the dashboards service
+- `DISABLE_INSTALL_DEMO_CONFIG=true` so no self-signed TLS gets generated
+- Clients talk plain `http://opensearch:9200` — no auth header, no cert
+
+Why: OpenSearch is only reachable on the internal `aegiscore` Docker network
+plus the dev-only host ports. The demo config's self-signed TLS breaks APOC
+→ OpenSearch integrations from Neo4j (cert pinning / truststore friction)
+and Dashboards with no matching security gain inside the compose network.
+
+Before prod:
+1. Put OpenSearch behind nginx with mTLS (or terminate upstream at a
+   proper cert-authority-issued cert),
+2. Or restore the security plugin + set `OPENSEARCH_ADMIN_PASSWORD` and
+   flip all clients back to `https://` + basic auth.
+
 ## PHP control plane
 - Image: built locally from `infra/php/Dockerfile` (tag
   `aegiscore/php-fpm:0.1.0`). Base is `php:8.4-fpm-alpine` + Laravel-required
@@ -104,9 +124,10 @@ only lives in a derived store.
 - **OpenSearch won't start, "config not found":** don't bind-mount
   `/usr/share/opensearch/config` unless you pre-seed it with the image's files.
   We intentionally do not mount that path.
-- **Dashboards login loops:** confirm `OPENSEARCH_USERNAME` +
-  `OPENSEARCH_PASSWORD` env vars are set on the dashboards service (they are,
-  in the shipped compose file).
+- **Dashboards login loops:** should not happen on phase 1 — the security
+  plugin is disabled on both `opensearch` and `opensearch-dashboards`. If
+  you re-enable security in prod, set `OPENSEARCH_USERNAME` +
+  `OPENSEARCH_PASSWORD` on the dashboards service.
 - **Neo4j OOM on small host:** lower `NEO4J_HEAP_*` and `NEO4J_PAGECACHE` in
   `.env`. Dev defaults target a laptop; prod defaults are in the comments.
 - **Nginx returns 404 for `/`:** make sure `app/public/index.php` exists and
