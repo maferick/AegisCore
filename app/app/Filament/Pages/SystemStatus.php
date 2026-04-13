@@ -50,7 +50,7 @@ class SystemStatus extends Page
      * Header widgets default to 2 columns; force full-width so the
      * widget's internal 3-column grid can actually lay out.
      */
-    public function getHeaderWidgetsColumns(): int|string|array
+    public function getHeaderWidgetsColumns(): int|array
     {
         return 1;
     }
