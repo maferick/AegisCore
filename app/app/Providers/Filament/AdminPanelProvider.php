@@ -11,6 +11,7 @@ use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use Filament\View\PanelsRenderHook;
 use Filament\Widgets;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -29,9 +30,11 @@ use Illuminate\View\Middleware\ShareErrorsFromSession;
  * UsersCharacters picks a role model; dropping scaffolds now would just be
  * preemptive churn.
  *
- * Access model is defined on `App\Models\User::canAccessPanel()` — see there
- * for the phase-1 gate (any authenticated user → admin; tightens to a role
- * check when spatie/laravel-permission gets wired into the users table).
+ * Access model is defined on `App\Models\User::canAccessPanel()` — the
+ * phase-1 gate checks `EVE_SSO_ADMIN_CHARACTER_IDS` for SSO-linked users
+ * and falls through to operator-seeded (email+password) accounts. See
+ * ADR-0002 for the rationale; will tighten to spatie/laravel-permission
+ * roles when UsersCharacters lands them.
  *
  * The primary colour is the same `#ff6b35` accent the landing page uses, so
  * the admin and the marketing page feel like the same product.
@@ -79,6 +82,15 @@ class AdminPanelProvider extends PanelProvider
                     ->group('Monitoring')
                     ->sort(100),
             ])
+            // "Log in with EVE" button rendered under the default Filament
+            // login form. We keep email+password live so operator-seeded
+            // accounts from `make filament-user` still work — SSO is
+            // additive. Gate logic + admin allow-list live on the User
+            // model and App\Services\Eve\Sso. See ADR-0002.
+            ->renderHook(
+                PanelsRenderHook::AUTH_LOGIN_FORM_AFTER,
+                fn (): string => view('filament.auth.eve-login-button')->render(),
+            )
             ->middleware([
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
