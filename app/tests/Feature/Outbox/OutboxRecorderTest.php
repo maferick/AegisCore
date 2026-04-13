@@ -7,13 +7,20 @@ namespace Tests\Feature\Outbox;
 use App\Domains\KillmailsBattleTheaters\Events\KillmailIngested;
 use App\Outbox\OutboxEvent;
 use App\Outbox\OutboxRecorder;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 final class OutboxRecorderTest extends TestCase
 {
-    use RefreshDatabase;
+    // DatabaseMigrations (not RefreshDatabase) on purpose: RefreshDatabase
+    // wraps every test in an ambient DB transaction, which would make
+    // DB::transactionLevel() always >= 1 and hide the "no ambient tx" guard
+    // we verify in test_rejects_recording_outside_a_transaction.
+    // DatabaseMigrations runs migrate:fresh between tests instead — slower,
+    // but each test starts with transactionLevel() == 0, which is the real
+    // state OutboxRecorder::record() expects.
+    use DatabaseMigrations;
 
     public function test_records_event_inside_a_transaction(): void
     {
