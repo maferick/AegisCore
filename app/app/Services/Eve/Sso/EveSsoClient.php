@@ -48,14 +48,15 @@ final class EveSsoClient
      */
     public static function fromConfig(): self
     {
-        $cfg = config('eve.sso');
-
-        if (empty($cfg['client_id']) || empty($cfg['client_secret']) || empty($cfg['callback_url'])) {
+        if (! self::isConfigured()) {
             throw new EveSsoException(
                 'EVE SSO is not configured. Set EVE_SSO_CLIENT_ID, EVE_SSO_CLIENT_SECRET, '
-                .'and EVE_SSO_CALLBACK_URL in .env (see .env.example § EVE SSO).',
+                .'and EVE_SSO_CALLBACK_URL in .env (see .env.example § EVE SSO), then '
+                .'`php artisan config:clear` if config caching is on.',
             );
         }
+
+        $cfg = config('eve.sso');
 
         return new self(
             clientId: (string) $cfg['client_id'],
@@ -64,6 +65,22 @@ final class EveSsoClient
             authorizeUrl: (string) $cfg['authorize_url'],
             tokenUrl: (string) $cfg['token_url'],
         );
+    }
+
+    /**
+     * Cheap predicate: are the three required env vars populated?
+     *
+     * Lets call sites (e.g. the Filament login render hook) ask
+     * "should I show the EVE button?" without try/catching. Doesn't
+     * touch the network — purely a config sanity check.
+     */
+    public static function isConfigured(): bool
+    {
+        $cfg = config('eve.sso');
+
+        return ! empty($cfg['client_id'])
+            && ! empty($cfg['client_secret'])
+            && ! empty($cfg['callback_url']);
     }
 
     /**
