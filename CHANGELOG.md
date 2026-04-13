@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **EVE SSO + ESI env vars never reached the PHP container.** The
+  `php-fpm` service in `infra/docker-compose.yml` carries an explicit
+  `environment:` allow-list ("keep this list intentional") — the
+  `EVE_SSO_*` and `ESI_*` keys added by the SSO and rate-limiter PRs
+  weren't in it, so even with the values set in the host `.env`
+  Laravel saw `null` for every one. End result: `EveSsoClient::isConfigured()`
+  returned false on every check, hiding the "Log in with EVE Online"
+  button on the landing page, the Filament admin login form, and the
+  admin user menu — symptom: "I don't see the EVE login buttons …
+  nowhere". Added `EVE_SSO_CLIENT_ID`, `EVE_SSO_CLIENT_SECRET`,
+  `EVE_SSO_CALLBACK_URL`, `EVE_SSO_LOGIN_SCOPES` (default
+  `publicData`), `EVE_SSO_ADMIN_CHARACTER_IDS`, plus `ESI_USER_AGENT`,
+  `ESI_TIMEOUT_SECONDS`, `ESI_RATE_LIMIT_SAFETY_MARGIN`,
+  `ESI_RATE_LIMIT_MAX_WAIT_SECONDS`. All inherit through the
+  `<<: *php-common` anchor so `scheduler` and `horizon` see the same
+  values automatically. Empty defaults are preserved on the EVE SSO
+  trio so the button correctly stays hidden on deployments that
+  haven't registered an EVE app yet.
+
 ### Added
 - **ESI rate-limit module** — `App\Services\Eve\Esi\EsiRateLimiter`,
   Redis-backed reactive throttle that the `EsiClient` now consults
