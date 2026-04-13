@@ -43,6 +43,35 @@ This rule is enforced at code review. Violations block merge.
   derived stores owned by Python.
 - See [`docs/CONTRACTS.md`](docs/CONTRACTS.md) for the outbox schema + semantics.
 
+### Job placement rule
+
+When you write a new job, pick the plane before you pick the class.
+
+**Keep in PHP (Laravel queue) when all of these hold:**
+- **Fast:** completes in ~< 2 seconds.
+- **Small:** touches ~< 100 DB rows.
+- **UI / control-plane shaped:** emails, notifications, audit logs, webhooks,
+  export kickoff, cache invalidation.
+- **Not compute-heavy and not long-running.**
+- **Does not write derived stores** (Neo4j / OpenSearch / InfluxDB).
+
+**Move to Python when any of these hold:**
+- **Slow or variable runtime** (> 2s, can spike).
+- **Large batch / data scan** (> 100 rows, backfills, replays).
+- **Compute-heavy** (matching, scoring, graph traversal, aggregation).
+- **Pipeline / projection work** (outbox consume, indexing, graph/search writes).
+- **Needs worker concurrency control or idempotent bulk processing.**
+- **Crosses service boundaries heavily** (external APIs with retries,
+  rate-limit orchestration).
+
+**PR review heuristic (three questions):**
+1. Could this block user-facing responsiveness if delayed or retried?
+2. Could data size grow 10× and make this unsafe in a Laravel queue?
+3. Is this part of domain-data ingestion or projection?
+
+**Yes to any → prefer Python.** The trigger still originates in Laravel as an
+outbox row; the work itself runs in the execution plane.
+
 ## Data ownership (hard rule)
 - **MariaDB**: canonical source of truth + `outbox` table.
 - **Neo4j**: graph projection only (Python writes).

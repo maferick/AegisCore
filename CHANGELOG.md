@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Job placement rule** codified in `AGENTS.md` § Plane boundary. Concrete
+  "keep in PHP" / "move to Python" criteria (runtime, row count, derived-store
+  writes, concurrency) plus a three-question PR-review heuristic. Mirrored in
+  `docs/CONTRACTS.md` as a reviewer checklist and cross-referenced from
+  `docs/ARCHITECTURE.md`. Removes the "is this 2s?" guessing game on every PR.
+
 ### Fixed
 - **Blade `tempnam()` 500 on fresh clones.** The php-fpm image now ships a
   self-healing entrypoint (`infra/php/docker-entrypoint.sh`, wired as

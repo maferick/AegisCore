@@ -14,7 +14,10 @@ PHP never runs heavy compute. Python never owns user-facing UI.
 ## Plane boundary
 
 Laravel and Python communicate via the **outbox pattern** only — see
-[`CONTRACTS.md`](CONTRACTS.md). The short version:
+[`CONTRACTS.md`](CONTRACTS.md). Deciding which plane a new job belongs on
+is a review-time rule, documented in
+[`AGENTS.md` § Job placement rule](../AGENTS.md#job-placement-rule). The
+short version:
 
 ```
 ┌─ Laravel (Control Plane) ──────┐       ┌─ Python (Execution Plane) ─────┐
