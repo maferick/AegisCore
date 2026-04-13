@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------
+      # 1. Compose file must parse against .env.example.
+      # -------------------------------------------------------------------
+      - name: docker compose config
+        run: |
+          docker compose \
+            -f infra/docker-compose.yml \
+            --env-file .env.example \
+            config --quiet
+
+      # -------------------------------------------------------------------
+      # 2. Every ${VAR} referenced in docker-compose.yml must be declared
+      #    in .env.example. Catches "I added a var but forgot to document
+      #    it" regressions before they hit Portainer.
+      # -------------------------------------------------------------------
+      - name: env-coverage check
+        run: |
+          set -euo pipefail
+          refs=$(grep -oE '\$\{[A-Z_][A-Z0-9_]*' infra/docker-compose.yml \
+            | sed 's/\${//' | sort -u)
+          defs=$(grep -oE '^[A-Z_][A-Z0-9_]*=' .env.example \
+            | sed 's/=$//' | sort -u)
+          missing=$(comm -23 <(echo "$refs") <(echo "$defs") || true)
+          if [ -n "$missing" ]; then
+            echo "::error::Variables referenced in docker-compose.yml but missing from .env.example:"
+            echo "$missing" | sed 's/^/  - /'
+            exit 1
+          fi
+          echo "All ${#refs} compose variables are declared in .env.example."
+
+      # -------------------------------------------------------------------
+      # 3. Dockerfile smells.
+      # -------------------------------------------------------------------
+      - name: hadolint infra/php/Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: infra/php/Dockerfile
+          failure-threshold: error
+
+      # -------------------------------------------------------------------
+      # 4. PHP syntax across app/.
+      # -------------------------------------------------------------------
+      - name: setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: none
+          coverage: none
+
+      - name: php -l across app/
+        run: |
+          set -euo pipefail
+          if [ ! -d app ]; then
+            echo "app/ missing; skipping PHP lint."
+            exit 0
+          fi
+          files=$(find app -type f -name '*.php' -not -path '*/vendor/*')
+          if [ -z "$files" ]; then
+            echo "No PHP files under app/ yet; skipping."
+            exit 0
+          fi
+          echo "$files" | xargs -n1 php -l
+
+  build-php-image:
+    name: build php-fpm image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/php
+          file: infra/php/Dockerfile
+          push: false
+          tags: aegiscore/php-fpm:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

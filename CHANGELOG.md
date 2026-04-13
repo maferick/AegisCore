@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- GitHub Actions CI (`.github/workflows/ci.yml`):
+  - `docker compose config` against `.env.example`
+  - env-coverage check (fails if `${VAR}` in compose isn't in `.env.example`)
+  - `hadolint` on `infra/php/Dockerfile` (error-level only)
+  - `php -l` across `app/`
+  - buildx build of the php-fpm image (no push) with GHA layer cache
+
 ### Fixed
 - php-fpm service now declares `pull_policy: build` so Portainer and
   `docker compose pull` don't fail with `pull access denied for
