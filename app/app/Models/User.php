@@ -3,12 +3,14 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Domains\UsersCharacters\Models\Character;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -33,23 +35,56 @@ class User extends Authenticatable implements FilamentUser
     }
 
     /**
-     * Phase-1 admin gate.
+     * Characters linked to this user via EVE SSO login.
      *
-     * The only way to become a User right now is `php artisan make:filament-user`
-     * (wrapped by `make filament-user`), which is an operator-run command on the
-     * host. So "authenticated" effectively means "the operator seeded this
-     * account" — treating every authenticated user as an admin is safe until we
-     * open up public / EVE-SSO signup.
+     * Phase 1: 0 or 1 (the character the user logged in as).
+     * Phase 2+: can grow when alt-linking lands.
+     */
+    public function characters(): HasMany
+    {
+        return $this->hasMany(Character::class);
+    }
+
+    /**
+     * Filament /admin access gate.
      *
-     * When UsersCharacters lands with role data on the users table (via
-     * spatie/laravel-permission), swap this out for:
+     * Two ways in:
      *
-     *     return $this->hasRole('alliance-admin');
+     *   1. Any character linked to this user is listed in
+     *      `EVE_SSO_ADMIN_CHARACTER_IDS` (config('eve.sso.admin_character_ids')).
+     *      This is the normal path — EVE SSO login + env-based allow-list.
      *
-     * …and delete this docstring.
+     *   2. Fallback: email+password accounts seeded via `make filament-user`
+     *      keep working. That's the only way to bootstrap the first admin
+     *      before any EVE character is linked, and the escape hatch if SSO
+     *      itself is broken.
+     *
+     * Fallback (2) is detected by "this user has no linked characters" —
+     * a character-linked SSO user MUST pass the allow-list check. This
+     * prevents a logged-in non-admin SSO user from inheriting the
+     * operator-seed escape hatch.
+     *
+     * See docs/adr/0002-eve-sso-and-esi-client.md § Admin gate.
      */
     public function canAccessPanel(Panel $panel): bool
     {
-        return true;
+        /** @var array<int, string> $adminIds */
+        $adminIds = config('eve.sso.admin_character_ids', []);
+        $characters = $this->characters()->pluck('character_id');
+
+        if ($characters->isEmpty()) {
+            // No linked character → operator-seeded account (phase-1
+            // escape hatch). Allowed until we swap in DB roles.
+            return true;
+        }
+
+        // At least one linked character must be on the allow-list.
+        // `character_id` is bigint in the DB, env values arrive as
+        // strings — compare both sides as strings to be safe.
+        $normalized = array_map('strval', $adminIds);
+
+        return $characters->map(fn ($id) => (string) $id)
+            ->intersect($normalized)
+            ->isNotEmpty();
     }
 }

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **EVE SSO login + admin gate** — OAuth2 PKCE against
+  `login.eveonline.com/v2/oauth/*`. New routes `GET /auth/eve` (redirect)
+  and `GET /auth/eve/callback` (exchange + login). Phase 1 requests only
+  the `publicData` scope and discards the access token after decoding
+  the JWT identity claim (`sub` = `CHARACTER:EVE:<id>`, `name`) — login
+  is stateless, no refresh tokens stored. On callback we upsert a
+  `characters` row (new migration), link it to a `users` row (creating
+  one with a synthetic email if the character is logging in for the
+  first time), and start a Laravel session. Filament's login form gets
+  a "Log in with EVE Online" button via the
+  `panels::auth.login.form.after` render hook. Admin access is now
+  gated on `EVE_SSO_ADMIN_CHARACTER_IDS` in `.env` (comma-separated EVE
+  character IDs, not names — names are mutable) via
+  `User::canAccessPanel()`; operator-seeded email+password accounts
+  (`make filament-user`) still work as the bootstrap escape hatch. ADR-0002
+  locks the plane split: SSO + light synchronous ESI in Laravel, heavy
+  polling (killmails, corp rosters, wallets) stays in Python per
+  ADR-0001. New `App\Services\Eve\Sso\EveSsoClient` (authorize URL +
+  PKCE, token exchange, unverified JWT decode — trust boundary is the
+  TLS chain to CCP, see ADR-0002 § JWT verification) and
+  `App\Services\Eve\Esi\EsiClient` (thin wrapper over Laravel's HTTP
+  facade: logs `X-Ratelimit-*` headers per response, Redis-cached
+  per-URL ETag + Last-Modified for conditional GETs, throws
+  `EsiRateLimitException` carrying `Retry-After` on 429/420). Phase-2
+  (service-character SSO with elevated scopes, per-group pre-flight
+  throttling, token refresh, JWT verification) deferred to when the
+  Python poller lands — ADR-0002 leaves the config + class shape ready.
+
 ### Changed
 - **Landing page drops the Horizon CTA.** Horizon already lives in the
   Filament admin sidebar under "Monitoring" (PR #17), so the public
