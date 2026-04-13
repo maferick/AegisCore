@@ -59,7 +59,15 @@ class SystemStatusService
     public function fresh(): array
     {
         $statuses = $this->probeAll();
-        $this->cacheStore()->put(self::CACHE_KEY, $statuses, self::CACHE_TTL_SECONDS);
+
+        // A flaky cache backend shouldn't 500 the admin page — we can
+        // always recompute on the next poll. Swallow write failures
+        // here; the snapshot is still returned to the caller.
+        try {
+            $this->cacheStore()->put(self::CACHE_KEY, $statuses, self::CACHE_TTL_SECONDS);
+        } catch (Throwable $e) {
+            // Intentionally ignored — see comment above.
+        }
 
         return $statuses;
     }
@@ -71,13 +79,41 @@ class SystemStatusService
      */
     public function snapshot(): array
     {
-        /** @var array<int, SystemStatus>|null $cached */
-        $cached = $this->cacheStore()->get(self::CACHE_KEY);
-        if (is_array($cached) && $cached !== []) {
+        // Cache read is the hot path — but if the cache backend itself
+        // is flaky (Redis under pressure, deserialization error on a
+        // stale payload after a deploy), we must never let that 500 the
+        // page. Fall back to a live probe on any failure.
+        try {
+            /** @var mixed $cached */
+            $cached = $this->cacheStore()->get(self::CACHE_KEY);
+        } catch (Throwable $e) {
+            $cached = null;
+        }
+
+        if (is_array($cached) && $cached !== [] && $this->isValidSnapshot($cached)) {
             return $cached;
         }
 
         return $this->fresh();
+    }
+
+    /**
+     * Guard against a cached payload that deserialized into something
+     * unexpected — e.g. an older schema after a deploy, or partial data
+     * from a cache-write that raced a TTL. Safer to re-probe than to
+     * hand the widget garbage.
+     *
+     * @param  array<mixed>  $cached
+     */
+    private function isValidSnapshot(array $cached): bool
+    {
+        foreach ($cached as $entry) {
+            if (! $entry instanceof SystemStatus) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -318,44 +354,80 @@ class SystemStatusService
      */
     private function probeNeo4j(): SystemStatus
     {
-        $host = (string) config('aegiscore.neo4j.host');
-        if ($host === '') {
+        try {
+            $host = (string) config('aegiscore.neo4j.host');
+            if ($host === '') {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::UNKNOWN,
+                    detail: 'Host not configured',
+                );
+            }
+
+            // parse_url returns false for malformed URLs — guard so we
+            // don't hit "Cannot access offset of type string on bool".
+            $parsed = parse_url($host);
+            if (! is_array($parsed)) {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::UNKNOWN,
+                    detail: 'Invalid host: '.$host,
+                );
+            }
+
+            $hostname = $parsed['host'] ?? null;
+            $port = $parsed['port'] ?? 7687;
+            if (! is_string($hostname) || $hostname === '') {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::UNKNOWN,
+                    detail: 'Invalid host: '.$host,
+                );
+            }
+
+            // `@` suppresses the warning for normal error handlers, but
+            // strict handlers (e.g. laravel/pail or custom reporting)
+            // promote warnings to exceptions. Install a scoped handler
+            // that captures the message instead of re-throwing.
+            $suppressed = null;
+            set_error_handler(static function (int $_, string $message) use (&$suppressed): bool {
+                $suppressed = $message;
+
+                return true;
+            });
+
+            try {
+                $errno = 0;
+                $errstr = '';
+                $socket = fsockopen($hostname, (int) $port, $errno, $errstr, self::PROBE_TIMEOUT_SECONDS);
+            } finally {
+                restore_error_handler();
+            }
+
+            if ($socket === false) {
+                $detail = $errstr !== '' ? $errstr : ($suppressed ?? 'Connection refused');
+
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::DOWN,
+                    detail: $this->trimMessage($detail),
+                );
+            }
+
+            fclose($socket);
+
             return new SystemStatus(
                 name: 'Neo4j',
-                level: SystemStatusLevel::UNKNOWN,
-                detail: 'Host not configured',
+                level: SystemStatusLevel::OK,
+                detail: 'Bolt '.$hostname.':'.$port,
             );
-        }
-
-        $parsed = parse_url($host);
-        $hostname = $parsed['host'] ?? null;
-        $port = $parsed['port'] ?? 7687;
-        if (! is_string($hostname) || $hostname === '') {
-            return new SystemStatus(
-                name: 'Neo4j',
-                level: SystemStatusLevel::UNKNOWN,
-                detail: 'Invalid host: '.$host,
-            );
-        }
-
-        $errno = 0;
-        $errstr = '';
-        $socket = @fsockopen($hostname, (int) $port, $errno, $errstr, self::PROBE_TIMEOUT_SECONDS);
-        if ($socket === false) {
+        } catch (Throwable $e) {
             return new SystemStatus(
                 name: 'Neo4j',
                 level: SystemStatusLevel::DOWN,
-                detail: $errstr !== '' ? $this->trimMessage($errstr) : 'Connection refused',
+                detail: $this->trimMessage($e->getMessage()),
             );
         }
-
-        fclose($socket);
-
-        return new SystemStatus(
-            name: 'Neo4j',
-            level: SystemStatusLevel::OK,
-            detail: 'Bolt '.$hostname.':'.$port,
-        );
     }
 
     /**

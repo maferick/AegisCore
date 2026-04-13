@@ -191,6 +191,31 @@ final class SystemStatusServiceTest extends TestCase
         self::assertSame(SystemStatusLevel::DOWN, $influx->level);
     }
 
+    public function test_corrupted_cache_payload_triggers_fresh_probe(): void
+    {
+        // Simulates a cache payload from an older release (e.g. plain
+        // arrays after a schema change, or garbage from a flaky store).
+        // The service must detect and re-probe rather than handing the
+        // widget a non-SystemStatus entry — which is exactly the class
+        // of bug that 500'd /admin/system-status in production.
+        Cache::store()->put('aegiscore:system-status:v1', [
+            ['name' => 'MariaDB', 'level' => 'ok'],
+            'not-a-status-object',
+        ], 60);
+
+        Http::fake([
+            'opensearch.test*' => Http::response(['status' => 'green'], 200),
+            'influxdb.test*' => Http::response('', 204),
+        ]);
+
+        $statuses = app(SystemStatusService::class)->snapshot();
+
+        self::assertCount(6, $statuses);
+        foreach ($statuses as $status) {
+            self::assertInstanceOf(SystemStatus::class, $status);
+        }
+    }
+
     private function probeByName(string $name): SystemStatus
     {
         return $this->byName(app(SystemStatusService::class)->fresh(), $name);
