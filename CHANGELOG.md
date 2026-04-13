@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`/horizon` 403 on prod deployments.** Horizon's upstream default gate is
+  `app()->environment('local')`, which blocks every hit on a host running
+  `APP_ENV=production` — including the "Horizon →" button on the landing
+  page. Published an `App\Providers\HorizonServiceProvider` that defines a
+  phase-1-appropriate `viewHorizon` gate with two env knobs:
+  - `HORIZON_UNPROTECTED=true` — explicit escape hatch for hosts already
+    fronted by VPN / IP allowlist / basic-auth.
+  - `HORIZON_ALLOWED_EMAILS="a@b.com,c@d.com"` — CSV of authenticated user
+    emails allowed through once auth lands (EVE SSO).
+  Fails closed by default. Once `UsersCharacters` has real RBAC, the gate
+  tightens to a role check and both knobs go away.
+
 ### Added
 - **Landing page** at `/` (`app/resources/views/landing.blade.php`)
   replacing the stock Laravel welcome. Dark ops-aesthetic, mirrors the
