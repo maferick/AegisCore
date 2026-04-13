@@ -45,7 +45,10 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login()
             ->colors([
-                'primary' => Color::Orange,
+                // EVE HUD palette — cyan is the "go / selected / friendly"
+                // colour in-game, and the landing page uses it as the primary
+                // accent, so the admin shares the same language.
+                'primary' => Color::Cyan,
             ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')

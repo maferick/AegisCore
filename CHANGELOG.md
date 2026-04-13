@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **EVE HUD palette** replaces the generic orange accent across the landing
+  page and the Filament admin. Primary accent is now cyan `#4fd0d0` (EVE's
+  iconic "go / selected / friendly" colour); amber `#e5a900` takes the
+  env-badge and is reserved for "yours / status" semantics; red `#ff3838`
+  is added as `--danger` for "hostile signal / alert" (unused in phase 1,
+  there for the spy-detection / killmail UIs). Filament's `primary` is
+  flipped to `Color::Cyan` so the admin and the marketing page speak the
+  same language. Radial background glows re-weighted from orange to a cyan
+  top-left / amber bottom-right pair, matching the EVE website's
+  background composition.
+
 ### Added
 - **Filament admin panel at `/admin`** (Filament 5). Phase-1 shell: stock
   dashboard behind a login screen, orange primary accent matching the
