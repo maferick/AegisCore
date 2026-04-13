@@ -89,7 +89,9 @@ CREATE TABLE outbox (
 
 - Pattern: `<aggregate_type>.<verb-past-tense>`
 - Examples: `killmail.ingested`, `killmail.status.changed`,
-  `character.linked`, `doctrine.published`.
+  `character.linked`, `doctrine.published`,
+  `reference.sde_snapshot_loaded` (see
+  [ADR-0001](adr/0001-static-reference-data.md)).
 - `payload` carries the minimum Python needs — IDs + changed state, not full
   row copies.
 

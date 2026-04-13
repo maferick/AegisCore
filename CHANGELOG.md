@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ADR series** started under `docs/adr/`. First entry,
+  [ADR-0001](docs/adr/0001-static-reference-data.md), locks the store
+  placement for EVE static reference data (SDE): MariaDB `ref_*` tables are
+  canonical; Neo4j is a derived graph projection (systems + gates + regions);
+  OpenSearch is a deferred derived search projection (phase 2). Load path is
+  a Python `sde_importer` invoked by `make sde-import`, emitting a single
+  `reference.sde_snapshot_loaded` outbox event that two Python consumers
+  project onto the derived stores. Port from SupplyCore, not reimplement.
+  Phase-1 table scope enumerated; dogma / blueprint / industry tables
+  deferred to phase 2 alongside OpenSearch. Cross-referenced from AGENTS.md
+  (§ Data ownership, § Where to go next), docs/ARCHITECTURE.md (§ Data
+  ownership), and docs/CONTRACTS.md (§ Event naming). `docs/adr/README.md`
+  establishes the ADR convention (format, numbering, when to write one).
+
 - **Horizon link in the Filament admin sidebar** under a "Monitoring" group
   (`AdminPanelProvider::navigationItems()`). Registered as a plain
   `NavigationItem` (not a Page) because Horizon ships its own Vue SPA that
