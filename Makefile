@@ -4,7 +4,7 @@ COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 -include .env
 export
 
-.PHONY: help up down restart ps logs pull bootstrap clean-logs
+.PHONY: help up down restart ps logs pull update bootstrap clean-logs
 
 help:
 	@echo "AegisCore Makefile"
@@ -17,6 +17,7 @@ help:
 	@echo "  make logs         tail logs from all services"
 	@echo "  make logs-<svc>   tail logs from one service (e.g. make logs-neo4j)"
 	@echo "  make pull         pull latest pinned images"
+	@echo "  make update       git pull + composer install + artisan migrate (no container restart)"
 	@echo "  make build        build locally-built images (php-fpm)"
 	@echo "  make php-shell    open a shell in the php-fpm container"
 	@echo "  make redis-cli    open a redis-cli session (auth'd)"
@@ -53,6 +54,23 @@ logs-%:
 
 pull:
 	$(COMPOSE) pull --ignore-buildable
+
+# Pull latest code + PHP deps + DB schema. Safe on dev and prod. Does NOT
+# restart containers — run `make restart` separately if you need that
+# (e.g. after a Dockerfile / PHP extension change).
+#
+# Uses --ff-only so divergent history fails loudly instead of silently
+# creating merge commits. Uses --no-interaction / --force so prompts
+# don't wedge unattended runs.
+update:
+	git pull --ff-only
+	$(COMPOSE) up -d
+	$(COMPOSE) exec php-fpm composer install --optimize-autoloader --no-interaction
+	$(COMPOSE) exec php-fpm php artisan migrate --force
+	@echo ""
+	@echo "Stack updated. If Horizon is running and you touched jobs/config:"
+	@echo "    make artisan CMD=\"config:clear\""
+	@echo "    make artisan CMD=\"horizon:terminate\"   # supervisord/systemd will respawn it"
 
 bootstrap:
 	sudo mkdir -p \
