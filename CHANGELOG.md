@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   focused on the four pillars and the Admin CTA.
 
 ### Added
+- **Admin System Status overview** — traffic-light health card for every
+  backend AegisCore depends on (MariaDB, Redis, Horizon, OpenSearch,
+  InfluxDB, Neo4j). New `App\System\SystemStatusService` runs one cheap
+  probe per backend (DB `SELECT 1`, Redis `PING`, Horizon master
+  supervisor count, OpenSearch `/_cluster/health`, InfluxDB `/ping`,
+  Neo4j Bolt TCP reachability) with a 1s timeout and try/catch so one
+  dead service never breaks the page. Results cache for 15s in Redis so
+  Filament's widget polling is cheap. Each probe maps to a
+  `SystemStatusLevel` — `OK` (green) / `DEGRADED` (orange, e.g.
+  OpenSearch yellow cluster, Horizon not running) / `DOWN` (red) /
+  `UNKNOWN` (grey, e.g. host not configured). New
+  `SystemStatusWidget` renders the snapshot as a 3-up grid of coloured
+  stat cards on the `/admin` dashboard, and a dedicated
+  `/admin/system-status` page under "Monitoring" gives operators a
+  deep-linkable incident-response view alongside Horizon.
 - **Daily SDE version-drift check** (first concrete piece of the ADR-0001
   reference-data plumbing). A new `scheduler` compose service runs
   `php artisan schedule:work` as a long-running process — no host cron.

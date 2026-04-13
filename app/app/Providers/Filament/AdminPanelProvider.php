@@ -59,6 +59,12 @@ class AdminPanelProvider extends PanelProvider
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
                 Widgets\AccountWidget::class,
+                // Traffic-light health card for every backend (MariaDB,
+                // Redis, Horizon, OpenSearch, InfluxDB, Neo4j). Lives on
+                // the dashboard so operators see a dead backend the
+                // moment they land, without having to navigate to the
+                // dedicated /admin/system-status page.
+                \App\Filament\Widgets\SystemStatusWidget::class,
             ])
             // Horizon lives in the sidebar as a plain nav item (not a Page)
             // because it ships its own Vue SPA that replaces Filament's
