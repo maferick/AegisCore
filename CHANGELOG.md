@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **EVE login button on the landing page + admin user menu.** Two new
+  surfaces for the existing `/auth/eve` route, both gated on
+  `EveSsoClient::isConfigured()` (so they vanish on deployments that
+  haven't wired SSO):
+  - Landing page (`resources/views/landing.blade.php`) gets a
+    gold-accented "Log in with EVE Online" button next to the Admin
+    CTA — distinct colour from the cyan Admin button so the two
+    primary actions don't read as duplicates.
+  - Filament's user-menu (top-right dropdown inside `/admin`) gets a
+    "Log in with EVE Online" item via `userMenuItems()`. Useful for
+    operator-seeded accounts that want to (re-)auth as an EVE
+    character. Note: this re-runs the SSO flow and `Auth::login`s
+    into whichever user that character is linked to — true
+    alt-attaching (mutating the *current* session's `user_id`)
+    belongs in a later PR.
+
 ### Fixed
 - **"Log in with EVE Online" button no-ops when SSO env vars aren't set.**
   Without `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` /

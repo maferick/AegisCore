@@ -170,6 +170,18 @@
             border-color: var(--accent-dim);
             color: #0a0a0b;
         }
+        /* "Log in with EVE" — gold accent, mirrors EVE's in-game "your
+         * alliance / your ship" colour. Distinguishes from the cyan
+         * Admin CTA so the two primary actions don't look identical. */
+        .btn-eve {
+            border-color: rgba(229, 169, 0, 0.55);
+            color: var(--gold);
+        }
+        .btn-eve:hover {
+            border-color: var(--gold);
+            color: var(--gold);
+            background: rgba(229, 169, 0, 0.06);
+        }
 
         /* ---------- Footer ---------- */
         footer {
@@ -226,6 +238,16 @@
 
             <div class="actions">
                 <a href="/admin" class="btn btn-primary">Admin &rarr;</a>
+                {{--
+                    "Log in with EVE Online" — only renders when SSO env vars
+                    are populated (mirrors the AdminPanelProvider login-form
+                    render hook gate). Without that check it'd be a dead
+                    link that silently bounces users back via the misconfig
+                    fallback path. See App\Services\Eve\Sso\EveSsoClient.
+                --}}
+                @if (\App\Services\Eve\Sso\EveSsoClient::isConfigured())
+                    <a href="{{ route('auth.eve.redirect') }}" class="btn btn-eve">Log in with EVE Online</a>
+                @endif
                 <a href="https://github.com/maferick/AegisCore" class="btn" rel="noopener">GitHub</a>
             </div>
         </div>
