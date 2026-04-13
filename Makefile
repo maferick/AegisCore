@@ -27,6 +27,7 @@ help:
 	@echo "    make laravel-key       generate a fresh APP_KEY (copy into .env)"
 	@echo "    make laravel-migrate   run all pending migrations"
 	@echo "    make horizon-install   one-time Horizon config + assets publish"
+	@echo "    make filament-user     create an admin user for the /admin panel (interactive)"
 	@echo "    make laravel-fix-perms chown storage/ + bootstrap/cache/ to www-data (UID 82)"
 	@echo "    make artisan  CMD=\"…\"  run any artisan command"
 	@echo "    make composer CMD=\"…\"  run any composer command"
@@ -94,7 +95,7 @@ bootstrap:
 	sudo chown -R 7474:7474 $(AEGISCORE_ROOT)/docker/neo4j
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key test lint
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint
 build:
 	$(COMPOSE) build
 
@@ -132,6 +133,13 @@ laravel-migrate:
 
 horizon-install:
 	$(COMPOSE) exec php-fpm php artisan horizon:install
+
+# Create a new admin user for the Filament panel at /admin.
+# Interactive — prompts for name, email, password. Only way to populate the
+# panel's user pool in phase 1 (no public signup / EVE SSO yet).
+# Needs a TTY, so `make filament-user` must be run from an interactive shell.
+filament-user:
+	$(COMPOSE) exec php-fpm php artisan make:filament-user
 
 # Operator-facing belt fix for Blade's `tempnam()` 500 error.
 #
