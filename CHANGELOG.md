@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Horizon link in the Filament admin sidebar** under a "Monitoring" group
+  (`AdminPanelProvider::navigationItems()`). Registered as a plain
+  `NavigationItem` (not a Page) because Horizon ships its own Vue SPA that
+  replaces the page layout — embedding it inside a Filament page would fight
+  its router. Clicking full-navigates to `/horizon`, which is gated on the
+  same `canAccessPanel()` check as the rest of the panel (see PR #16).
+
 ### Fixed
 - **Filament admin login had no CSS and wouldn't authenticate behind nginx
   TLS termination.** Three symptoms, one root cause: Laravel wasn't trusting
