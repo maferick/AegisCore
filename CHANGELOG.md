@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Makefile targets: `laravel-install`, `laravel-key`,
   `laravel-migrate`, `horizon-install`, `horizon-publish`,
   `artisan CMD="…"`, `composer CMD="…"`, `test`, `lint`.
+- `make update` — git-side "reconcile to latest": `git pull --ff-only`
+  + `docker compose up -d` + `composer install` + `artisan migrate`.
+  Does not restart containers (use `make restart` for that).
+  Separate from `make pull`, which pulls Docker images.
 - php-fpm service now receives Laravel-shaped env:
   `APP_NAME`, `APP_ENV`, `APP_KEY`, `APP_DEBUG`, `APP_URL`,
   `LOG_CHANNEL=stderr`, `DB_CONNECTION=mariadb` + `DB_*`,
