@@ -222,6 +222,34 @@ services:
       NEO4J_HOST: "bolt://neo4j:7687"
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+
+      # ---------------------------------------------------------------
+      # EVE SSO — login.eveonline.com OAuth2 PKCE
+      # ---------------------------------------------------------------
+      # Read by config/eve.php → consumed by App\Services\Eve\Sso\EveSsoClient.
+      # When client_id / secret / callback_url are all present, the "Log in
+      # with EVE Online" button renders on the landing page + Filament admin
+      # login form + admin user menu. Empty values hide the button entirely
+      # (EveSsoClient::isConfigured() returns false), which is the correct
+      # behaviour for fresh installs that haven't registered an EVE app yet.
+      EVE_SSO_CLIENT_ID: "${EVE_SSO_CLIENT_ID:-}"
+      EVE_SSO_CLIENT_SECRET: "${EVE_SSO_CLIENT_SECRET:-}"
+      EVE_SSO_CALLBACK_URL: "${EVE_SSO_CALLBACK_URL:-}"
+      EVE_SSO_LOGIN_SCOPES: "${EVE_SSO_LOGIN_SCOPES:-publicData}"
+      # Comma-separated EVE character IDs that get Filament /admin access.
+      # IDs (not names) — names are mutable, IDs are not. See ADR-0002.
+      EVE_SSO_ADMIN_CHARACTER_IDS: "${EVE_SSO_ADMIN_CHARACTER_IDS:-}"
+
+      # ---------------------------------------------------------------
+      # ESI — esi.evetech.net (light synchronous calls only on this plane)
+      # ---------------------------------------------------------------
+      # CCP requires a User-Agent identifying app + contact. Reactive
+      # rate-limit throttle (App\Services\Eve\Esi\EsiRateLimiter) reads
+      # the safety_margin / max_wait knobs; defaults match config/eve.php.
+      ESI_USER_AGENT: "${ESI_USER_AGENT:-AegisCore/0.1 (+ops@example.com)}"
+      ESI_TIMEOUT_SECONDS: "${ESI_TIMEOUT_SECONDS:-10}"
+      ESI_RATE_LIMIT_SAFETY_MARGIN: "${ESI_RATE_LIMIT_SAFETY_MARGIN:-5}"
+      ESI_RATE_LIMIT_MAX_WAIT_SECONDS: "${ESI_RATE_LIMIT_MAX_WAIT_SECONDS:-5}"
     volumes:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/php/conf.d:/usr/local/etc/php/conf.d/aegiscore:ro
