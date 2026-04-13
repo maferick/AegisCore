@@ -34,8 +34,13 @@ services:
       discovery.type: single-node
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
-      DISABLE_INSTALL_DEMO_CONFIG: "false"
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      # Security plugin off for phase 1: OpenSearch is only reachable on the
+      # internal `aegiscore` network (host port 9200 is dev-only). The demo
+      # config's self-signed TLS breaks APOC→OpenSearch calls from Neo4j and
+      # adds friction with no matching security gain inside the compose net.
+      # Put OpenSearch behind nginx + mTLS (or re-enable the plugin) in prod.
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
     ulimits:
       memlock:
         soft: -1
@@ -52,7 +57,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "curl -fks -u admin:${OPENSEARCH_ADMIN_PASSWORD} https://localhost:9200/_cluster/health || exit 1"
+        - "curl -fs http://localhost:9200/_cluster/health || exit 1"
       interval: 15s
       timeout: 10s
       retries: 20
@@ -64,9 +69,9 @@ services:
     container_name: opensearch-dashboards
     restart: unless-stopped
     environment:
-      OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
-      OPENSEARCH_USERNAME: "admin"
-      OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      # Mirror the opensearch service: no security plugin, plain HTTP.
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
     ports:
       - "5601:5601"
     depends_on:
@@ -174,9 +179,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
-      OPENSEARCH_HOST: "https://opensearch:9200"
-      OPENSEARCH_USERNAME: admin
-      OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      # Security plugin disabled on the opensearch service — no auth, HTTP only.
+      OPENSEARCH_HOST: "http://opensearch:9200"
       INFLUXDB_HOST: "http://influxdb2:8086"
       INFLUXDB_TOKEN: "${INFLUXDB_ADMIN_TOKEN}"
       INFLUXDB_ORG: "${INFLUXDB_ORG:-aegiscore}"
@@ -222,7 +226,12 @@ services:
       neo4j:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost/health || exit 1"]
+      # Use 127.0.0.1 (not localhost) — busybox wget resolves localhost to
+      # IPv6 ::1, and nginx binds to 0.0.0.0 by default. Hitting ::1 returns
+      # "Connection refused" and the container is marked unhealthy even
+      # though it's serving IPv4 traffic fine. See `listen [::]:80` in
+      # nginx/conf.d/aegiscore.conf for belt-and-braces IPv6 coverage.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
       interval: 15s
       timeout: 5s
       retries: 5

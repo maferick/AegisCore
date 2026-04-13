@@ -29,6 +29,15 @@ All bind-mount paths in `infra/docker-compose.yml` resolve via
 `${AEGISCORE_ROOT:-/opt/aegiscore}`, so you can point the stack at a different
 root on dev laptops by setting `AEGISCORE_ROOT` in `.env`.
 
+> ⚠️ **`AEGISCORE_ROOT` is case-sensitive.** It must match the on-disk path
+> exactly. If the var is unset (or misspelled) compose silently falls back to
+> the default `/opt/aegiscore` and Docker auto-creates an **empty** shadow
+> tree at that path, then bind-mounts those empty dirs into every container.
+> Symptoms: nginx starts with no config (`default.conf is not a file`), PHP
+> sees an empty `/var/www/html`, logs disappear. Check with
+> `grep AEGISCORE_ROOT .env` — the value must exactly match the project dir
+> casing (e.g. `/opt/AegisCore`, not `/opt/aegiscore`).
+
 ## First-time setup
 
 Run `make bootstrap` to create the `docker/*` dirs with correct ownership:
@@ -60,6 +69,26 @@ Run `make bootstrap` to create the `docker/*` dirs with correct ownership:
 MariaDB is canonical. Neo4j / OpenSearch / InfluxDB are derived stores — they
 can be rebuilt from MariaDB + external sources. Don't add business logic that
 only lives in a derived store.
+
+## OpenSearch security posture (phase 1)
+The security plugin is **disabled** on both `opensearch` and
+`opensearch-dashboards`:
+
+- `DISABLE_SECURITY_PLUGIN=true` on the opensearch service
+- `DISABLE_SECURITY_DASHBOARDS_PLUGIN=true` on the dashboards service
+- `DISABLE_INSTALL_DEMO_CONFIG=true` so no self-signed TLS gets generated
+- Clients talk plain `http://opensearch:9200` — no auth header, no cert
+
+Why: OpenSearch is only reachable on the internal `aegiscore` Docker network
+plus the dev-only host ports. The demo config's self-signed TLS breaks APOC
+→ OpenSearch integrations from Neo4j (cert pinning / truststore friction)
+and Dashboards with no matching security gain inside the compose network.
+
+Before prod:
+1. Put OpenSearch behind nginx with mTLS (or terminate upstream at a
+   proper cert-authority-issued cert),
+2. Or restore the security plugin + set `OPENSEARCH_ADMIN_PASSWORD` and
+   flip all clients back to `https://` + basic auth.
 
 ## PHP control plane
 - Image: built locally from `infra/php/Dockerfile` (tag
@@ -95,9 +124,10 @@ only lives in a derived store.
 - **OpenSearch won't start, "config not found":** don't bind-mount
   `/usr/share/opensearch/config` unless you pre-seed it with the image's files.
   We intentionally do not mount that path.
-- **Dashboards login loops:** confirm `OPENSEARCH_USERNAME` +
-  `OPENSEARCH_PASSWORD` env vars are set on the dashboards service (they are,
-  in the shipped compose file).
+- **Dashboards login loops:** should not happen on phase 1 — the security
+  plugin is disabled on both `opensearch` and `opensearch-dashboards`. If
+  you re-enable security in prod, set `OPENSEARCH_USERNAME` +
+  `OPENSEARCH_PASSWORD` on the dashboards service.
 - **Neo4j OOM on small host:** lower `NEO4J_HEAP_*` and `NEO4J_PAGECACHE` in
   `.env`. Dev defaults target a laptop; prod defaults are in the comments.
 - **Nginx returns 404 for `/`:** make sure `app/public/index.php` exists and
@@ -116,3 +146,12 @@ only lives in a derived store.
   `pull_policy: build` on the php-fpm service prevents the pull attempt. If
   you still see this, you're on an older compose; run `make build` manually
   before `make up` on first deploy.
+- **Nginx container shows `unhealthy` but curl works:** busybox `wget`
+  resolves `localhost` to IPv6 `::1` before trying IPv4. If the nginx config
+  doesn't include `listen [::]:80`, the healthcheck gets `Connection refused`
+  from inside the container even though IPv4 works fine. The shipped config
+  listens on both stacks and the healthcheck uses `127.0.0.1` explicitly —
+  if you edit either, keep that invariant.
+- **Empty response from `curl http://localhost/` after a clean boot:** almost
+  always a path-casing mismatch between `AEGISCORE_ROOT` and the on-disk
+  project dir. See the warning at the top of this file.
