@@ -178,12 +178,19 @@ sde-check:
 
 # Download CCP's SDE JSONL zip and load all ref_* tables in one transaction.
 # One-shot container — the `tools` profile keeps it out of `docker compose up`.
-# Builds the image the first time; subsequent runs reuse the cached image.
+#
+# `--build` forces compose to rebuild the image from `python/` before running.
+# Without it, compose reuses the locally-tagged `aegiscore/sde-importer:0.1.0`
+# image as long as the tag exists, even if `python/sde_importer/*.py` has
+# changed on disk — so a `git pull` that updates the importer wouldn't
+# actually take effect on the next `make sde-import`. Rebuilds are cheap
+# thanks to Docker's layer cache; only changed layers re-run.
+#
 # Overrides:
 #   SDE_ARGS="--only-download"            # fetch + extract, skip DB load
 #   SDE_ARGS="--skip-download --extract-dir=/tmp/sde/extracted"   # iterate on loaders
 sde-import:
-	$(COMPOSE) --profile tools run --rm sde_importer $(SDE_ARGS)
+	$(COMPOSE) --profile tools run --rm --build sde_importer $(SDE_ARGS)
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
