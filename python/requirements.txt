@@ -1,0 +1,5 @@
+# Pinned to minor — these are stable libraries and we want reproducible
+# image builds, but patch bumps for security fixes are fine.
+httpx~=0.27
+pymysql~=1.1
+python-ulid~=3.0

@@ -30,6 +30,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stat cards on the `/admin` dashboard, and a dedicated
   `/admin/system-status` page under "Monitoring" gives operators a
   deep-linkable incident-response view alongside Horizon.
+- **SDE importer — `python/sde_importer/`.** Python 3.12 one-shot
+  container that downloads CCP's EVE Static Data Export JSONL zip (~83MB
+  compressed, ~500MB extracted, 56 JSONL files, ~664k rows total) and
+  loads every `ref_*` table in one MariaDB transaction. Declarative
+  `schema.py` maps each JSONL file to a `TableSpec` listing hot scalar
+  columns (typed: int/float/str/bool/name with i18n `.en` extraction)
+  plus a `data` LONGTEXT JSON catch-all so future PRs can promote
+  overflow fields into typed columns without a reload. Generic
+  `loader.py` streams each file, bulk-INSERTs in batches of 2000 via
+  pymysql `executemany`, degrades malformed rows to logged skips rather
+  than aborting the transaction. On COMMIT the importer emits a
+  `reference.sde_snapshot_loaded` event into `outbox` (producer
+  `sde_importer`, payload includes build number, release date, ETag,
+  per-table row counts) and writes the pin to `infra/sde/version.txt`
+  for the drift-check widget. Three new Laravel migrations land 44
+  `ref_*` tables + `ref_snapshot`: universe topology (regions,
+  constellations, solar systems, stargates, stars, planets, moons,
+  asteroid belts, secondary suns, landmarks), items (categories,
+  groups, market groups, meta groups, types, compressible, contraband,
+  dynamic attributes, type materials/dogma/bonus, dogma
+  attributes/effects/categories/units, dbuff collections, blueprints),
+  entities (factions, races, bloodlines, ancestries, NPC
+  corps/divisions/stations/characters, station ops/services, agents,
+  certs, masteries, character attributes, clone grades, icons,
+  graphics, skins, skin materials/licenses, planet
+  resources/schematics, control tower resources, translation
+  languages, corp activities, sov upgrades, mercenary ops, freelance
+  job schemas). No FK constraints — truncate-reload doesn't want the
+  cascade bill and phase-1 reload happens in a maintenance window
+  (ADR-0001 §4). New `sde_importer` compose service lives in the
+  `tools` profile so `docker compose up` doesn't launch it; run on
+  demand via `make sde-import`.
 - **Daily SDE version-drift check** (first concrete piece of the ADR-0001
   reference-data plumbing). A new `scheduler` compose service runs
   `php artisan schedule:work` as a long-running process — no host cron.

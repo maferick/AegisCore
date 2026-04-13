@@ -13,23 +13,38 @@ intentionally loose — whatever string CCP happens to expose today
 upstream, so the only rule is **it must match whatever CCP serves in
 the upstream response**.
 
-**Current state:** `version.txt` is deliberately absent — the Python
-`sde_importer` (planned: [ADR-0001](../../docs/adr/0001-static-reference-data.md))
-will write this file as part of a successful load. Until then, the
-version widget on `/admin` shows "SDE version never checked" / "SDE
-not loaded yet".
+**Before the first import** `version.txt` is absent — the Filament
+widget on `/admin` shows "No SDE loaded". The `sde_importer` container
+(see `python/`) writes this file at the end of a successful load, using
+the upstream HTTP ETag by default (or the CCP `buildNumber` as a
+fallback when the ETag is missing).
 
 ## Bumping the snapshot
 
-Runbook placeholder — lands alongside the Python importer PR:
+```bash
+make sde-import
+```
 
-1. Download the new SDE tarball from
-   `https://developers.eveonline.com/docs/services/static-data/`.
-2. Run `make sde-import TARBALL=...` (adds row to `ref_*`, emits
-   `reference.sde_snapshot_loaded` outbox event).
-3. Importer writes the new version string to `version.txt`.
-4. Filament widget flips to "SDE is up-to-date" on the next scheduled
-   check (or immediately via `make sde-check`).
+That runs a one-shot container from the `tools` compose profile:
+
+1. Downloads the latest SDE JSONL zip from
+   `https://developers.eveonline.com/static-data/…` (or whatever
+   `SDE_SOURCE_URL` is set to).
+2. Opens a single MariaDB transaction, truncates every `ref_*` table,
+   streams each of the 56 JSONL files into its matching table in
+   batches of 2000 rows.
+3. Replaces the `ref_snapshot` row with the new build number + release
+   date + ETag.
+4. Inserts a `reference.sde_snapshot_loaded` outbox event (consumed by
+   Laravel on its side of the plane boundary).
+5. `COMMIT`. Only after commit do we write the new pin to `version.txt`
+   — so a mid-import crash leaves both the DB and the pin untouched.
+6. The Filament widget flips to "Up to date" on the next
+   `reference:check-sde-version` run (`make sde-check` to force it now).
+
+Rollback on failure: the whole load is one transaction, so any error
+before step 5 triggers `ROLLBACK` and leaves the previous snapshot
+intact. `version.txt` is only written on the success path.
 
 ## Why not in `app/`?
 
