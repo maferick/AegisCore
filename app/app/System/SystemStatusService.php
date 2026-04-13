@@ -346,11 +346,30 @@ class SystemStatusService
     }
 
     /**
-     * Neo4j — derived graph store. We only verify Bolt port reachability
-     * rather than running a Cypher query: password may not be set in
-     * every environment, and a TCP connect is enough to know if the
-     * light is on. Deeper checks belong in Python, which actually
-     * writes to the graph.
+     * Neo4j — derived graph store. Two-stage probe:
+     *
+     *   1. TCP reach on the Bolt port (1s timeout). Bounds the total
+     *      probe time so a dead host can't drag the whole widget past
+     *      its cache TTL. A failed TCP check also dodges the longer
+     *      default timeouts the Bolt driver would otherwise inherit.
+     *   2. If TCP is up AND credentials are configured, run
+     *      `RETURN 1 AS ok` via {@link https://github.com/neo4j-php/neo4j-php-client}
+     *      (already in composer.json). This catches the "Bolt port
+     *      answers but the query planner is hung / auth is wrong"
+     *      degraded case the old TCP-only check silently marked green.
+     *
+     * Three-state output:
+     *   TCP fails                    → DOWN       (red)
+     *   TCP ok, Cypher throws        → DEGRADED   (orange)
+     *   TCP ok, RETURN 1 === 1       → OK         (green)
+     *   TCP ok, no credentials       → OK with a note that only TCP
+     *                                   was checked (phase-1 default
+     *                                   .env ships with NEO4J_PASSWORD
+     *                                   blank).
+     *
+     * Still read-only — AGENTS.md "Laravel does not write to Neo4j"
+     * is about domain projection, not health probes; this is the same
+     * pattern we use for MariaDB (`SELECT 1`).
      */
     private function probeNeo4j(): SystemStatus
     {
@@ -385,47 +404,125 @@ class SystemStatusService
                 );
             }
 
-            // `@` suppresses the warning for normal error handlers, but
-            // strict handlers (e.g. laravel/pail or custom reporting)
-            // promote warnings to exceptions. Install a scoped handler
-            // that captures the message instead of re-throwing.
-            $suppressed = null;
-            set_error_handler(static function (int $_, string $message) use (&$suppressed): bool {
-                $suppressed = $message;
-
-                return true;
-            });
-
-            try {
-                $errno = 0;
-                $errstr = '';
-                $socket = fsockopen($hostname, (int) $port, $errno, $errstr, self::PROBE_TIMEOUT_SECONDS);
-            } finally {
-                restore_error_handler();
-            }
-
-            if ($socket === false) {
-                $detail = $errstr !== '' ? $errstr : ($suppressed ?? 'Connection refused');
-
+            // Stage 1 — bounded TCP reachability.
+            $tcpError = $this->tcpReach($hostname, (int) $port);
+            if ($tcpError !== null) {
                 return new SystemStatus(
                     name: 'Neo4j',
                     level: SystemStatusLevel::DOWN,
-                    detail: $this->trimMessage($detail),
+                    detail: $this->trimMessage($tcpError),
                 );
             }
 
-            fclose($socket);
+            // Stage 2 — Cypher ping (skipped when we don't have
+            // credentials; fall back to the TCP-only signal and flag
+            // it in the detail line so ops knows it's shallow).
+            $user = (string) config('aegiscore.neo4j.user');
+            $password = (string) config('aegiscore.neo4j.password');
+            if ($user === '' || $password === '') {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::OK,
+                    detail: 'Bolt '.$hostname.':'.$port.' (unauthenticated check)',
+                );
+            }
 
-            return new SystemStatus(
-                name: 'Neo4j',
-                level: SystemStatusLevel::OK,
-                detail: 'Bolt '.$hostname.':'.$port,
-            );
+            if (! class_exists('Laudis\\Neo4j\\ClientBuilder')) {
+                // Shouldn't happen — laudis/neo4j-php-client is in
+                // composer.json — but better to degrade than to fatal
+                // on a missing class.
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::OK,
+                    detail: 'Bolt '.$hostname.':'.$port.' (client missing)',
+                );
+            }
+
+            return $this->cypherPing($host, $hostname, (int) $port, $user, $password);
         } catch (Throwable $e) {
             return new SystemStatus(
                 name: 'Neo4j',
                 level: SystemStatusLevel::DOWN,
                 detail: $this->trimMessage($e->getMessage()),
+            );
+        }
+    }
+
+    /**
+     * Bounded TCP reach check. Returns null on success, a short error
+     * message on failure. Installs a scoped error handler so strict
+     * reporters (laravel/pail etc.) can't promote the fsockopen warning
+     * to an unhandled exception.
+     */
+    private function tcpReach(string $hostname, int $port): ?string
+    {
+        $suppressed = null;
+        set_error_handler(static function (int $_, string $message) use (&$suppressed): bool {
+            $suppressed = $message;
+
+            return true;
+        });
+
+        try {
+            $errno = 0;
+            $errstr = '';
+            $socket = fsockopen($hostname, $port, $errno, $errstr, self::PROBE_TIMEOUT_SECONDS);
+        } finally {
+            restore_error_handler();
+        }
+
+        if ($socket === false) {
+            return $errstr !== '' ? $errstr : ($suppressed ?? 'Connection refused');
+        }
+
+        fclose($socket);
+
+        return null;
+    }
+
+    /**
+     * Run `RETURN 1 AS ok` via the laudis Neo4j client. Any throwable
+     * (auth failure, Bolt handshake error, query timeout) downgrades to
+     * DEGRADED — the port is reachable, so something's half-alive
+     * rather than completely dead.
+     *
+     * `$host` is the full connection URL (e.g. `bolt://neo4j:7687`) the
+     * driver needs; `$hostname` / `$port` are just for the human-readable
+     * detail line.
+     */
+    private function cypherPing(string $host, string $hostname, int $port, string $user, string $password): SystemStatus
+    {
+        try {
+            $client = \Laudis\Neo4j\ClientBuilder::create()
+                ->withDriver('health', $host, \Laudis\Neo4j\Authentication\Authenticate::basic($user, $password))
+                ->withDefaultDriver('health')
+                ->build();
+
+            $started = microtime(true);
+            $result = $client->run('RETURN 1 AS ok');
+            $elapsedMs = (int) ((microtime(true) - $started) * 1000);
+
+            $row = $result->first();
+            $ok = $row->get('ok');
+
+            if ((int) $ok !== 1) {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::DEGRADED,
+                    detail: 'Unexpected RETURN 1 reply: '.(is_scalar($ok) ? (string) $ok : gettype($ok)),
+                );
+            }
+
+            return new SystemStatus(
+                name: 'Neo4j',
+                level: SystemStatusLevel::OK,
+                detail: 'Cypher '.$hostname.':'.$port.' ('.$elapsedMs.' ms)',
+            );
+        } catch (Throwable $e) {
+            return new SystemStatus(
+                name: 'Neo4j',
+                level: SystemStatusLevel::DEGRADED,
+                detail: 'Bolt reachable, query failed: '.$this->trimMessage($e->getMessage()),
             );
         }
     }

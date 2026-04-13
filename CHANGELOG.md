@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   InfluxDB, Neo4j). New `App\System\SystemStatusService` runs one cheap
   probe per backend (DB `SELECT 1`, Redis `PING`, Horizon master
   supervisor count, OpenSearch `/_cluster/health`, InfluxDB `/ping`,
-  Neo4j Bolt TCP reachability) with a 1s timeout and try/catch so one
+  Neo4j Bolt TCP reach + `RETURN 1` Cypher ping via laudis/neo4j-php-client)
+  with a 1s timeout and try/catch so one
   dead service never breaks the page. Results cache for 15s in Redis so
   Filament's widget polling is cheap. Each probe maps to a
   `SystemStatusLevel` — `OK` (green) / `DEGRADED` (orange, e.g.
