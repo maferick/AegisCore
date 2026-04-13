@@ -90,6 +90,28 @@ Before prod:
 2. Or restore the security plugin + set `OPENSEARCH_ADMIN_PASSWORD` and
    flip all clients back to `https://` + basic auth.
 
+## TLS termination: nginx → php-fpm
+
+nginx terminates TLS at the edge and forwards to php-fpm over plain HTTP,
+setting `X-Forwarded-Proto: https`. For Laravel to generate `https://` URLs
+(asset links, signed URLs, session cookies with `Secure`), two things must be
+true:
+
+1. **`APP_URL` in `.env`** must match the public origin — e.g.
+   `APP_URL=https://winterco.killsineve.online`, not `http://localhost`.
+   Filament's login page builds asset paths off `APP_URL`; set it wrong and
+   you'll get mixed-content blocks and an unstyled login form.
+2. **`trustProxies(at: '*')`** is configured in
+   `app/bootstrap/app.php` so Laravel reads `X-Forwarded-Proto` and
+   `X-Forwarded-Host` from nginx. `at: '*'` is safe here because php-fpm is
+   only reachable from the nginx container on the internal bridge network —
+   no externally-reachable proxy path exists.
+
+Symptoms of a misconfigured setup: `/admin/login` renders with no CSS,
+Livewire JS 404s, and submitting the form reloads the same page without
+authenticating (the session cookie never gets set because `SESSION_SECURE`
+sees the request as HTTP).
+
 ## PHP control plane
 - Image: built locally from `infra/php/Dockerfile` (tag
   `aegiscore/php-fpm:0.1.0`). Base is `php:8.4-fpm-alpine` + Laravel-required
@@ -155,3 +177,16 @@ Before prod:
 - **Empty response from `curl http://localhost/` after a clean boot:** almost
   always a path-casing mismatch between `AEGISCORE_ROOT` and the on-disk
   project dir. See the warning at the top of this file.
+- **`/admin/login` has no styling and submitting it does nothing:** Laravel
+  isn't trusting the nginx proxy, so it thinks the request is HTTP and
+  generates `http://` asset URLs on an HTTPS page — the browser blocks
+  them and Livewire never loads. Two fixes, both required:
+  1. Set `APP_URL` in `.env` to the public origin (e.g.
+     `APP_URL=https://winterco.killsineve.online`).
+  2. Verify `trustProxies(at: '*')` is still in `app/bootstrap/app.php`.
+  Then `make artisan CMD="config:clear"` and hard-reload the browser.
+- **`/admin` loads but icons/CSS 404 after a fresh deploy:** Filament's
+  asset bundle didn't get published into `app/public/`. This should be
+  automatic (composer's `post-autoload-dump` runs `filament:upgrade`), but
+  if it got skipped, run `make laravel-install` — it publishes assets and
+  creates the `storage/app/public` symlink.

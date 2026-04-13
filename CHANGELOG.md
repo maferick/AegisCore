@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Filament admin login had no CSS and wouldn't authenticate behind nginx
+  TLS termination.** Three symptoms, one root cause: Laravel wasn't trusting
+  the nginx proxy, so `X-Forwarded-Proto: https` was ignored, `isSecure()`
+  returned false, asset URLs got generated as `http://` on an HTTPS page,
+  the browser blocked them as mixed content, Livewire JS never loaded, and
+  the session cookie's `Secure` flag prevented login submission from
+  persisting. Fix: `app/bootstrap/app.php` now calls `trustProxies(at: '*')`
+  with the full forwarded-header set. `at: '*'` is safe inside the compose
+  bridge network — php-fpm:9000 is only reachable from the nginx container.
+  `infra/notes.md` gained a TLS-termination section covering `APP_URL` +
+  trust-proxies as paired requirements, plus a troubleshooting entry for
+  the symptom.
+- **Filament assets weren't published to `public/` on fresh deploys.**
+  Composer's `post-autoload-dump` script now runs `artisan filament:upgrade`
+  (Filament's recommended hook — publishes `filament-assets`, caches icons,
+  caches views) alongside `package:discover`. Belt-and-braces:
+  `make laravel-install` explicitly re-runs `filament:assets` and
+  `storage:link` so a manual install after a Filament version bump is
+  self-sufficient.
+
+### Changed
+- **Horizon dashboard auth is now gated on Filament admin access**, not on
+  env knobs. `/horizon` piggybacks on `User::canAccessPanel()` — same login
+  surface as `/admin`, same ACL, no parallel policy to keep in sync. Unauth
+  hits redirect to `/admin/login` (via `redirectGuestsTo()` in
+  `bootstrap/app.php`) instead of 403'ing. Horizon's middleware stack is
+  now `['web', 'auth']` so sessions + redirects work; the previous
+  `[Authorize::class]`-only stack gave no login bounce. When
+  `UsersCharacters` tightens `canAccessPanel()` to a role check, Horizon
+  tightens with it automatically.
+  - **Removed:** `HORIZON_UNPROTECTED` + `HORIZON_ALLOWED_EMAILS` from
+    `.env.example`, `app/.env.example`, and `infra/docker-compose.yml`.
+    These were phase-0 stand-ins for "we don't have auth yet"; the Filament
+    panel is the auth surface now.
+
 ### Changed
 - **EVE HUD palette** replaces the generic orange accent across the landing
   page and the Filament admin. Primary accent is now cyan `#4fd0d0` (EVE's

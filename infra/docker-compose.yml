@@ -207,14 +207,6 @@ services:
       QUEUE_CONNECTION: redis
 
       # ---------------------------------------------------------------
-      # Horizon dashboard gate (see app/Providers/HorizonServiceProvider.php).
-      # Phase-1 knobs. HORIZON_UNPROTECTED opens the dashboard; only flip on
-      # if nginx is fronted by a VPN / IP allowlist / basic-auth.
-      # ---------------------------------------------------------------
-      HORIZON_UNPROTECTED: "${HORIZON_UNPROTECTED:-false}"
-      HORIZON_ALLOWED_EMAILS: "${HORIZON_ALLOWED_EMAILS:-}"
-
-      # ---------------------------------------------------------------
       # Derived stores (our conventions, read via config/aegiscore.php)
       # ---------------------------------------------------------------
       # Security plugin disabled on the opensearch service — no auth, HTTP only.
