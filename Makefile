@@ -96,6 +96,7 @@ bootstrap:
 	sudo chown -R 999:999   $(AEGISCORE_ROOT)/docker/mariadb $(AEGISCORE_ROOT)/docker/redis
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/docker/opensearch $(AEGISCORE_ROOT)/docker/influxdb2
 	sudo chown -R 7474:7474 $(AEGISCORE_ROOT)/docker/neo4j
+	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
 .PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import
