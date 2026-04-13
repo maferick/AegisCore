@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **"Log in with EVE Online" button no-ops when SSO env vars aren't set.**
+  Without `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` /
+  `EVE_SSO_CALLBACK_URL` populated (or after a `.env` edit before
+  `php artisan config:clear`), the button rendered but `/auth/eve`
+  caught the misconfig and bounced straight back to `/admin/login`
+  with a `withErrors()` message under the email field — easy to miss,
+  reads as "click did nothing." The Filament render hook now asks
+  `EveSsoClient::isConfigured()` before emitting the button HTML, so
+  the button only appears on deployments where SSO is actually wired
+  up. Email+password login stays available regardless. The new static
+  `EveSsoClient::isConfigured()` is a pure config predicate; no
+  network, no exceptions.
 - **SDE widget — wrong status + ETag overflowing the card.** Two issues
   in `App\Filament\Widgets\SdeVersionStatusWidget`:
   - The state `match` fell through to `Up to date` whenever

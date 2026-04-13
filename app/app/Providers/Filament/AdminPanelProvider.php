@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Services\Eve\Sso\EveSsoClient;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -83,13 +84,23 @@ class AdminPanelProvider extends PanelProvider
                     ->sort(100),
             ])
             // "Log in with EVE" button rendered under the default Filament
-            // login form. We keep email+password live so operator-seeded
+            // login form — only when the three required EVE_SSO_* env vars
+            // are populated. Without that gate, clicking the button just
+            // bounces the user back to /admin/login with an inline error,
+            // which is a confusing dead-end for operators who haven't
+            // wired up SSO yet (or whose config:cache is stale after a
+            // .env edit). Hiding the button is the honest signal: "this
+            // path isn't available on this deployment."
+            //
+            // Email+password stays live regardless so operator-seeded
             // accounts from `make filament-user` still work — SSO is
             // additive. Gate logic + admin allow-list live on the User
             // model and App\Services\Eve\Sso. See ADR-0002.
             ->renderHook(
                 PanelsRenderHook::AUTH_LOGIN_FORM_AFTER,
-                fn (): string => view('filament.auth.eve-login-button')->render(),
+                fn (): string => EveSsoClient::isConfigured()
+                    ? view('filament.auth.eve-login-button')->render()
+                    : '',
             )
             ->middleware([
                 EncryptCookies::class,
