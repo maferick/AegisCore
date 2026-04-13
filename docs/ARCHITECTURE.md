@@ -33,11 +33,15 @@ short version:
 ```
 
 ## Data ownership
-- **MariaDB** — canonical source of truth + `outbox` table.
+- **MariaDB** — canonical source of truth + `outbox` table. Hosts both
+  per-pillar data and cross-cutting `ref_*` reference tables (EVE SDE —
+  see [ADR-0001](adr/0001-static-reference-data.md)).
 - **Redis** — ephemeral: cache, sessions, Laravel queues, Horizon state.
   Never a system of record.
 - **Neo4j / OpenSearch / InfluxDB** — derived stores. Rebuildable from MariaDB
-  + external sources. Python owns writes.
+  + external sources. Python owns writes. Universe topology is projected
+  from `ref_*` into Neo4j by the `graph_universe_sync` consumer; search
+  projections onto OpenSearch are deferred to phase 2.
 
 ## Network topology (Phase 1)
 All services share the `aegiscore` docker network. Nginx is the only service

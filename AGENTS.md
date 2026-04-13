@@ -80,7 +80,10 @@ outbox row; the work itself runs in the execution plane.
 - **Redis**: ephemeral — cache, sessions, Laravel queues, Horizon state.
   Never the system of record for anything.
 
-Derived stores must be rebuildable from MariaDB + external sources.
+Derived stores must be rebuildable from MariaDB + external sources. This
+applies to static reference data (EVE SDE) too — see
+[ADR-0001](docs/adr/0001-static-reference-data.md) for the SDE load path
+and `ref_*` table convention.
 
 ## UX principles
 - Intent first, details second
@@ -106,5 +109,6 @@ Derived stores must be rebuildable from MariaDB + external sources.
 - Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - API + Job + Outbox contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md)
+- Architecture decisions: [`docs/adr/`](docs/adr/)
 - Operational notes: [`infra/notes.md`](infra/notes.md)
 - Change history: [`CHANGELOG.md`](CHANGELOG.md)
