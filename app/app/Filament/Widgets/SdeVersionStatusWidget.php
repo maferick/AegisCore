@@ -52,7 +52,26 @@ class SdeVersionStatusWidget extends StatsOverviewWidget
             ];
         }
 
+        // State precedence, most specific first:
+        //
+        //   1. pinned=null + HEAD failed → nothing loaded AND can't reach CCP.
+        //   2. pinned=null               → nothing loaded yet (pre-import).
+        //      "Up to date" would lie here — we're not up to date with
+        //      *anything*, because there's no local snapshot.
+        //   3. HEAD failed (with pinned set) → drift check stalled.
+        //   4. is_bump_available         → pinned != upstream, import pending.
+        //   5. default                   → pinned == upstream, all good.
         [$statusLabel, $color, $icon] = match (true) {
+            $latest->pinned_version === null && $latest->notes !== null => [
+                'No SDE loaded · upstream unreachable',
+                'danger',
+                'heroicon-m-exclamation-triangle',
+            ],
+            $latest->pinned_version === null => [
+                'No SDE loaded',
+                'gray',
+                'heroicon-m-inbox',
+            ],
             $latest->notes !== null && ! $latest->is_bump_available => [
                 'Check stalled',
                 'danger',

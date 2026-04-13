@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anchor so env + volumes can't drift between services by accident.
 
 ### Fixed
+- **SDE widget said "Up to date" when no SDE was loaded.** The state
+  logic fell through to `success` whenever `is_bump_available = false`
+  — which is true the moment `pinned_version` is `null`, because the
+  job won't claim drift without both sides. Added two explicit states
+  for the pre-import world: `No SDE loaded` (gray) and
+  `No SDE loaded · upstream unreachable` (danger, when the HEAD also
+  failed). "Up to date" now only fires when pinned is set *and* matches
+  upstream.
+
 - **Queued jobs never ran** — `/horizon` showed `Status: Inactive,
   Total Processes: 0`. Root cause: there was no Horizon worker
   container. The `scheduler` service dispatches `ShouldQueue` jobs (e.g.
