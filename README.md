@@ -9,9 +9,9 @@ Human-first alliance intelligence platform with 4 pillars:
 See [`AGENTS.md`](AGENTS.md) for the project index and principles.
 
 ## Stack
-- PHP control plane (php-fpm 8.4-alpine)
+- Laravel 12 control plane on php-fpm 8.4-alpine (custom image, Redis + MariaDB ext.)
 - Python execution plane (to land in a later phase)
-- MariaDB (canonical), Neo4j, OpenSearch, InfluxDB
+- MariaDB (canonical + outbox), Redis (cache/queues/Horizon), Neo4j, OpenSearch, InfluxDB
 - Nginx reverse proxy (front door + PHP fastcgi)
 
 ## Quick start
@@ -42,6 +42,7 @@ make up
 | Nginx (front door)     | http://localhost/           | serves `app/public/` via PHP |
 | Nginx health           | http://localhost/health     | returns `ok`                 |
 | MariaDB                | `127.0.0.1:3306`            | localhost only               |
+| Redis                  | `127.0.0.1:6379`            | localhost only, auth required|
 | OpenSearch             | https://localhost:9200      | self-signed cert             |
 | OpenSearch Dashboards  | http://localhost:5601       |                              |
 | InfluxDB               | http://localhost:8086       |                              |
@@ -56,5 +57,7 @@ make up
 - `make logs` — tail all logs
 - `make logs-neo4j` — tail a single service (swap name)
 - `make pull` — pull latest pinned images
+- `make build` — build local images (php-fpm)
 - `make bootstrap` — create `/opt/aegiscore/docker/*` with correct ownership
 - `make php-shell` — open a shell in the `php-fpm` container
+- `make redis-cli` — open an authenticated `redis-cli` session

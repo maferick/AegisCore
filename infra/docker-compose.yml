@@ -132,8 +132,33 @@ services:
       start_period: 60s
     networks: [aegiscore]
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    command:
+      - "sh"
+      - "-c"
+      - 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --appendfsync everysec --maxmemory ${REDIS_MAXMEMORY:-512mb} --maxmemory-policy allkeys-lru'
+    volumes:
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/redis/data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [aegiscore]
+
   php-fpm:
-    image: php:8.4-fpm-alpine
+    image: aegiscore/php-fpm:0.1.0
+    build:
+      context: ./php
+      dockerfile: Dockerfile
     container_name: php-fpm
     restart: unless-stopped
     environment:
@@ -143,6 +168,9 @@ services:
       MARIADB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
       MARIADB_USER: "${MARIADB_USER:-aegiscore}"
       MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
       OPENSEARCH_HOST: "https://opensearch:9200"
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
@@ -161,9 +189,11 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     depends_on:
       mariadb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks: [aegiscore]
 

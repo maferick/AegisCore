@@ -8,12 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `php-fpm` (php:8.4-fpm-alpine) container for the PHP control plane.
+- `php-fpm` container for the PHP control plane, now built locally from
+  `infra/php/Dockerfile` (tag `aegiscore/php-fpm:0.1.0`) with the PHP extensions
+  Laravel 12 + Horizon + Filament need (`pdo_mysql`, `redis`, `intl`, `bcmath`,
+  `gd`, `mbstring`, `opcache`, `pcntl`, `sockets`, `zip`) + Composer 2.
+- `redis:7-alpine` container for Laravel cache / sessions / queues / Horizon.
+  Password-protected, AOF persistence, `allkeys-lru` at 512mb default, bound
+  to `127.0.0.1:6379` only.
 - Nginx now serves `app/public/` and proxies `*.php` to `php-fpm:9000`.
-- Stub `app/public/index.php` front controller returning the `{data, meta}` envelope.
+- Stub `app/public/index.php` front controller returning the `{data, meta}`
+  envelope.
 - `php/conf.d/aegiscore.ini` with sane PHP defaults + OPcache.
-- `AEGISCORE_ENV` variable surfaced to PHP.
-- `make php-shell` target.
+- Redis + backend-service env vars surfaced to PHP (`REDIS_HOST`, `REDIS_PORT`,
+  `REDIS_PASSWORD`, plus `MARIADB_*`, `OPENSEARCH_*`, `INFLUXDB_*`, `NEO4J_*`).
+- `make build`, `make php-shell`, `make redis-cli` targets.
+
+### Changed
+- Architecture + AGENTS.md codify the **Laravel ↔ Python plane boundary** as
+  policy (not best-effort): Laravel queues are control-plane only, <2s / <100
+  rows; cross-plane triggers go through the outbox pattern.
+- `docs/CONTRACTS.md` adds the **outbox contract** — schema, consumer
+  semantics, event naming, transport plan.
 
 ## [0.1.0] — 2026-04-13
 
