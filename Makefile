@@ -120,7 +120,7 @@ laravel-install:
 	@echo ""
 	@echo "If this is a fresh install, run:"
 	@echo "  make laravel-key       # generates APP_KEY; copy it into .env"
-	@echo "  make laravel-migrate   # creates tables, including outbox_events"
+	@echo "  make laravel-migrate   # creates tables, including outbox"
 	@echo "  make horizon-install   # publishes Horizon config + assets"
 
 laravel-key:
