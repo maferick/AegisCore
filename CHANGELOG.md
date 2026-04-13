@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **SDE widget — wrong status + ETag overflowing the card.** Two issues
+  in `App\Filament\Widgets\SdeVersionStatusWidget`:
+  - The state `match` fell through to `Up to date` whenever
+    `is_bump_available` was false, which is true any time
+    `pinned_version` is null (the drift job won't flag drift without
+    both sides present). Result: a freshly deployed system rendered
+    green "Up to date" despite having loaded zero bytes of SDE. Adds two
+    new pre-import states with higher precedence than the drift
+    branches: `No SDE loaded · upstream unreachable` (red, both signals
+    broken) and `No SDE loaded` (gray, calm but unambiguous). "Up to
+    date" now only fires when pinned is set AND equals upstream.
+  - CCP's ETag is a 32+ char hex string (e.g.
+    `5743b7cb89928645788c46defd7c6535-10`); rendering it raw — even
+    truncated to 32 chars — overflowed the stat card. Headlines now
+    show a 12-char `git log --oneline`-style prefix; the full value
+    moves into the Stat description so ops can still copy it without
+    leaving the dashboard. Untruncated history still lives at
+    `/admin/sde-status`.
+
 ### Added
 - **EVE SSO login + admin gate** — OAuth2 PKCE against
   `login.eveonline.com/v2/oauth/*`. New routes `GET /auth/eve` (redirect)
