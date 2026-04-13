@@ -8,19 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **`/horizon` 403 on prod deployments.** Horizon's upstream default gate is
-  `app()->environment('local')`, which blocks every hit on a host running
-  `APP_ENV=production` — including the "Horizon →" button on the landing
-  page. Published an `App\Providers\HorizonServiceProvider` that defines a
-  phase-1-appropriate `viewHorizon` gate with two env knobs:
-  - `HORIZON_UNPROTECTED=true` — explicit escape hatch for hosts already
-    fronted by VPN / IP allowlist / basic-auth.
-  - `HORIZON_ALLOWED_EMAILS="a@b.com,c@d.com"` — CSV of authenticated user
-    emails allowed through once auth lands (EVE SSO).
-  Fails closed by default. Once `UsersCharacters` has real RBAC, the gate
-  tightens to a role check and both knobs go away.
+- **Blade `tempnam()` 500 on fresh clones.** The php-fpm image now ships a
+  self-healing entrypoint (`infra/php/docker-entrypoint.sh`, wired as
+  `aegiscore-entrypoint`) that `chown`s `storage/` + `bootstrap/cache/` to
+  `www-data` (UID 82) before handing off to php-fpm. Root cause: the host
+  bind-mount carries host ownership (typically `root` from `git clone`) into
+  the container, so www-data couldn't write Blade's compiled views and any
+  request that rendered a view 500'd. Image tag bumped to
+  `aegiscore/php-fpm:0.1.1` per the Dockerfile's "bump whenever this file
+  changes" rule.
 
 ### Added
+- `make laravel-fix-perms` — operator-facing belt fix that chowns
+  `$(AEGISCORE_ROOT)/app/storage` + `bootstrap/cache` to UID 82 without
+  restarting the container. Complements the container-side braces fix in
+  `aegiscore-entrypoint`.
+
 - **Landing page** at `/` (`app/resources/views/landing.blade.php`)
   replacing the stock Laravel welcome. Dark ops-aesthetic, mirrors the
   four-pillar domain layout, with an env badge and CTAs for Horizon
