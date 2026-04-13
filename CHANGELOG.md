@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anchor so env + volumes can't drift between services by accident.
 
 ### Fixed
+- **Queued jobs never ran** — `/horizon` showed `Status: Inactive,
+  Total Processes: 0`. Root cause: there was no Horizon worker
+  container. The `scheduler` service dispatches `ShouldQueue` jobs (e.g.
+  `CheckSdeVersion`) onto Redis, but nothing consumed them. Any row in
+  `sde_version_checks` only appeared because `make sde-check` uses
+  `--sync` (`Bus::dispatchSync`) and bypasses the queue. New `horizon`
+  compose service merges the `&php-common` YAML anchor and runs
+  `php artisan horizon` — the actual worker. Healthcheck pings
+  `horizon:status`. Misleading comment on the `scheduler` service
+  ("work runs on php-fpm's queue workers") corrected — php-fpm is
+  FastCGI, never a worker.
+
 - **`/admin/sde-status` rendered unstyled** — the widget summary text
   ran together and the history "table" was concatenated plaintext. Root
   cause: the hand-rolled Blade used Tailwind utility classes

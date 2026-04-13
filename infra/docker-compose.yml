@@ -246,7 +246,9 @@ services:
     # Laravel task scheduler. `schedule:work` is a long-running process that
     # internally runs `schedule:run` once a minute — no host cron required.
     # Scheduled tasks (e.g. `reference:check-sde-version` in routes/console.php)
-    # dispatch Horizon jobs; the actual work runs on php-fpm's queue workers.
+    # dispatch `ShouldQueue` jobs onto Redis; the `horizon` service below
+    # actually consumes and runs them. The scheduler itself is a clock, not
+    # a worker.
     <<: *php-common
     container_name: scheduler
     # Inherits php-fpm's entrypoint (which chowns storage/ + bootstrap/cache
@@ -255,6 +257,30 @@ services:
     command: ["php", "artisan", "schedule:work"]
     healthcheck:
       disable: true
+
+  horizon:
+    # Laravel Horizon queue supervisor — the actual worker. Manages the
+    # processes that consume `ShouldQueue` jobs from Redis (e.g.
+    # `CheckSdeVersion` dispatched by the scheduler). Without this
+    # container, dispatched jobs accumulate in Redis forever and
+    # /horizon renders `Status: Inactive / Total Processes: 0`.
+    #
+    # Worker topology (queues, process counts, balancing strategy) lives
+    # in `config/horizon.php`; vendor defaults apply if not published.
+    # After code changes, `make restart` recycles this container so
+    # workers pick up fresh class definitions — Horizon gracefully
+    # drains in-flight jobs on SIGTERM before exit.
+    <<: *php-common
+    container_name: horizon
+    command: ["php", "artisan", "horizon"]
+    # horizon:status exits 0 when the supervisor is running (or paused)
+    # and non-zero when inactive — good enough as a liveness probe.
+    healthcheck:
+      test: ["CMD-SHELL", "php artisan horizon:status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   nginx:
     image: nginx:1.27-alpine
