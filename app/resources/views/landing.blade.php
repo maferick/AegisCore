@@ -202,7 +202,7 @@
             <h1>Alliance intel.<br><span class="accent">For New Eden.</span></h1>
             <p class="tagline">
                 Spy detection, buyall doctrines, killmail analysis, and battle theaters —
-                unified across MariaDB, OpenSearch, Neo4j, and InfluxDB.
+                forged from New Eden lore, coalition war stories, and /r/Eve AARs, meta, and salt.
             </p>
 
             <div class="pillars">
