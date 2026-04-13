@@ -282,6 +282,54 @@ services:
       retries: 3
       start_period: 30s
 
+  # sde_importer — one-shot Python job that downloads CCP's EVE SDE JSONL zip,
+  # truncates + reloads the ref_* MariaDB tables inside a single transaction,
+  # and emits a `reference.sde_snapshot_loaded` outbox event for Laravel to
+  # relay. Kept in a `tools` compose profile so `docker compose up` doesn't
+  # launch it — it runs on demand via `make sde-import` (docker compose run
+  # --rm --profile tools sde_importer).
+  #
+  # Why Python and not a Laravel job: the SDE import is ~664k rows across
+  # 56 files in a single transaction (ADR-0001 §4). That breaks the plane
+  # boundary policy for Laravel queue jobs (<2s / <100 rows). Python +
+  # pymysql gives us one connection, one BEGIN/COMMIT, and streaming JSONL
+  # parsing without pulling the whole SDE into memory.
+  sde_importer:
+    build:
+      context: ../python
+      dockerfile: Dockerfile
+    image: aegiscore/sde-importer:0.1.0
+    container_name: sde_importer
+    profiles: [tools]
+    # Host UID 1000 so the file written to infra/sde/version.txt is
+    # readable+writable from the host without a chown dance.
+    user: "1000:1000"
+    environment:
+      # MariaDB (reuses the php-fpm convention so operators only remember
+      # one set of env names).
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      # SDE source + pinning. Override SDE_SOURCE_URL to point at a
+      # cached mirror during air-gapped imports.
+      SDE_SOURCE_URL: "${SDE_SOURCE_URL:-https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip}"
+      SDE_VERSION_FILE: /var/www/sde/version.txt
+      SDE_WORK_DIR: /tmp/sde
+      SDE_DOWNLOAD_TIMEOUT: "${SDE_DOWNLOAD_TIMEOUT:-600}"
+      SDE_BATCH_SIZE: "${SDE_BATCH_SIZE:-2000}"
+    volumes:
+      # Writable — the importer pins the new version here on success.
+      # Note: php-fpm mounts the same path :ro so the drift check can
+      # read it without risking a write collision.
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/infra/sde:/var/www/sde:rw
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx
