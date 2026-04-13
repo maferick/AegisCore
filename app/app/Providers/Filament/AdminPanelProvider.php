@@ -7,6 +7,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\MenuItem;
 use Filament\Navigation\NavigationItem;
 use Filament\Pages;
 use Filament\Panel;
@@ -83,6 +84,29 @@ class AdminPanelProvider extends PanelProvider
                     ->group('Monitoring')
                     ->sort(100),
             ])
+            // User-menu (top-right dropdown) entry point for re-running the
+            // EVE SSO flow from inside admin. The callback upserts on
+            // character_id and `Auth::login()`s into whichever user that
+            // character is linked to (or creates a new user for an
+            // unfamiliar character) — so this is effectively "switch
+            // identity via EVE", not "attach an alt to my current user".
+            // True alt-linking that mutates the current session's user_id
+            // belongs in a phase-2 PR alongside the alts UI; this menu
+            // entry just exposes the same one button the login page
+            // already has.
+            //
+            // Hidden when SSO isn't configured (same predicate as the
+            // login-form button) so it doesn't dead-end clicks.
+            ->userMenuItems(
+                EveSsoClient::isConfigured()
+                    ? [
+                        MenuItem::make()
+                            ->label('Log in with EVE Online')
+                            ->url(fn (): string => route('auth.eve.redirect'))
+                            ->icon('heroicon-o-rocket-launch'),
+                    ]
+                    : [],
+            )
             // "Log in with EVE" button rendered under the default Filament
             // login form — only when the three required EVE_SSO_* env vars
             // are populated. Without that gate, clicking the button just
