@@ -115,10 +115,21 @@ composer:
 artisan:
 	$(COMPOSE) exec php-fpm php artisan $(CMD)
 
-# One-time (or after composer.json changes): install vendor/ + seed APP_KEY.
+# One-time (or after composer.json changes): install vendor/ + publish the
+# Filament/Livewire asset bundle so /admin has CSS + JS on first hit.
+#
+# composer's `post-autoload-dump` hook already runs `filament:upgrade` (which
+# publishes assets), but we repeat it here explicitly so that:
+#   (a) a manual `make laravel-install` after a Filament-version bump is
+#       self-sufficient even if composer didn't re-autoload, and
+#   (b) operators get one target that does "make this deploy's PHP side sane"
+#       end-to-end.
+#
 # Prefer --no-dev in prod deployments; dev stacks get the full tree.
 laravel-install:
 	$(COMPOSE) exec php-fpm composer install --optimize-autoloader
+	$(COMPOSE) exec php-fpm php artisan filament:assets
+	$(COMPOSE) exec php-fpm php artisan storage:link
 	@echo ""
 	@echo "If this is a fresh install, run:"
 	@echo "  make laravel-key       # generates APP_KEY; copy it into .env"
