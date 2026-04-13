@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Landing page drops the Horizon CTA.** Horizon already lives in the
+  Filament admin sidebar under "Monitoring" (PR #17), so the public
+  landing button was a second entry point to the same gated surface. One
+  path to Horizon (via `/admin`) is enough; the landing page stays
+  focused on the four pillars and the Admin CTA.
+
 ### Added
 - **ADR series** started under `docs/adr/`. First entry,
   [ADR-0001](docs/adr/0001-static-reference-data.md), locks the store
