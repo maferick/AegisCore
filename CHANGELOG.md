@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- php-fpm service now declares `pull_policy: build` so Portainer and
+  `docker compose pull` don't fail with `pull access denied for
+  aegiscore/php-fpm`. `make pull` uses `--ignore-buildable` to skip locally
+  built images.
+
 ### Added
 - `php-fpm` container for the PHP control plane, now built locally from
   `infra/php/Dockerfile` (tag `aegiscore/php-fpm:0.1.0`) with the PHP extensions
