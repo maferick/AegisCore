@@ -1,0 +1,17 @@
+.env
+.env.local
+.DS_Store
+*.swp
+*.log
+logs/
+__pycache__/
+*.pyc
+.venv/
+venv/
+vendor/
+.vscode/
+.idea/
+
+# never commit container state or TLS material
+docker/
+nginx/certs/
