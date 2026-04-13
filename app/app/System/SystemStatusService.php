@@ -59,7 +59,15 @@ class SystemStatusService
     public function fresh(): array
     {
         $statuses = $this->probeAll();
-        $this->cacheStore()->put(self::CACHE_KEY, $statuses, self::CACHE_TTL_SECONDS);
+
+        // A flaky cache backend shouldn't 500 the admin page — we can
+        // always recompute on the next poll. Swallow write failures
+        // here; the snapshot is still returned to the caller.
+        try {
+            $this->cacheStore()->put(self::CACHE_KEY, $statuses, self::CACHE_TTL_SECONDS);
+        } catch (Throwable $e) {
+            // Intentionally ignored — see comment above.
+        }
 
         return $statuses;
     }
@@ -71,13 +79,41 @@ class SystemStatusService
      */
     public function snapshot(): array
     {
-        /** @var array<int, SystemStatus>|null $cached */
-        $cached = $this->cacheStore()->get(self::CACHE_KEY);
-        if (is_array($cached) && $cached !== []) {
+        // Cache read is the hot path — but if the cache backend itself
+        // is flaky (Redis under pressure, deserialization error on a
+        // stale payload after a deploy), we must never let that 500 the
+        // page. Fall back to a live probe on any failure.
+        try {
+            /** @var mixed $cached */
+            $cached = $this->cacheStore()->get(self::CACHE_KEY);
+        } catch (Throwable $e) {
+            $cached = null;
+        }
+
+        if (is_array($cached) && $cached !== [] && $this->isValidSnapshot($cached)) {
             return $cached;
         }
 
         return $this->fresh();
+    }
+
+    /**
+     * Guard against a cached payload that deserialized into something
+     * unexpected — e.g. an older schema after a deploy, or partial data
+     * from a cache-write that raced a TTL. Safer to re-probe than to
+     * hand the widget garbage.
+     *
+     * @param  array<mixed>  $cached
+     */
+    private function isValidSnapshot(array $cached): bool
+    {
+        foreach ($cached as $entry) {
+            if (! $entry instanceof SystemStatus) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -310,52 +346,185 @@ class SystemStatusService
     }
 
     /**
-     * Neo4j — derived graph store. We only verify Bolt port reachability
-     * rather than running a Cypher query: password may not be set in
-     * every environment, and a TCP connect is enough to know if the
-     * light is on. Deeper checks belong in Python, which actually
-     * writes to the graph.
+     * Neo4j — derived graph store. Two-stage probe:
+     *
+     *   1. TCP reach on the Bolt port (1s timeout). Bounds the total
+     *      probe time so a dead host can't drag the whole widget past
+     *      its cache TTL. A failed TCP check also dodges the longer
+     *      default timeouts the Bolt driver would otherwise inherit.
+     *   2. If TCP is up AND credentials are configured, run
+     *      `RETURN 1 AS ok` via {@link https://github.com/neo4j-php/neo4j-php-client}
+     *      (already in composer.json). This catches the "Bolt port
+     *      answers but the query planner is hung / auth is wrong"
+     *      degraded case the old TCP-only check silently marked green.
+     *
+     * Three-state output:
+     *   TCP fails                    → DOWN       (red)
+     *   TCP ok, Cypher throws        → DEGRADED   (orange)
+     *   TCP ok, RETURN 1 === 1       → OK         (green)
+     *   TCP ok, no credentials       → OK with a note that only TCP
+     *                                   was checked (phase-1 default
+     *                                   .env ships with NEO4J_PASSWORD
+     *                                   blank).
+     *
+     * Still read-only — AGENTS.md "Laravel does not write to Neo4j"
+     * is about domain projection, not health probes; this is the same
+     * pattern we use for MariaDB (`SELECT 1`).
      */
     private function probeNeo4j(): SystemStatus
     {
-        $host = (string) config('aegiscore.neo4j.host');
-        if ($host === '') {
-            return new SystemStatus(
-                name: 'Neo4j',
-                level: SystemStatusLevel::UNKNOWN,
-                detail: 'Host not configured',
-            );
-        }
+        try {
+            $host = (string) config('aegiscore.neo4j.host');
+            if ($host === '') {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::UNKNOWN,
+                    detail: 'Host not configured',
+                );
+            }
 
-        $parsed = parse_url($host);
-        $hostname = $parsed['host'] ?? null;
-        $port = $parsed['port'] ?? 7687;
-        if (! is_string($hostname) || $hostname === '') {
-            return new SystemStatus(
-                name: 'Neo4j',
-                level: SystemStatusLevel::UNKNOWN,
-                detail: 'Invalid host: '.$host,
-            );
-        }
+            // parse_url returns false for malformed URLs — guard so we
+            // don't hit "Cannot access offset of type string on bool".
+            $parsed = parse_url($host);
+            if (! is_array($parsed)) {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::UNKNOWN,
+                    detail: 'Invalid host: '.$host,
+                );
+            }
 
-        $errno = 0;
-        $errstr = '';
-        $socket = @fsockopen($hostname, (int) $port, $errno, $errstr, self::PROBE_TIMEOUT_SECONDS);
-        if ($socket === false) {
+            $hostname = $parsed['host'] ?? null;
+            $port = $parsed['port'] ?? 7687;
+            if (! is_string($hostname) || $hostname === '') {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::UNKNOWN,
+                    detail: 'Invalid host: '.$host,
+                );
+            }
+
+            // Stage 1 — bounded TCP reachability.
+            $tcpError = $this->tcpReach($hostname, (int) $port);
+            if ($tcpError !== null) {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::DOWN,
+                    detail: $this->trimMessage($tcpError),
+                );
+            }
+
+            // Stage 2 — Cypher ping (skipped when we don't have
+            // credentials; fall back to the TCP-only signal and flag
+            // it in the detail line so ops knows it's shallow).
+            $user = (string) config('aegiscore.neo4j.user');
+            $password = (string) config('aegiscore.neo4j.password');
+            if ($user === '' || $password === '') {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::OK,
+                    detail: 'Bolt '.$hostname.':'.$port.' (unauthenticated check)',
+                );
+            }
+
+            if (! class_exists('Laudis\\Neo4j\\ClientBuilder')) {
+                // Shouldn't happen — laudis/neo4j-php-client is in
+                // composer.json — but better to degrade than to fatal
+                // on a missing class.
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::OK,
+                    detail: 'Bolt '.$hostname.':'.$port.' (client missing)',
+                );
+            }
+
+            return $this->cypherPing($host, $hostname, (int) $port, $user, $password);
+        } catch (Throwable $e) {
             return new SystemStatus(
                 name: 'Neo4j',
                 level: SystemStatusLevel::DOWN,
-                detail: $errstr !== '' ? $this->trimMessage($errstr) : 'Connection refused',
+                detail: $this->trimMessage($e->getMessage()),
             );
+        }
+    }
+
+    /**
+     * Bounded TCP reach check. Returns null on success, a short error
+     * message on failure. Installs a scoped error handler so strict
+     * reporters (laravel/pail etc.) can't promote the fsockopen warning
+     * to an unhandled exception.
+     */
+    private function tcpReach(string $hostname, int $port): ?string
+    {
+        $suppressed = null;
+        set_error_handler(static function (int $_, string $message) use (&$suppressed): bool {
+            $suppressed = $message;
+
+            return true;
+        });
+
+        try {
+            $errno = 0;
+            $errstr = '';
+            $socket = fsockopen($hostname, $port, $errno, $errstr, self::PROBE_TIMEOUT_SECONDS);
+        } finally {
+            restore_error_handler();
+        }
+
+        if ($socket === false) {
+            return $errstr !== '' ? $errstr : ($suppressed ?? 'Connection refused');
         }
 
         fclose($socket);
 
-        return new SystemStatus(
-            name: 'Neo4j',
-            level: SystemStatusLevel::OK,
-            detail: 'Bolt '.$hostname.':'.$port,
-        );
+        return null;
+    }
+
+    /**
+     * Run `RETURN 1 AS ok` via the laudis Neo4j client. Any throwable
+     * (auth failure, Bolt handshake error, query timeout) downgrades to
+     * DEGRADED — the port is reachable, so something's half-alive
+     * rather than completely dead.
+     *
+     * `$host` is the full connection URL (e.g. `bolt://neo4j:7687`) the
+     * driver needs; `$hostname` / `$port` are just for the human-readable
+     * detail line.
+     */
+    private function cypherPing(string $host, string $hostname, int $port, string $user, string $password): SystemStatus
+    {
+        try {
+            $client = \Laudis\Neo4j\ClientBuilder::create()
+                ->withDriver('health', $host, \Laudis\Neo4j\Authentication\Authenticate::basic($user, $password))
+                ->withDefaultDriver('health')
+                ->build();
+
+            $started = microtime(true);
+            $result = $client->run('RETURN 1 AS ok');
+            $elapsedMs = (int) ((microtime(true) - $started) * 1000);
+
+            $row = $result->first();
+            $ok = $row->get('ok');
+
+            if ((int) $ok !== 1) {
+                return new SystemStatus(
+                    name: 'Neo4j',
+                    level: SystemStatusLevel::DEGRADED,
+                    detail: 'Unexpected RETURN 1 reply: '.(is_scalar($ok) ? (string) $ok : gettype($ok)),
+                );
+            }
+
+            return new SystemStatus(
+                name: 'Neo4j',
+                level: SystemStatusLevel::OK,
+                detail: 'Cypher '.$hostname.':'.$port.' ('.$elapsedMs.' ms)',
+            );
+        } catch (Throwable $e) {
+            return new SystemStatus(
+                name: 'Neo4j',
+                level: SystemStatusLevel::DEGRADED,
+                detail: 'Bolt reachable, query failed: '.$this->trimMessage($e->getMessage()),
+            );
+        }
     }
 
     /**
