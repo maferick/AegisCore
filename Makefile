@@ -4,7 +4,7 @@ COMPOSE := docker compose -f infra/docker-compose.yml --env-file .env
 -include .env
 export
 
-.PHONY: help up down restart ps logs pull update bootstrap clean-logs
+.PHONY: help up down restart ps logs pull update bootstrap clean-logs laravel-fix-perms
 
 help:
 	@echo "AegisCore Makefile"
@@ -27,6 +27,7 @@ help:
 	@echo "    make laravel-key       generate a fresh APP_KEY (copy into .env)"
 	@echo "    make laravel-migrate   run all pending migrations"
 	@echo "    make horizon-install   one-time Horizon config + assets publish"
+	@echo "    make laravel-fix-perms chown storage/ + bootstrap/cache/ to www-data (UID 82)"
 	@echo "    make artisan  CMD=\"…\"  run any artisan command"
 	@echo "    make composer CMD=\"…\"  run any composer command"
 	@echo "    make test              run phpunit via artisan test"
@@ -131,6 +132,18 @@ laravel-migrate:
 
 horizon-install:
 	$(COMPOSE) exec php-fpm php artisan horizon:install
+
+# Operator-facing belt fix for Blade's `tempnam()` 500 error.
+#
+# The container-side braces fix is the `aegiscore-entrypoint` in infra/php/
+# that chowns these dirs on every php-fpm start. This target is for the
+# case where an operator wants to fix an already-running container without
+# restarting it (or wants to fix a host checkout before first `make up`).
+#
+# UID 82 is www-data inside the upstream php:8.4-fpm-alpine image.
+laravel-fix-perms:
+	sudo chown -R 82:82 $(AEGISCORE_ROOT)/app/storage $(AEGISCORE_ROOT)/app/bootstrap/cache
+	@echo "storage/ + bootstrap/cache/ now owned by www-data (UID 82)"
 
 horizon-publish:
 	$(COMPOSE) exec php-fpm php artisan vendor:publish --tag=horizon-config --force

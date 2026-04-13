@@ -51,4 +51,14 @@ RUN set -eux; \
 # Composer for Laravel / Filament install.
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
+# Self-healing entrypoint: ensures storage/ + bootstrap/cache/ are
+# writable by www-data before php-fpm starts. Needed because the
+# host bind-mount brings host ownership (usually root from `git clone`)
+# into the container, and Blade can't write compiled views otherwise.
+COPY docker-entrypoint.sh /usr/local/bin/aegiscore-entrypoint
+RUN chmod +x /usr/local/bin/aegiscore-entrypoint
+
+ENTRYPOINT ["aegiscore-entrypoint"]
+CMD ["php-fpm"]
+
 WORKDIR /var/www/html
