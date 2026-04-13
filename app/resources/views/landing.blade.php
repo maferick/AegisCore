@@ -22,8 +22,14 @@
             --border-hot: #3a3a42;
             --text: #e5e5e7;
             --muted: #7a7a82;
-            --accent: #ff6b35;
-            --accent-dim: #cc5528;
+            /* EVE HUD palette.
+             * --accent: cyan — primary UI accent (friendlies, selection, "go").
+             * --gold:   amber — "your alliance / your ship / status".
+             * --danger: red  — hostile signal / alert. Reserved, unused here. */
+            --accent: #4fd0d0;
+            --accent-dim: #3aa8a8;
+            --gold: #e5a900;
+            --danger: #ff3838;
         }
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,8 +39,8 @@
             font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
                   'Helvetica Neue', Arial, sans-serif;
             background:
-                radial-gradient(ellipse at 15% -10%, rgba(255, 107, 53, 0.10) 0%, transparent 45%),
-                radial-gradient(ellipse at 85% 110%, rgba(255, 107, 53, 0.06) 0%, transparent 45%),
+                radial-gradient(ellipse at 15% -10%, rgba(79, 208, 208, 0.10) 0%, transparent 45%),
+                radial-gradient(ellipse at 85% 110%, rgba(229, 169, 0, 0.05) 0%, transparent 45%),
                 var(--bg);
             color: var(--text);
             min-height: 100vh;
@@ -67,11 +73,11 @@
         .env-badge {
             font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
             font-size: 0.7rem;
-            color: var(--muted);
+            color: var(--gold);
             text-transform: uppercase;
             letter-spacing: 0.1em;
             padding: 0.3rem 0.55rem;
-            border: 1px solid var(--border);
+            border: 1px solid rgba(229, 169, 0, 0.35);
             border-radius: 3px;
         }
 
