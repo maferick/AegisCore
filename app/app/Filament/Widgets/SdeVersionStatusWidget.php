@@ -52,7 +52,26 @@ class SdeVersionStatusWidget extends StatsOverviewWidget
             ];
         }
 
+        // State precedence, most specific first:
+        //
+        //   1. pinned=null + HEAD failed → nothing loaded AND can't reach CCP.
+        //   2. pinned=null               → nothing loaded yet (pre-import).
+        //      "Up to date" would lie here — we're not up to date with
+        //      *anything*, because there's no local snapshot.
+        //   3. HEAD failed (with pinned set) → drift check stalled.
+        //   4. is_bump_available         → pinned != upstream, import pending.
+        //   5. default                   → pinned == upstream, all good.
         [$statusLabel, $color, $icon] = match (true) {
+            $latest->pinned_version === null && $latest->notes !== null => [
+                'No SDE loaded · upstream unreachable',
+                'danger',
+                'heroicon-m-exclamation-triangle',
+            ],
+            $latest->pinned_version === null => [
+                'No SDE loaded',
+                'gray',
+                'heroicon-m-inbox',
+            ],
             $latest->notes !== null && ! $latest->is_bump_available => [
                 'Check stalled',
                 'danger',
@@ -76,11 +95,48 @@ class SdeVersionStatusWidget extends StatsOverviewWidget
                 ->descriptionIcon($icon)
                 ->color($color),
 
-            Stat::make('Pinned', $latest->pinned_version ?? '—')
-                ->description('infra/sde/version.txt'),
+            // ETags are 32+ chars of hex — they overflow the stat card and
+            // wrap ugly when shown raw. Show a 12-char prefix (git short-SHA
+            // territory) and surface the full value in the description so
+            // ops can copy it without leaving the dashboard. Full history
+            // with un-truncated values lives at /admin/sde-status.
+            Stat::make('Pinned', $this->shortVersion($latest->pinned_version))
+                ->description($latest->pinned_version ?? 'infra/sde/version.txt'),
 
-            Stat::make('Upstream', Str::limit($latest->upstream_version ?? '—', 32))
-                ->description($latest->http_status ? 'HTTP '.$latest->http_status : null),
+            Stat::make('Upstream', $this->shortVersion($latest->upstream_version))
+                ->description($this->upstreamDescription($latest->upstream_version, $latest->http_status)),
         ];
+    }
+
+    /**
+     * Render an ETag-shaped value in ~12 chars + ellipsis.
+     *
+     * Mirrors `git log --oneline` short-SHA semantics: the full value lives
+     * elsewhere (here: the Stat description), so the headline only needs to
+     * be enough to eyeball-compare two adjacent values.
+     */
+    private function shortVersion(?string $value): string
+    {
+        if ($value === null || $value === '') {
+            return '—';
+        }
+
+        return Str::limit($value, 12);
+    }
+
+    /**
+     * Pair the full upstream value (so ops can copy it) with the HTTP status
+     * (so a half-broken HEAD still surfaces a clue). Falls back to one or
+     * the other when only half the row populated.
+     */
+    private function upstreamDescription(?string $value, ?int $status): ?string
+    {
+        $statusLabel = $status !== null ? 'HTTP '.$status : null;
+
+        if ($value === null || $value === '') {
+            return $statusLabel;
+        }
+
+        return $statusLabel === null ? $value : $value.' · '.$statusLabel;
     }
 }
