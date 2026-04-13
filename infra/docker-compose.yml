@@ -171,14 +171,44 @@ services:
     restart: unless-stopped
     environment:
       # Exposed to PHP via getenv() / $_ENV; keep this list intentional.
+      # ---------------------------------------------------------------
+      # Laravel core
+      # ---------------------------------------------------------------
+      APP_NAME: AegisCore
+      APP_ENV: "${AEGISCORE_ENV:-production}"
+      APP_KEY: "${APP_KEY}"
+      APP_DEBUG: "false"
+      APP_URL: "${APP_URL:-http://localhost}"
+      LOG_CHANNEL: stderr
+      LOG_LEVEL: info
+
+      # Mirror for non-Laravel code (config/aegiscore.php).
       AEGISCORE_ENV: "${AEGISCORE_ENV:-dev}"
-      MARIADB_HOST: mariadb
-      MARIADB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
-      MARIADB_USER: "${MARIADB_USER:-aegiscore}"
-      MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      # ---------------------------------------------------------------
+      # MariaDB (Laravel DB_* convention, sourced from infra MARIADB_*)
+      # ---------------------------------------------------------------
+      DB_CONNECTION: mariadb
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      # ---------------------------------------------------------------
+      # Redis (Laravel cache / sessions / queues / Horizon)
+      # ---------------------------------------------------------------
+      REDIS_CLIENT: phpredis
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      CACHE_STORE: redis
+      SESSION_DRIVER: redis
+      QUEUE_CONNECTION: redis
+
+      # ---------------------------------------------------------------
+      # Derived stores (our conventions, read via config/aegiscore.php)
+      # ---------------------------------------------------------------
       # Security plugin disabled on the opensearch service — no auth, HTTP only.
       OPENSEARCH_HOST: "http://opensearch:9200"
       INFLUXDB_HOST: "http://influxdb2:8086"

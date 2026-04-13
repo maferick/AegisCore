@@ -1,0 +1,77 @@
+{
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "aegiscore/aegiscore",
+    "type": "project",
+    "description": "AegisCore — alliance intelligence platform, PHP control plane.",
+    "keywords": ["aegiscore", "laravel"],
+    "license": "proprietary",
+    "require": {
+        "php": "^8.3",
+        "filament/filament": "^5.0",
+        "influxdata/influxdb-client-php": "^3.8",
+        "laravel/framework": "^13.0",
+        "laravel/horizon": "^5.39",
+        "laravel/sanctum": "^4.0",
+        "laravel/tinker": "^3.0",
+        "laudis/neo4j-php-client": "^3.3",
+        "livewire/livewire": "^4.1",
+        "opensearch-project/opensearch-php": "^2.4",
+        "spatie/laravel-data": "^4.20",
+        "spatie/laravel-permission": "^6.21"
+    },
+    "require-dev": {
+        "fakerphp/faker": "^1.23",
+        "laravel/pail": "^1.2.5",
+        "laravel/pint": "^1.27",
+        "mockery/mockery": "^1.6",
+        "nunomaduro/collision": "^8.6",
+        "phpunit/phpunit": "^12.5.12"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "app/",
+            "Database\\Factories\\": "database/factories/",
+            "Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": [
+            "@php artisan config:clear --ansi",
+            "@php artisan test"
+        ],
+        "post-autoload-dump": [
+            "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
+            "@php artisan package:discover --ansi"
+        ],
+        "post-update-cmd": [
+            "@php artisan vendor:publish --tag=laravel-assets --ansi --force"
+        ],
+        "post-root-package-install": [
+            "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
+        ],
+        "pre-package-uninstall": [
+            "Illuminate\\Foundation\\ComposerScripts::prePackageUninstall"
+        ]
+    },
+    "extra": {
+        "laravel": {
+            "dont-discover": []
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "preferred-install": "dist",
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "php-http/discovery": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

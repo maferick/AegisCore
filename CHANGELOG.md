@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Laravel 13 control-plane skeleton** under `app/`:
+  - `laravel/framework ^13.0` + `laravel/horizon ^5.39` (queues/monitoring)
+    + `laravel/sanctum ^4.0` (API auth) + `laravel/tinker`.
+  - `filament/filament ^5.0` (admin panels) + `livewire/livewire ^4.1`
+    (Livewire v4 required by Filament 5).
+  - `spatie/laravel-data ^4.20` (typed DTOs) + `spatie/laravel-permission
+    ^6.21` (RBAC).
+  - Backend-store PHP clients:
+    `opensearch-project/opensearch-php ^2.4`,
+    `influxdata/influxdb-client-php ^3.8`,
+    `laudis/neo4j-php-client ^3.3`.
+- **4-pillar domain layout** under `app/app/Domains/`:
+  `SpyDetection`, `BuyallDoctrines`, `KillmailsBattleTheaters`,
+  `UsersCharacters`. Each pillar has `Actions/ Data/ Events/ Models/
+  Projections/`. Rules documented in `app/app/Domains/README.md` —
+  no cross-pillar Eloquent relations, no direct derived-store writes
+  from Laravel (plane boundary).
+- **Outbox plumbing** for the Laravel → Python plane boundary:
+  - `database/migrations/…_create_outbox_events_table.php`: ULID
+    `event_id`, indexed `(processed_at, id)` for the SKIP-LOCKED
+    consumer loop, and `(aggregate_type, aggregate_id)` for replay.
+  - `app/Outbox/DomainEvent.php`: abstract base, requires
+    `EVENT_TYPE` constant + `aggregateType()` / `aggregateId()` /
+    `payload()`.
+  - `app/Outbox/OutboxEvent.php`: Eloquent model with
+    `unprocessed()` scope.
+  - `app/Outbox/OutboxRecorder.php`: single write path. Refuses to
+    run outside a DB transaction so the outbox row and the
+    control-plane mutation always commit atomically.
+  - Reference event:
+    `app/Domains/KillmailsBattleTheaters/Events/KillmailIngested.php`.
+  - Feature test: `tests/Feature/Outbox/OutboxRecorderTest.php`.
+- `config/aegiscore.php`: single source of truth for derived-store
+  connection details + plane-boundary thresholds
+  (`max_job_duration_seconds = 2`, `max_job_rows = 100`).
+- Makefile targets: `laravel-install`, `laravel-key`,
+  `laravel-migrate`, `horizon-install`, `horizon-publish`,
+  `artisan CMD="…"`, `composer CMD="…"`, `test`, `lint`.
+- php-fpm service now receives Laravel-shaped env:
+  `APP_NAME`, `APP_ENV`, `APP_KEY`, `APP_DEBUG`, `APP_URL`,
+  `LOG_CHANNEL=stderr`, `DB_CONNECTION=mariadb` + `DB_*`,
+  `REDIS_CLIENT=phpredis` + `REDIS_*`, `CACHE_STORE=redis`,
+  `SESSION_DRIVER=redis`, `QUEUE_CONNECTION=redis`.
+- Root `.env.example` declares `APP_KEY` and `APP_URL`. Generate
+  `APP_KEY` once post-install with `make laravel-key` and paste.
+
 ### Changed
 - **OpenSearch security plugin disabled** for phase 1
   (`DISABLE_SECURITY_PLUGIN=true`, `DISABLE_INSTALL_DEMO_CONFIG=true`). The

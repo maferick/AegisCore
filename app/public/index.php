@@ -1,24 +1,20 @@
 <?php
-declare(strict_types=1);
 
-// AegisCore — Phase 1 stub front controller.
-// Replace once the real PHP control plane is wired up. Shape follows the
-// success envelope defined in docs/CONTRACTS.md: { data, meta }.
+use Illuminate\Foundation\Application;
+use Illuminate\Http\Request;
 
-header('Content-Type: application/json');
-header('X-AegisCore-Phase: 1');
+define('LARAVEL_START', microtime(true));
 
-$payload = [
-    'data' => [
-        'name'   => 'AegisCore',
-        'phase'  => 1,
-        'status' => 'bootstrap',
-        'env'    => getenv('AEGISCORE_ENV') ?: 'unknown',
-    ],
-    'meta' => [
-        'timestamp' => gmdate('c'),
-        'php'       => PHP_VERSION,
-    ],
-];
+// Determine if the application is in maintenance mode...
+if (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) {
+    require $maintenance;
+}
 
-echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
+// Register the Composer autoloader...
+require __DIR__.'/../vendor/autoload.php';
+
+// Bootstrap Laravel and handle the request...
+/** @var Application $app */
+$app = require_once __DIR__.'/../bootstrap/app.php';
+
+$app->handleRequest(Request::capture());
