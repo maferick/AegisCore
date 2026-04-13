@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Landing page** at `/` (`app/resources/views/landing.blade.php`)
+  replacing the stock Laravel welcome. Dark ops-aesthetic, mirrors the
+  four-pillar domain layout, with an env badge and CTAs for Horizon
+  + the GitHub repo. Self-contained: no external fonts, CDN, or Vite
+  build step (inline `<style>` + system fonts). When we scaffold the
+  Filament panel, `/` will redirect to it and the landing moves out
+  of the default route.
+
 - **Laravel 13 control-plane skeleton** under `app/`:
   - `laravel/framework ^13.0` + `laravel/horizon ^5.39` (queues/monitoring)
     + `laravel/sanctum ^4.0` (API auth) + `laravel/tinker`.
