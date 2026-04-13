@@ -66,8 +66,13 @@ only lives in a derived store.
   `aegiscore/php-fpm:0.1.0`). Base is `php:8.4-fpm-alpine` + Laravel-required
   extensions (`pdo_mysql`, `redis`, `intl`, `bcmath`, `gd`, `mbstring`,
   `opcache`, `pcntl`, `sockets`, `zip`) + Composer.
+- The php-fpm service sets `pull_policy: build` — compose/Portainer will
+  always build from `infra/php/Dockerfile` and never attempt a registry pull.
+  Without this, Portainer's auto-pull step fails with
+  `pull access denied for aegiscore/php-fpm`.
 - Bump the image tag in `infra/docker-compose.yml` whenever the Dockerfile
-  changes; rebuild with `make build`.
+  changes; rebuild with `make build`. `make pull` uses `--ignore-buildable`
+  so it pulls only the registry-hosted images.
 - App source: `$AEGISCORE_ROOT/app/`, mounted **read-write** into php-fpm and
   **read-only** into nginx. PHP should not write to `app/` at runtime — any
   writable state goes under `docker/php/` (add a volume when needed).
@@ -106,3 +111,8 @@ only lives in a derived store.
 - **`make up` rebuilds php-fpm every time:** shouldn't — compose caches by
   image tag. Bump `aegiscore/php-fpm:<version>` in compose when the
   Dockerfile changes and run `make build` explicitly.
+- **Portainer / `docker compose pull` fails with `pull access denied for
+  aegiscore/php-fpm`:** this is expected — the image is built locally.
+  `pull_policy: build` on the php-fpm service prevents the pull attempt. If
+  you still see this, you're on an older compose; run `make build` manually
+  before `make up` on first deploy.

@@ -159,6 +159,9 @@ services:
     build:
       context: ./php
       dockerfile: Dockerfile
+    # Always build locally; never try to pull from a registry. This image
+    # does not exist on Docker Hub — it's assembled from infra/php/Dockerfile.
+    pull_policy: build
     container_name: php-fpm
     restart: unless-stopped
     environment:

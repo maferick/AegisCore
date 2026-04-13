@@ -41,7 +41,7 @@ logs-%:
 	$(COMPOSE) logs -f --tail=200 $*
 
 pull:
-	$(COMPOSE) pull
+	$(COMPOSE) pull --ignore-buildable
 
 bootstrap:
 	sudo mkdir -p \
