@@ -257,6 +257,22 @@
             border-color: rgba(229, 169, 0, 0.45);
             background: rgba(229, 169, 0, 0.06);
         }
+        /* Guest login entry. Same gold accent as the old .btn-eve
+         * button it replaces — EVE's in-game "your alliance / your
+         * ship" colour — plus a slightly heavier weight + letter
+         * spacing so it reads as the primary call to action from a
+         * cold open, while still visually sitting in the same slot
+         * as the Account link a logged-in user sees. */
+        .nav-link--login {
+            color: var(--gold);
+            border-color: rgba(229, 169, 0, 0.35);
+            background: rgba(229, 169, 0, 0.04);
+        }
+        .nav-link--login:hover {
+            color: var(--gold);
+            border-color: var(--gold);
+            background: rgba(229, 169, 0, 0.09);
+        }
 
         /* ---------- Hero ---------- */
         main {
@@ -357,50 +373,6 @@
             line-height: 1.45;
         }
 
-        /* ---------- Actions ---------- */
-        .actions {
-            display: flex;
-            gap: 0.6rem;
-            flex-wrap: wrap;
-        }
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            padding: 0.65rem 1.25rem;
-            border-radius: 4px;
-            text-decoration: none;
-            font-size: 0.9rem;
-            font-weight: 500;
-            border: 1px solid var(--border);
-            color: var(--text);
-            background: var(--bg-elev);
-            transition: border-color 0.15s, color 0.15s, background 0.15s;
-        }
-        .btn:hover { border-color: var(--accent); color: var(--accent); }
-        .btn-primary {
-            background: var(--accent);
-            color: #0a0a0b;
-            border-color: var(--accent);
-            font-weight: 600;
-        }
-        .btn-primary:hover {
-            background: var(--accent-dim);
-            border-color: var(--accent-dim);
-            color: #0a0a0b;
-        }
-        /* "Log in with EVE" — gold accent, mirrors EVE's in-game "your
-         * alliance / your ship" colour. Distinguishes from the cyan
-         * Admin CTA so the two primary actions don't look identical. */
-        .btn-eve {
-            border-color: rgba(229, 169, 0, 0.55);
-            color: var(--gold);
-        }
-        .btn-eve:hover {
-            border-color: var(--gold);
-            color: var(--gold);
-            background: rgba(229, 169, 0, 0.06);
-        }
 
         /* ---------- Footer ---------- */
         footer {
@@ -486,17 +458,28 @@
         </div>
     </header>
 
-    @if ($authUser)
-        {{--
-            Authenticated nav strip. Only live destinations go here —
-            see .nav-strip comment above. Add more entries as the
-            corresponding pages land (Market Hubs Livewire, etc.).
-        --}}
+    {{--
+        Primary nav strip. Renders for:
+          - Authenticated users → Account (+ Admin for admins).
+          - Guests (when SSO is configured) → single "Log in with EVE
+            Online" entry in the same slot the Account link takes for
+            logged-in users. Keeps the top-of-page entry point in one
+            consistent location regardless of auth state, instead of
+            burying login in the hero actions below the fold.
+        Only live destinations go here — see .nav-strip comment above.
+    --}}
+    @if ($authUser || $ssoConfigured)
         <nav class="nav-strip" aria-label="Primary navigation">
             <div class="nav-strip-inner">
-                <a href="{{ route('account.settings') }}" class="nav-link">Account</a>
-                @if ($isAdmin)
-                    <a href="/admin" class="nav-link nav-link--admin">Admin</a>
+                @if ($authUser)
+                    <a href="{{ route('account.settings') }}" class="nav-link">Account</a>
+                    @if ($isAdmin)
+                        <a href="/admin" class="nav-link nav-link--admin">Admin</a>
+                    @endif
+                @else
+                    <a href="{{ route('auth.eve.redirect') }}" class="nav-link nav-link--login">
+                        Log in with EVE Online
+                    </a>
                 @endif
             </div>
         </nav>
@@ -554,34 +537,12 @@
             </div>
 
             {{--
-                CTAs gated three ways:
-
-                  - Guest, SSO configured → "Log in with EVE Online"
-                  - Logged-in admin       → "Admin →"
-                  - Logged-in non-admin   → (no primary CTA — they're
-                                            already in; landing stays
-                                            content-only for them)
-
-                Per the EVE_SSO_ADMIN_CHARACTER_IDS allow-list (see
-                ADR-0002 § Admin gate). Operator-seeded accounts (no
-                linked character) also count as admins via the bootstrap
-                escape hatch in `User::canAccessPanel`. The Admin button
-                used to render for everyone, which sent non-admins into
-                a 403 page — now it's only visible to people who can
-                actually use it.
+                Primary CTAs live in the top nav strip now (Account for
+                logged-in users, "Log in with EVE Online" for guests).
+                Keeping the hero body content-only means the call to
+                action sits above the fold in the nav rather than
+                below the pillars — one consistent entry point.
             --}}
-            <div class="actions">
-                @if ($authUser)
-                    @if ($isAdmin)
-                        <a href="/admin" class="btn btn-primary">Admin &rarr;</a>
-                    @endif
-                @else
-                    @if ($ssoConfigured)
-                        <a href="{{ route('auth.eve.redirect') }}" class="btn btn-eve">Log in with EVE Online</a>
-                    @endif
-                @endif
-                <a href="https://github.com/maferick/AegisCore" class="btn" rel="noopener">GitHub</a>
-            </div>
             </div>{{-- /.hero-body --}}
         </div>
     </main>
