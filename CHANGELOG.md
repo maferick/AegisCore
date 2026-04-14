@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Corp / alliance standings display on `/account/settings`.** A new
+  read-only section under the market-data card lists the standings
+  the donor's corporation and alliance hold toward other corps,
+  alliances, and factions — the authoritative "who's friendly / who's
+  hostile" signal for the upcoming automatic battle-report feature.
+  - Per donor character but keyed to corp/alliance (same data-sharing
+    pattern as `market_hub_entitlements` § ADR-0005): any donor in
+    the corp can sync, all donors in the same corp/alliance see the
+    same list.
+  - Individual-character contacts are deliberately **not** shown —
+    personal grudges stay off the shared surface. Only corporation,
+    alliance, and faction contact types reach the UI.
+  - Fetched via `/corporations/{id}/contacts/` and
+    `/alliances/{id}/contacts/` using the donor's existing market
+    token (two new ESI scopes added to `market_scopes`:
+    `esi-corporations.read_contacts.v1`,
+    `esi-alliances.read_contacts.v1`). Corp contacts require
+    Personnel_Manager / Contact_Manager — a line-member donor sees a
+    clear "role missing" skip message; their alliance half still
+    succeeds.
+  - A "Sync standings now" button runs the fetch synchronously for
+    immediate feedback; a daily `eve:sync-standings` scheduled job
+    (04:00 UTC, `routes/console.php`) walks every donor token to
+    keep the table fresh. Existing donor tokens predate the new
+    scopes — the UI prompts a re-authorise before the button appears.
+  - Battle-report contract: donor / admin reports cross-reference
+    participants against `character_standings` to tag friendly
+    (standing ≥ +5) / enemy (≤ −5) / neutral. Non-donor manual
+    reports ignore this table and use Team A / Team B. Automatic
+    report generation is donor-gated — no donor token, no auto
+    reports.
+  - Backfill side-effect: sync also mirrors the donor character's
+    current `corporation_id` / `alliance_id` into the `characters`
+    table, acting as the donor-self affiliation poller the ADR-0002
+    phase-2 roadmap flagged.
 - **Landing-page nav strip for authenticated users.** Logged-in users
   now see a thin horizontal nav between the header and the hero, with
   links to the surfaces that currently exist for them:

@@ -76,3 +76,29 @@ Schedule::command('eve:donations:recompute')
     ->onOneServer()
     ->withoutOverlapping(10)
     ->name('eve-donations-recompute');
+
+// Daily corp + alliance standings sync for every donor with a market
+// token. Walks each EveMarketToken, resolves the character's current
+// corp/alliance affiliation, pulls the corp and alliance contact
+// lists from ESI, and upserts rows into `character_standings`.
+//
+// Cadence: daily at 04:00 UTC — off-peak for most EVE TZs and well
+// clear of the donations poller's 5-minute cadence so we don't stack
+// token refreshes. Corp/alliance standings change on human timescales
+// (days between edits), so daily is ample; donors who need fresher
+// data use the "Sync standings now" button on /account/settings.
+//
+// `withoutOverlapping(30)` guards against a long-running sync (ESI
+// degraded, rate-limit backoff) bleeding into the next scheduled
+// tick. 30-minute lock release matches the job's 10-minute timeout
+// with a generous headroom.
+//
+// See App\Domains\UsersCharacters\Jobs\SyncDonorStandings for the
+// per-donor loop and the plane-boundary reasoning (ADR-0002 §
+// phase-2 amendment).
+Schedule::command('eve:sync-standings')
+    ->dailyAt('04:00')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('eve-sync-standings');

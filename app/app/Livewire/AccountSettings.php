@@ -6,7 +6,9 @@ namespace App\Livewire;
 
 use App\Domains\Markets\Models\MarketWatchedLocation;
 use App\Domains\Markets\Services\StructurePickerService;
+use App\Domains\UsersCharacters\Models\CharacterStanding;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
+use App\Domains\UsersCharacters\Services\CharacterStandingsFetcher;
 use App\Services\Eve\MarketTokenAuthorizer;
 use App\Services\Eve\Sso\EveSsoClient;
 use Illuminate\Support\Collection;
@@ -20,11 +22,20 @@ use RuntimeException;
 /**
  * Livewire component powering `/account/settings`.
  *
- * Three surfaces on one page:
+ * Four surfaces on one page:
  *
  *   1. Identity card (static — read-only from the authed user).
  *   2. Market-data authorisation (donor-gated) — CTA, token status.
- *   3. Watched structures (donor-gated) — interactive: search for
+ *   3. Corp / alliance standings (donor-gated, donor-scoped display):
+ *      read-only table of standings the donor's corp/alliance holds
+ *      toward other corps/alliances/factions, with a "Sync now"
+ *      button that runs {@see CharacterStandingsFetcher}. Individual-
+ *      character contacts are filtered out (donor-UX rule: no
+ *      personal grudges on a shared surface). Downstream: fuels the
+ *      automatic battle-report friendly/enemy tagging for donors and
+ *      admins. Non-donor manual reports ignore this table and use
+ *      Team A / Team B instead.
+ *   4. Watched structures (donor-gated) — interactive: search for
  *      structures the donor's character has ACL-visible access to,
  *      add one to `market_watched_locations`, remove an existing
  *      one.
@@ -101,6 +112,8 @@ class AccountSettings extends Component
                 : null,
             'market_token' => $this->marketToken(),
             'watched_structures' => $this->watchedStructures(),
+            'standings_by_owner' => $this->standingsByOwner(),
+            'standings_token_missing_scopes' => $this->standingsTokenMissingScopes(),
         ]);
     }
 
@@ -160,6 +173,128 @@ class AccountSettings extends Component
             ->where('owner_user_id', $user->id)
             ->orderBy('name')
             ->get();
+    }
+
+    /**
+     * Standings visible to this user, grouped for the /account/settings
+     * table. Scope is "standings owned by corp/alliance of any of the
+     * user's linked characters" — so an officer who sync'd them,
+     * and every other donor in the same corp/alliance, sees the same
+     * list. Individual-character contacts are filtered out by the
+     * enum at the DB layer and again here (belt-and-braces per the
+     * donor-UX rule: no personal grudges on the shared surface).
+     *
+     * Returned shape:
+     *
+     *   [
+     *     'corporation' => [
+     *       'owner_id' => 98765432,
+     *       'rows' => Collection<CharacterStanding>,
+     *     ],
+     *     'alliance' => [
+     *       'owner_id' => 99001234,
+     *       'rows' => Collection<CharacterStanding>,
+     *     ],
+     *   ]
+     *
+     * Keys missing when the user has no character in that owner type
+     * (e.g. corp without alliance → alliance key absent).
+     *
+     * @return array<string, array{owner_id: int, rows: Collection<int, CharacterStanding>}>
+     */
+    private function standingsByOwner(): array
+    {
+        $user = Auth::user();
+        if ($user === null) {
+            return [];
+        }
+
+        // Character affiliation IDs are mirrored into `characters` by
+        // the standings fetcher on each sync (the affiliation poller
+        // for the donor-self path). Collect distinct corp + alliance
+        // IDs across all linked characters — the display surface can
+        // aggregate multiple if the user has characters in different
+        // orgs.
+        $corpIds = $user->characters
+            ->pluck('corporation_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $allianceIds = $user->characters
+            ->pluck('alliance_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $result = [];
+
+        if ($corpIds !== []) {
+            $rows = CharacterStanding::query()
+                ->where('owner_type', CharacterStanding::OWNER_CORPORATION)
+                ->whereIn('owner_id', $corpIds)
+                ->whereIn('contact_type', [
+                    CharacterStanding::CONTACT_CORPORATION,
+                    CharacterStanding::CONTACT_ALLIANCE,
+                    CharacterStanding::CONTACT_FACTION,
+                ])
+                ->orderByDesc('standing')
+                ->orderBy('contact_name')
+                ->get();
+            $result[CharacterStanding::OWNER_CORPORATION] = [
+                'owner_id' => (int) ($corpIds[0] ?? 0),
+                'rows' => $rows,
+            ];
+        }
+
+        if ($allianceIds !== []) {
+            $rows = CharacterStanding::query()
+                ->where('owner_type', CharacterStanding::OWNER_ALLIANCE)
+                ->whereIn('owner_id', $allianceIds)
+                ->whereIn('contact_type', [
+                    CharacterStanding::CONTACT_CORPORATION,
+                    CharacterStanding::CONTACT_ALLIANCE,
+                    CharacterStanding::CONTACT_FACTION,
+                ])
+                ->orderByDesc('standing')
+                ->orderBy('contact_name')
+                ->get();
+            $result[CharacterStanding::OWNER_ALLIANCE] = [
+                'owner_id' => (int) ($allianceIds[0] ?? 0),
+                'rows' => $rows,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Names of contact-scopes the donor's existing market token is
+     * missing. Used by the view to nudge re-authorisation when the
+     * token predates the standings rollout (existing tokens don't
+     * carry the new scopes until the donor clicks "Re-authorise").
+     *
+     * @return list<string>
+     */
+    private function standingsTokenMissingScopes(): array
+    {
+        $token = $this->marketToken();
+        if ($token === null) {
+            return [];
+        }
+
+        $missing = [];
+        foreach ([
+            CharacterStandingsFetcher::SCOPE_CORP_CONTACTS,
+            CharacterStandingsFetcher::SCOPE_ALLIANCE_CONTACTS,
+        ] as $scope) {
+            if (! $token->hasScope($scope)) {
+                $missing[] = $scope;
+            }
+        }
+
+        return $missing;
     }
 
     // ------------------------------------------------------------------
@@ -293,6 +428,53 @@ class AccountSettings extends Component
         $this->results = [];
         $this->resultStructureIds = [];
         $this->query = '';
+    }
+
+    /**
+     * Sync the donor's corp + alliance standings by running the
+     * fetcher against their market token. Donor/admin only — same
+     * gate as the market-data surface. The action is idempotent:
+     * clicking twice in a row is a no-op on the second click because
+     * the upsert writes the same data back.
+     *
+     * The fetcher hits ESI synchronously inside the request (token
+     * refresh + at most a handful of pages per endpoint + one names
+     * POST). For typical corp/alliance sizes this is well under the
+     * 2-second job-placement rule; a pathologically large alliance
+     * would be the one case to push to Horizon, but we'd notice that
+     * in timings before it became a real problem.
+     */
+    public function syncStandings(CharacterStandingsFetcher $fetcher): void
+    {
+        $this->error = null;
+        $this->status = null;
+
+        $user = Auth::user();
+        if ($user === null) {
+            abort(403);
+        }
+        if (! ($user->isDonor() || $user->isAdmin())) {
+            $this->error = 'Standings sync is a donor benefit.';
+
+            return;
+        }
+
+        $token = $this->marketToken();
+        if ($token === null) {
+            $this->error = 'Authorise market data first — use the button above.';
+
+            return;
+        }
+
+        try {
+            $result = $fetcher->sync($token);
+        } catch (RuntimeException $e) {
+            $this->error = $e->getMessage();
+
+            return;
+        }
+
+        $this->status = $result->toFlashMessage();
     }
 
     /**
