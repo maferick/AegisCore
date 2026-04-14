@@ -6,7 +6,9 @@ namespace App\Filament\Pages;
 
 use App\Domains\UsersCharacters\Models\EveDonation;
 use App\Domains\UsersCharacters\Models\EveDonationsToken;
+use App\Domains\UsersCharacters\Models\EveDonorBenefit;
 use App\Services\Eve\Sso\EveSsoClient;
+use Carbon\CarbonImmutable;
 use Filament\Pages\Page;
 
 /**
@@ -72,6 +74,7 @@ class EveDonations extends Page
      *   expected_character_id: ?int,
      *   expected_character_name: ?string,
      *   donations_redirect_url: string,
+     *   isk_per_day: int,
      *   token: array{
      *     character_id: int,
      *     character_name: string,
@@ -81,26 +84,73 @@ class EveDonations extends Page
      *     authorized_by: ?string,
      *     updated_at: \Carbon\CarbonInterface,
      *   }|null,
+     *   donors_active: \Illuminate\Support\Collection<int, array<string, mixed>>,
+     *   donors_expired: \Illuminate\Support\Collection<int, array<string, mixed>>,
      *   donations: \Illuminate\Support\Collection<int, array{
      *     donor_character_id: int,
      *     donor_name: ?string,
+     *     donor_portrait_url: string,
      *     amount: string,
      *     reason: ?string,
      *     donated_at: \Carbon\CarbonInterface,
      *   }>,
      *   donation_total: string,
      *   donor_count: int,
+     *   active_donor_count: int,
      * }
      */
     protected function getViewData(): array
     {
         $expectedCharacterId = config('eve.sso.donations.character_id');
         $expectedCharacterId = is_int($expectedCharacterId) ? $expectedCharacterId : null;
+        $iskPerDay = (int) config('eve.donations.isk_per_day', 100_000);
 
         $token = EveDonationsToken::query()
             ->with('authorizedBy:id,name')
             ->latest('updated_at')
             ->first();
+
+        // Per-donor benefit rows — each one carries the accumulated
+        // ad-free-until expiry, total ISK, donation count, and first
+        // donation date. We pre-build a donor map keyed on character_id
+        // so we can show portrait+name+expiry together without joining
+        // eve_donations on every render.
+        $now = CarbonImmutable::now();
+
+        /** @var \Illuminate\Support\Collection<int, array<string, mixed>> $benefits */
+        $benefits = EveDonorBenefit::query()
+            ->orderByDesc('ad_free_until')
+            ->limit(100)
+            ->get()
+            ->map(function (EveDonorBenefit $b) use ($now): array {
+                /** @var CarbonImmutable $adFreeUntil */
+                $adFreeUntil = $b->ad_free_until;
+                $isActive = $adFreeUntil->greaterThan($now);
+
+                // Pull the latest donor_name the poller resolved from
+                // /universe/names/ so the donor card's name is current.
+                // Fine to run once per donor — donor base is small.
+                $latestName = EveDonation::query()
+                    ->where('donor_character_id', $b->donor_character_id)
+                    ->whereNotNull('donor_name')
+                    ->orderByDesc('donated_at')
+                    ->value('donor_name');
+
+                return [
+                    'donor_character_id' => $b->donor_character_id,
+                    'donor_name' => $latestName ?? null,
+                    'donor_portrait_url' => $this->portraitUrl($b->donor_character_id),
+                    'total_isk_donated' => (string) $b->total_isk_donated,
+                    'donations_count' => $b->donations_count,
+                    'first_donated_at' => $b->first_donated_at,
+                    'last_donated_at' => $b->last_donated_at,
+                    'ad_free_until' => $adFreeUntil,
+                    'is_active' => $isActive,
+                ];
+            });
+
+        $donorsActive = $benefits->filter(fn (array $r): bool => $r['is_active'])->values();
+        $donorsExpired = $benefits->reject(fn (array $r): bool => $r['is_active'])->values();
 
         // Most-recent donations slice — the page is a status surface,
         // not a paginated ledger. 50 rows comfortably covers a few
@@ -115,6 +165,7 @@ class EveDonations extends Page
             ->map(fn (EveDonation $d): array => [
                 'donor_character_id' => $d->donor_character_id,
                 'donor_name' => $d->donor_name,
+                'donor_portrait_url' => $this->portraitUrl($d->donor_character_id),
                 'amount' => $d->amount,
                 'reason' => $d->reason,
                 'donated_at' => $d->donated_at,
@@ -133,6 +184,7 @@ class EveDonations extends Page
             'expected_character_id' => $expectedCharacterId,
             'expected_character_name' => config('eve.sso.donations.character_name'),
             'donations_redirect_url' => route('auth.eve.donations.redirect'),
+            'isk_per_day' => $iskPerDay,
             'token' => $token === null ? null : [
                 'character_id' => $token->character_id,
                 'character_name' => $token->character_name,
@@ -142,9 +194,25 @@ class EveDonations extends Page
                 'authorized_by' => $token->authorizedBy?->name,
                 'updated_at' => $token->updated_at,
             ],
+            'donors_active' => $donorsActive,
+            'donors_expired' => $donorsExpired,
             'donations' => $donations,
             'donation_total' => $total,
             'donor_count' => $donorCount,
+            'active_donor_count' => $donorsActive->count(),
         ];
+    }
+
+    /**
+     * EVE Online's CDN portrait URL for a character.
+     *
+     * `images.evetech.net` is a public, CORS-friendly, long-cached CDN
+     * (no auth required — characters opt-in to public portrait display).
+     * Size 128 renders crisply at the 48-64px we display in donor cards
+     * and still keeps the retina-friendly 2× density.
+     */
+    private function portraitUrl(int $characterId): string
+    {
+        return "https://images.evetech.net/characters/{$characterId}/portrait?size=128";
     }
 }
