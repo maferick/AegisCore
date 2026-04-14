@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`PollDonationsWallet` crashed on every Horizon tick with
+  `BindingResolutionException: Unresolvable dependency resolving
+  [Parameter #0 <required> string $baseUrl] in class
+  App\Services\Eve\Esi\EsiClient`.** Root cause: `EsiClient` was
+  never bound in the container. Its constructor takes four
+  primitives (base URL, user agent, timeouts, cache TTL) pulled
+  from `config('eve.esi')` — unresolvable by Laravel's autowiring —
+  so the moment anything type-hinted `EsiClient`, Laravel tried to
+  build one from reflection and threw. Light-synchronous callers
+  (page controllers hitting `EsiClient::fromConfig()` directly)
+  never tripped this; the donations poller is the first Horizon
+  job that DI's the client through `handle()`, which is where the
+  failure surfaced. Fix: register `EsiClient` + `EsiRateLimiter`
+  as singletons in `AppServiceProvider::register()` using each
+  class's existing `fromConfig()` factory. Side benefit: future
+  Filament / controller callers get clean container resolution
+  without having to remember `::fromConfig()`.
 - **Horizon spawned zero worker processes; scheduled + dispatched
   jobs piled up in Redis with no consumer.** Root cause: no
   `config/horizon.php` was published, so Horizon fell back to the
