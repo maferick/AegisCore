@@ -65,6 +65,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Docker monitoring
+    |--------------------------------------------------------------------------
+    | URL for the scoped read-only Docker API the /admin/container-status
+    | page queries. Points at the `docker_socket_proxy` service in
+    | infra/docker-compose.yml (tecnativa/docker-socket-proxy), which
+    | sits in front of /var/run/docker.sock and exposes only GET
+    | /containers* + /info + /version.
+    |
+    | Empty host disables the admin page entirely — the service returns
+    | a single "not configured" card so operators who'd rather not expose
+    | even a read-only slice of the socket can opt out by leaving
+    | DOCKER_API_HOST unset (or removing the proxy service from the
+    | compose file).
+    |
+    | Timeout is deliberately tight: the widget polls every ~10s and a
+    | dead proxy shouldn't hold the page past its own cache TTL.
+    */
+    'docker' => [
+        'host' => env('DOCKER_API_HOST', ''),
+        'timeout_seconds' => (int) env('DOCKER_API_TIMEOUT_SECONDS', 2),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Plane boundary
     |--------------------------------------------------------------------------
     | Hard limits for Laravel's control plane. Jobs that exceed these

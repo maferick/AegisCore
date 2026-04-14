@@ -89,6 +89,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented defaults (`2025-01-01`, yesterday-UTC, `5000`).
 
 ### Added
+- **Container monitoring dashboard at `/admin/container-status`.** A
+  Filament page plus dashboard widget that surfaces the live state of
+  every container in the compose stack (running / unhealthy /
+  restarting / exited) — the docker-level peer of System Status (which
+  covers backend reachability) and Laravel Horizon (which covers queue
+  workers).
+
+  Data comes from a new `docker_socket_proxy` sidecar
+  (`tecnativa/docker-socket-proxy`) that sits in front of
+  `/var/run/docker.sock` and allows only `GET /containers*`, `/info`,
+  `/version` — POST and EXEC are hard-denied at the proxy, so PHP
+  never gets host-root-equivalent access from the bare socket. The
+  socket is never mounted into `php-fpm` directly.
+
+  Empty `DOCKER_API_HOST` disables the page entirely (renders a "not
+  configured" notice) so operators who'd rather not expose even a
+  read-only slice of the socket can opt out by leaving the env var
+  unset or dropping the proxy from `infra/docker-compose.yml`.
+  - `App\System\DockerStatusService` — probes the proxy, caches the
+    snapshot for 5 s (10 s on failure) so widget polling doesn't
+    hammer it.
+  - `App\Filament\Pages\ContainerStatus` + blade view rendering a
+    Filament-styled table with per-row state badges and uptime.
+  - `App\Filament\Widgets\ContainerStatusWidget` — four-stat summary
+    (total / running / unhealthy / stopped) on both the dashboard and
+    the page header.
 - **Long-lived schedulers for market-poll + market-import (ADR-0004
   § Follow-ups).** Up until now, `make market-poll` and
   `make market-import` were operator-triggered one-shots. The stack

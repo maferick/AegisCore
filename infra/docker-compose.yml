@@ -259,6 +259,17 @@ services:
       EVE_DONATIONS_ISK_PER_DAY: "${EVE_DONATIONS_ISK_PER_DAY:-100000}"
 
       # ---------------------------------------------------------------
+      # Docker monitoring — tecnativa/docker-socket-proxy
+      # ---------------------------------------------------------------
+      # URL the DockerStatusService hits for read-only /containers data
+      # backing /admin/container-status. Empty string disables the page
+      # (DockerStatusService::probe returns UNKNOWN and the widget
+      # renders a "not configured" notice). See config/aegiscore.php
+      # and the docker_socket_proxy service below for the threat model.
+      DOCKER_API_HOST: "${DOCKER_API_HOST:-http://docker_socket_proxy:2375}"
+      DOCKER_API_TIMEOUT_SECONDS: "${DOCKER_API_TIMEOUT_SECONDS:-2}"
+
+      # ---------------------------------------------------------------
       # ESI — esi.evetech.net (light synchronous calls only on this plane)
       # ---------------------------------------------------------------
       # CCP requires a User-Agent identifying app + contact. Reactive
@@ -728,6 +739,59 @@ services:
         condition: service_healthy
       influxdb2:
         condition: service_healthy
+    networks: [aegiscore]
+
+  # docker_socket_proxy — tecnativa/docker-socket-proxy sitting in front of
+  # /var/run/docker.sock. PHP (and anything else on the `aegiscore` network)
+  # gets a scoped read-only slice of the Docker API to drive the
+  # /admin/container-status monitoring page.
+  #
+  # Why a proxy instead of mounting the socket into php-fpm directly: the
+  # bare socket is effectively root-on-host (EXEC /containers/<id>/exec can
+  # launch a privileged container, POST /containers/create can bind-mount
+  # the host filesystem read-write). The proxy strips every POST path by
+  # default and only re-enables the exact verbs we list here. PHP can read
+  # container state and nothing else.
+  #
+  # Default listen port is 2375; we keep it bound to the internal compose
+  # network (no `ports:` mapping — only reachable from peer services).
+  #
+  # Empty DOCKER_API_HOST env on the PHP side disables the admin page
+  # entirely (DockerStatusService short-circuits), so operators who don't
+  # want to expose even a read-only socket can just leave this service
+  # off and the page renders a "not configured" notice.
+  docker_socket_proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: docker_socket_proxy
+    restart: unless-stopped
+    environment:
+      # Read verbs we need for the status page. Everything not listed
+      # here is 403 at the proxy.
+      CONTAINERS: 1
+      INFO: 1
+      VERSION: 1
+      # Hard-deny writes + anything that can reach host resources or
+      # other containers' internals. Defaults are already 0 but listing
+      # them makes the policy self-documenting for operators reviewing
+      # the compose file.
+      POST: 0
+      EXEC: 0
+      IMAGES: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      SERVICES: 0
+      TASKS: 0
+      SWARM: 0
+      SECRETS: 0
+      BUILD: 0
+    volumes:
+      # Read-only mount — the proxy itself is also pinned to GET-only
+      # via the env flags above, but belt-and-braces.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # No healthcheck — the image ships none by default and adding our
+    # own would require bolting curl into a 20MB haproxy container.
+    # Liveness is implicit: if the proxy dies, the status page renders
+    # a single DOWN card and the rest of the admin keeps working.
     networks: [aegiscore]
 
   nginx:
