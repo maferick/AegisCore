@@ -11,11 +11,10 @@ use App\Reference\Map\Enums\ProjectionMode;
 use App\Reference\Map\Enums\UniverseDetail;
 use App\Reference\Map\Neo4jMapDataProvider;
 use ArrayIterator;
-use IteratorAggregate;
 use Laudis\Neo4j\Contracts\ClientInterface;
+use Laudis\Neo4j\Databags\SummarizedResult;
 use Mockery;
 use Tests\TestCase;
-use Traversable;
 
 /**
  * Drives Neo4jMapDataProvider against a mocked Laudis client. We don't
@@ -214,14 +213,15 @@ final class Neo4jMapDataProviderTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
 
         $client->shouldReceive('run')
-            ->with(Mockery::pattern('/MATCH \(r:Region\) OPTIONAL MATCH \(r\)<-\[:IN_REGION\]/'), Mockery::any())
+            ->withArgs(fn (string $cypher): bool => str_contains($cypher, 'MATCH (r:Region)')
+                && str_contains($cypher, 'OPTIONAL MATCH (r)<-[:IN_REGION]'))
             ->andReturn($this->fakeRows([
                 $this->regionRowWithCount(10000002, 'The Forge', 423),
                 $this->regionRowWithCount(10000043, 'Domain', 379),
             ]));
 
         $client->shouldReceive('run')
-            ->with(Mockery::pattern('/MATCH \(r1:Region\)<-\[:IN_REGION\]/'), Mockery::any())
+            ->withArgs(fn (string $cypher): bool => str_contains($cypher, 'MATCH (r1:Region)<-[:IN_REGION]'))
             ->andReturn($this->fakeRows([
                 $this->edgeRowWithWeight(10000002, 10000043, 5),
             ]));
@@ -242,7 +242,7 @@ final class Neo4jMapDataProviderTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
 
         $client->shouldReceive('run')
-            ->with(Mockery::pattern('/^MATCH \(s:System\) /'), Mockery::any())
+            ->withArgs(fn (string $cypher): bool => str_starts_with($cypher, 'MATCH (s:System) '))
             ->andReturn($this->fakeRows([
                 $this->systemRow(30000142, 'Jita', []),
                 $this->systemRow(30000144, 'Perimeter', []),
@@ -276,36 +276,25 @@ final class Neo4jMapDataProviderTest extends TestCase
      *
      * @param  array<int, array<string, mixed>>  $rows
      */
-    private function fakeRows(array $rows): IteratorAggregate
+    private function fakeRows(array $rows): SummarizedResult
     {
-        return new class($rows) implements IteratorAggregate {
-            /** @var array<int, object> */
-            private array $rows;
+        $records = array_map(
+            static fn (array $r) => new class($r) {
+                public function __construct(private array $data) {}
 
-            public function __construct(array $rows)
-            {
-                $this->rows = array_map(
-                    static fn (array $r) => new class($r) {
-                        public function __construct(private array $data) {}
-                        public function get(string $key): mixed
-                        {
-                            return $this->data[$key] ?? null;
-                        }
-                    },
-                    $rows,
-                );
-            }
+                public function get(string $key): mixed
+                {
+                    return $this->data[$key] ?? null;
+                }
+            },
+            $rows,
+        );
 
-            public function getIterator(): Traversable
-            {
-                return new ArrayIterator($this->rows);
-            }
+        $result = Mockery::mock(SummarizedResult::class);
+        $result->shouldReceive('getIterator')->andReturn(new ArrayIterator($records));
+        $result->shouldReceive('first')->andReturn($records[0] ?? null);
 
-            public function first(): ?object
-            {
-                return $this->rows[0] ?? null;
-            }
-        };
+        return $result;
     }
 
     /**

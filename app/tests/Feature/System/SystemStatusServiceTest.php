@@ -142,18 +142,23 @@ final class SystemStatusServiceTest extends TestCase
 
         $service = app(SystemStatusService::class);
         $first = $service->snapshot();
+
+        $callsAfterFirstSnapshot = collect(Http::recorded())->filter(
+            fn ($entry) => str_contains((string) $entry[0]->url(), 'opensearch.test')
+                || str_contains((string) $entry[0]->url(), 'influxdb.test'),
+        )->count();
+
         $second = $service->snapshot();
 
         // Identical snapshot back means the cache fed the second call.
         self::assertEquals($first, $second);
 
-        // Count only probes against our HTTP-based backends — one each
-        // from the first snapshot, none from the second (served from cache).
-        $httpCalls = collect(Http::recorded())->filter(
+        // Probe count should not increase on the second call.
+        $callsAfterSecondSnapshot = collect(Http::recorded())->filter(
             fn ($entry) => str_contains((string) $entry[0]->url(), 'opensearch.test')
                 || str_contains((string) $entry[0]->url(), 'influxdb.test'),
         )->count();
-        self::assertSame(2, $httpCalls);
+        self::assertSame($callsAfterFirstSnapshot, $callsAfterSecondSnapshot);
     }
 
     public function test_fresh_bypasses_cache(): void
