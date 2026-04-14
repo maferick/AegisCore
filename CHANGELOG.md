@@ -8,6 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Filament admin surface for `market_watched_locations` (step 4b
+  of ADR-0004's rollout).** New `/admin/market-watched-locations`
+  resource lets admins browse every row the Python poller works
+  through, add platform-default entries (NPC stations + player
+  structures), and enable/disable individual rows. Donor-owned rows
+  appear read-only in the list (so operators can spot-check
+  activity) but their create/edit flow stays at `/account/settings`
+  per ADR-0004's Filament/frontend split.
+  - **`App\Domains\Markets\Models\MarketWatchedLocation`** — new
+    Eloquent model under `app/Domains/Markets/`. `Region` +
+    `owner(User)` relations; `scopePlatformOwned` +
+    `scopeDonorOwned`; `isJita()` / `isNpcStation()` /
+    `isPlayerStructure()` predicates. **Belt-and-braces Jita
+    guard**: a `booted()` `deleting` hook throws
+    `DomainException('Jita 4-4 is the platform baseline ...')` if
+    anyone tries to delete the platform Jita row, regardless of the
+    code path (tinker, Artisan, a future service call, etc.). The
+    Filament resource also hides the delete button for Jita, but
+    the model-level guard is the durable protection.
+  - **`MarketWatchedLocationResource`** — one Resource class, three
+    pages (List / Create / Edit). Form branches on `location_type`:
+    NPC rows use a searchable picker over `ref_npc_stations`
+    (matches by system name — "jita", "amarr", "dodixie" — or by
+    exact station ID) and auto-fills `region_id` from the chosen
+    station's system; player-structure rows take a raw structure ID
+    + region ID with a "admin knows what they're doing" helper
+    note. First poll validates structure access; a 403 after the
+    configured consecutive-failure threshold auto-disables the row
+    with `disabled_reason = 'no_access'`, so pasting an
+    inaccessible ID is self-correcting.
+  - **Table columns** surface the operator-relevant telemetry
+    without a second screen: kind (NPC/Structure badge), name,
+    region, owner (platform vs donor), enabled toggle, last-polled
+    age, consecutive-failure count (grey/amber/red badge),
+    disabled_reason. Three filters: location_type, enabled/disabled,
+    platform vs donor-owned.
+  - **Reset-failure-counter action** on the Edit page — common
+    operator workflow of "an upstream ESI hiccup ticked the counter
+    to 2/3 but the row shouldn't auto-disable on the next blip".
+    Zeroes `consecutive_failure_count` + clears `last_error` /
+    `last_error_at` inside one transaction; does NOT touch the
+    `enabled` flag (flipping disabled rows back on is a separate,
+    deliberate action).
+  - **No structure ESI-search picker yet** — that's the natural
+    companion for the donor self-service flow and lands in step 5
+    alongside the `/account/settings` picker. Until then admins
+    paste structure IDs directly.
+  - Navigation slot: **"Markets" group** in the sidebar (new). Sort
+    weight 10, so if future market pages land (price chart page,
+    valuation replay viewer, …) they slot in around this row.
+  - 4 PHPUnit smoke tests under
+    `tests/Unit/Domains/Markets/MarketWatchedLocationTest.php`:
+    Jita seeder sanity, Jita-delete refusal, non-Jita delete
+    succeeds, defensive "donor-owned row with Jita IDs is not
+    protected" case, and boolean/integer cast round-trips.
 - **Admin-owned player-structure polling (step 4a of ADR-0004's
   rollout).** The Python market poller can now read
   `/markets/structures/{id}/` for `market_watched_locations` rows
