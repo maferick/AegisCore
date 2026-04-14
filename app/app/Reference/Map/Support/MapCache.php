@@ -101,20 +101,46 @@ class MapCache implements MapDataProvider
         // through a tiny TTL'd cache entry (1 minute) so subsequent
         // requests inside the same SDE epoch hit the build-keyed entry
         // directly.
-        $build = $store->remember(
-            'map:build_number',
-            now()->addMinute(),
-            fn () => $this->probeBuildNumber($resolve),
-        );
+        $build = $store->get('map:build_number');
+
+        if (! is_int($build)) {
+            if ($build !== null) {
+                $store->forget('map:build_number');
+            }
+
+            $build = $this->probeBuildNumber($resolve);
+            $store->put('map:build_number', $build, now()->addMinute());
+        }
+
         $buildSegment = $build ?? 'dev';
 
         $key = "map:{$scope}:{$argHash}:{$buildSegment}";
 
-        if ($this->ttlSeconds > 0) {
-            return $store->remember($key, $this->ttlSeconds, $resolve);
+        $cached = $store->get($key);
+
+        if ($cached instanceof MapPayload) {
+            return $cached;
         }
 
-        return $store->rememberForever($key, $resolve);
+        if ($cached !== null) {
+            $store->forget($key);
+        }
+
+        $payload = $resolve();
+
+        if (! $payload instanceof MapPayload) {
+            throw new \UnexpectedValueException('Map cache resolver must return a MapPayload instance.');
+        }
+
+        if ($this->ttlSeconds > 0) {
+            $store->put($key, $payload, $this->ttlSeconds);
+
+            return $payload;
+        }
+
+        $store->forever($key, $payload);
+
+        return $payload;
     }
 
     /**
