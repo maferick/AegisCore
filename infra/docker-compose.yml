@@ -307,15 +307,27 @@ services:
     # /horizon renders `Status: Inactive / Total Processes: 0`.
     #
     # Worker topology (queues, process counts, balancing strategy) lives
-    # in `config/horizon.php`; vendor defaults apply if not published.
-    # After code changes, `make restart` recycles this container so
-    # workers pick up fresh class definitions — Horizon gracefully
-    # drains in-flight jobs on SIGTERM before exit.
+    # in `config/horizon.php` — see the docblock there for the
+    # APP_ENV ↔ supervisor-key mapping. DO NOT rely on the package's
+    # vendored defaults: they only declare supervisors for APP_ENV
+    # values `production` and `local`, which don't match our
+    # AEGISCORE_ENV values (`dev` / `staging` / `prod`) and result in
+    # a running-but-empty master that spawns zero workers.
+    #
+    # After code or config changes, `make restart` recycles this
+    # container so workers pick up fresh class definitions — Horizon
+    # gracefully drains in-flight jobs on SIGTERM before exit.
     <<: *php-common
     container_name: horizon
     command: ["php", "artisan", "horizon"]
-    # horizon:status exits 0 when the supervisor is running (or paused)
-    # and non-zero when inactive — good enough as a liveness probe.
+    # `horizon:status` reports whether the master is alive, exiting
+    # non-zero when paused or stopped. Note: it ONLY checks the master
+    # — an empty supervisor list (zero workers) still counts as
+    # "running" because the master process itself is fine. That
+    # failure mode is prevented at config time instead (see
+    # config/horizon.php — every APP_ENV we use has a supervisor
+    # spec). Docker's healthcheck is a liveness probe, not a
+    # correctness oracle.
     healthcheck:
       test: ["CMD-SHELL", "php artisan horizon:status >/dev/null 2>&1 || exit 1"]
       interval: 30s
