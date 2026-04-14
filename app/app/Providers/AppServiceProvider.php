@@ -3,11 +3,13 @@
 namespace App\Providers;
 
 use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
+use App\Livewire\AccountSettings;
 use App\Services\Eve\Esi\CachedEsiClient;
 use App\Services\Eve\Esi\EsiClient;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiRateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -58,6 +60,21 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Explicit alias for the /account/settings Livewire component.
         //
+        // The class lives at `App\Livewire\AccountSettings` (single
+        // segment), and Livewire's auto-discovery derives the dash-case
+        // alias `account-settings`. The blade view mounts it as
+        // `account.settings` (dot-case, which Livewire interprets as a
+        // subdirectory `App\Livewire\Account\Settings`) — so the
+        // auto-discovery miss fires a ComponentNotFoundException on
+        // every page render and the whole route 500s.
+        //
+        // Registering the alias manually fixes the mismatch without
+        // moving the class or touching the view. If the component later
+        // moves to `App\Livewire\Account\Settings` the alias becomes
+        // redundant and can be dropped — until then this line is the
+        // chokepoint that keeps /account/settings reachable.
+        Livewire::component('account.settings', AccountSettings::class);
     }
 }
