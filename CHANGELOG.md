@@ -8,6 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Interactive donor structure picker on `/account/settings`
+  (step 5c of ADR-0004's rollout).** Replaces the step-5a static
+  stub with a Livewire-powered interactive surface: donors search
+  for Upwell structures by name, click Watch to add, click Remove
+  to stop polling. Search is backed by the donor's own
+  `/characters/{id}/search/?categories=structure` response, so ESI
+  enforces the ACL — the picker only surfaces structures the
+  donor's character has docking access at. Completes the
+  donor-facing UX that step 5b made functional on the poller
+  side.
+  - **`App\Services\Eve\MarketTokenAuthorizer`** — Laravel-plane
+    twin of the Python `auth.py` lock-based refresh. Wraps a
+    `SELECT ... FOR UPDATE` on the donor's `eve_market_tokens`
+    row, refreshes via `EveSsoClient::refreshAccessToken()` when
+    `expires_at <= now + 60s`, persists the rotated
+    `access_token` + `refresh_token` + new `expires_at` inside the
+    same transaction. Laravel and Python now coordinate on the row
+    lock — whichever grabs it first refreshes; the other picks up
+    the new token. No double-rotation (which would invalidate the
+    stored refresh token and lock the donor out until they manually
+    re-authorise).
+  - **`App\Domains\Markets\Services\StructurePickerService`** —
+    two-phase picker: (1) `search(token, query)` hits
+    `/characters/{id}/search/` with `categories=structure` and
+    returns structure IDs the donor's character has ACLs at;
+    (2) per-ID `/universe/structures/{id}/` resolves name +
+    `solar_system_id`, joined with `ref_solar_systems` for
+    `region_id` (the structure endpoint returns system, not
+    region). Tolerates individual 403/404s on resolve by dropping
+    the candidate — handles the rare case of a character losing
+    access between search and resolve in the same request.
+  - **`App\Livewire\AccountSettings`** — the interactive component.
+    Properties: `query`, `results`, `status`, `error`,
+    `resultStructureIds`. Actions: `search()`, `addStructure(int)`,
+    `removeStructure(int)`. Three server-side invariants:
+    - **`addStructure` validates the ID was in the current
+      session's search results**, not just the client's POST body.
+      Enforces the ADR's "never accept free-form structure IDs"
+      invariant at the server — a forged POST with a guessed
+      structure ID is refused.
+    - **`removeStructure` scopes by `owner_user_id = auth()->id()`**,
+      so a forged row-id can't delete another donor's watched
+      structures.
+    - **Donor-gate re-checked on every action** — if donation
+      expires between page load and action, the flow refuses
+      cleanly.
+  - **View chrome split:**
+    - `resources/views/account/settings.blade.php` → page chrome
+      (header, EVE HUD palette, `@livewireStyles` / `@livewireScripts`).
+    - `resources/views/livewire/account/settings.blade.php` → the
+      three sections the Livewire component drives (identity,
+      market-data CTA + token status, structure picker + watched
+      list).
+    - `AccountSettingsController` slims to "render the outer shell";
+      interactivity moves into the Livewire component.
+  - **Updates UX on add:** successful add clears `$query` +
+    `$results` so the page returns to "search" state rather than
+    leaving the just-added result on screen. `wire:confirm` on
+    Remove so a donor doesn't accidentally un-watch a structure
+    with existing poll history (order history stays regardless —
+    only polling stops).
+  - 4 PHPUnit tests on `MarketTokenAuthorizer` cover: fresh token
+    returns without SSO call, stale token refreshes + persists
+    rotated values, SSO failure throws user-facing `RuntimeException`
+    without updating the row, row-vanished race raises the
+    documented error message.
 - **Donor-owned structure polling in the Python plane (step 5b of
   ADR-0004's rollout).** The market poller now reads donor-owned
   structures using the `eve_market_tokens` rows the new fourth SSO
