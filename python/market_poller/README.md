@@ -42,12 +42,36 @@ Source-string convention:
 
 ## Run
 
+### Scheduled (default)
+
+The `market_poll_scheduler` compose service runs the poller in a
+loop on a 5-minute cadence (matches CCP's region-orders cache
+window). It starts automatically with `docker compose up` —
+no operator action needed. Tail its logs via:
+
+```sh
+make logs-market_poll_scheduler
+```
+
+Override the cadence per deployment via env:
+
+```
+MARKET_POLL_INTERVAL_SECONDS=300   # default — 5 min matches ESI cache
+```
+
+### Ad-hoc (operator one-shot)
+
 ```sh
 make market-poll                                 # one pass, all enabled rows
 make market-poll MARKET_ARGS="--dry-run"         # fetch + log, no inserts
 make market-poll MARKET_ARGS="--only-location-id=60003760"    # Jita only
 make market-poll MARKET_ARGS="--log-level=DEBUG"
 ```
+
+The one-shot runs in a separate transient container (tools
+profile), so there's no double-polling concern even while the
+scheduler is running — the two never overlap on the same DB rows
+(per-location transactions serialise on `INSERT IGNORE`).
 
 ## Outbox
 

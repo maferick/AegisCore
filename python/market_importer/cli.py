@@ -2,12 +2,28 @@
 
 Env carries the DB + source details; flags cover op-mode knobs +
 one-day replays.
+
+Two operating modes:
+
+  - **One-shot** (default, `--interval 0`): runs one reconcile pass
+    and exits. What `make market-import` invokes for ad-hoc operator
+    runs.
+  - **Loop** (`--interval N` where N > 0): runs a pass, sleeps N
+    seconds, runs another pass, repeats forever. What the
+    `market_import_scheduler` compose service uses — a 6-hour
+    cadence catches EVE Ref's same-day dump updates without
+    hammering their server.
+
+A pass that crashes in loop mode is logged + the loop continues
+into its next sleep; per-day transactions in the runner make a
+partial-pass crash safe to recover from on the next tick.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date
 
 from market_importer.config import Config
@@ -95,6 +111,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Override MARKET_IMPORT_BATCH_SIZE (default 5000).",
     )
     parser.add_argument(
+        "--interval",
+        type=int,
+        default=0,
+        help=(
+            "Loop mode — after each reconcile pass sleep this many "
+            "seconds, then run again. 0 (default) = single-pass + exit. "
+            "Recommended in-stack value is 21600 (6h), which catches "
+            "EVE Ref's same-day dump updates without hammering their "
+            "server."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Python logging level (DEBUG, INFO, WARNING, ERROR).",
@@ -122,11 +150,25 @@ def main(argv: list[str] | None = None) -> int:
         log.error("config error", error=str(exc))
         return 2
 
-    try:
-        return run(cfg)
-    except Exception as exc:  # pragma: no cover — top-level safety net
-        log.error("import aborted", error=str(exc))
-        return 1
+    if args.interval <= 0:
+        try:
+            return run(cfg)
+        except Exception as exc:  # pragma: no cover — top-level safety net
+            log.error("import aborted", error=str(exc))
+            return 1
+
+    log.info("entering loop mode", interval_seconds=args.interval)
+    while True:
+        try:
+            run(cfg)
+        except Exception:  # pragma: no cover — keep the loop running
+            log.exception("pass crashed; will retry on next tick")
+        log.info("pass complete; sleeping", interval_seconds=args.interval)
+        try:
+            time.sleep(args.interval)
+        except KeyboardInterrupt:
+            log.info("interrupted; exiting loop")
+            return 0
 
 
 if __name__ == "__main__":

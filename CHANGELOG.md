@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Long-lived schedulers for market-poll + market-import (ADR-0004
+  § Follow-ups).** Up until now, `make market-poll` and
+  `make market-import` were operator-triggered one-shots. The stack
+  now runs two sustained-cadence loop containers that start with
+  `docker compose up`:
+  - **`market_poll_scheduler`** — polls every 5 minutes
+    (`MARKET_POLL_INTERVAL_SECONDS`, default 300) matching CCP's
+    region-orders cache window.
+  - **`market_import_scheduler`** — reconciles every 6 hours
+    (`MARKET_IMPORT_INTERVAL_SECONDS`, default 21600) to catch
+    EVE Ref's same-day dump updates without hammering their
+    server.
+
+  Both services share the same Docker image as their one-shot
+  twins (`aegiscore/market-poller:0.1.0` / `aegiscore/market-importer:0.1.0`)
+  and pass `--interval <seconds>` at startup to flip the CLI into
+  loop mode. Under `restart: unless-stopped` so crashes auto-recover.
+  Operators keep `make market-poll` / `make market-import` for
+  ad-hoc one-shots — they spawn separate transient containers under
+  the `tools` profile, so there's no double-run conflict with the
+  long-lived schedulers.
+
+  The CLIs gain a `--interval N` flag (0 = single-pass + exit,
+  original behaviour; N > 0 = loop forever). A pass that crashes
+  inside the loop is logged via `log.exception` and the loop
+  continues into its next sleep — the per-location (poller) and
+  per-day (importer) transaction boundaries make partial-pass
+  crashes safe to retry on the next tick.
 - **Interactive donor structure picker on `/account/settings`
   (step 5c of ADR-0004's rollout).** Replaces the step-5a static
   stub with a Livewire-powered interactive surface: donors search

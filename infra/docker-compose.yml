@@ -542,6 +542,104 @@ services:
         condition: service_healthy
     networks: [aegiscore]
 
+  # market_poll_scheduler — long-lived version of market_poller that
+  # loops every MARKET_POLL_INTERVAL_SECONDS (default 300 = 5 min,
+  # matching CCP's /markets/{region_id}/orders/ cache window). Runs
+  # out-of-the-box with `docker compose up` — NOT under the `tools`
+  # profile.
+  #
+  # Same image + env as the one-shot `market_poller` service above;
+  # the only difference is this one hands the CLI `--interval 300`
+  # on every startup. `restart: unless-stopped` handles crashes
+  # without the cron-sidecar complexity of bind-mounting the docker
+  # socket into a scheduler container.
+  #
+  # Operators keep `make market-poll` for ad-hoc one-shots (still
+  # routed through the tools-profile `market_poller` service so it
+  # spawns a separate transient container; no risk of double-polling
+  # since the one-shot only runs when explicitly triggered).
+  market_poll_scheduler:
+    build:
+      context: ../python
+      dockerfile: market_poller.Dockerfile
+    image: aegiscore/market-poller:0.1.0
+    container_name: market_poll_scheduler
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      ESI_BASE_URL: "${ESI_BASE_URL:-https://esi.evetech.net/latest}"
+      ESI_USER_AGENT: "${ESI_USER_AGENT:-AegisCore/0.1 (+ops@example.com)}"
+      ESI_TIMEOUT_SECONDS: "${ESI_TIMEOUT_SECONDS:-15}"
+
+      MARKET_POLL_RATE_LIMIT_SAFETY_MARGIN: "${MARKET_POLL_RATE_LIMIT_SAFETY_MARGIN:-5}"
+      MARKET_POLL_ERROR_LIMIT_SAFETY_MARGIN: "${MARKET_POLL_ERROR_LIMIT_SAFETY_MARGIN:-10}"
+      MARKET_POLL_MAX_CONSECUTIVE_403S: "${MARKET_POLL_MAX_CONSECUTIVE_403S:-3}"
+      MARKET_POLL_MAX_CONSECUTIVE_5XX: "${MARKET_POLL_MAX_CONSECUTIVE_5XX:-5}"
+      MARKET_POLL_BATCH_SIZE: "${MARKET_POLL_BATCH_SIZE:-5000}"
+
+      APP_KEY: "${APP_KEY:-}"
+      EVE_SSO_CLIENT_ID: "${EVE_SSO_CLIENT_ID:-}"
+      EVE_SSO_CLIENT_SECRET: "${EVE_SSO_CLIENT_SECRET:-}"
+      EVE_SSO_TOKEN_URL: "${EVE_SSO_TOKEN_URL:-https://login.eveonline.com/v2/oauth/token}"
+    # Override the Dockerfile ENTRYPOINT's argv with the --interval
+    # flag so this container loops instead of one-shot-exits. The
+    # interval value is env-tunable for operators who want a
+    # different cadence without editing compose.
+    command: ["--interval", "${MARKET_POLL_INTERVAL_SECONDS:-300}"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks: [aegiscore]
+
+  # market_import_scheduler — long-lived version of market_importer
+  # that loops every MARKET_IMPORT_INTERVAL_SECONDS (default 21600 =
+  # 6 hours). EVE Ref publishes their daily CSV archive once per day
+  # but updates it throughout the day as their ESI scrape completes;
+  # 6h cadence catches those updates without hammering their server.
+  #
+  # The reconcile check skips already-complete days cheaply, so the
+  # steady-state cost of a scheduled pass is one totals.json fetch
+  # plus a `COUNT(*) GROUP BY trade_date` + exit — measured in
+  # milliseconds when there's nothing new to import.
+  #
+  # `make market-import` with MARKET_IMPORT_ARGS overrides stays
+  # available for ad-hoc imports (custom --from / --to ranges,
+  # --force-redownload, etc.).
+  market_import_scheduler:
+    build:
+      context: ../python
+      dockerfile: market_importer.Dockerfile
+    image: aegiscore/market-importer:0.1.0
+    container_name: market_import_scheduler
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      EVEREF_BASE_URL: "${EVEREF_BASE_URL:-https://data.everef.net/market-history}"
+      EVEREF_TOTALS_URL: "${EVEREF_TOTALS_URL:-https://data.everef.net/market-history/totals.json}"
+      ESI_USER_AGENT: "${ESI_USER_AGENT:-AegisCore/0.1 (+ops@example.com)}"
+
+      MARKET_IMPORT_MIN_DATE: "${MARKET_IMPORT_MIN_DATE:-2025-01-01}"
+      MARKET_IMPORT_MAX_DATE: "${MARKET_IMPORT_MAX_DATE:-}"
+      MARKET_IMPORT_BATCH_SIZE: "${MARKET_IMPORT_BATCH_SIZE:-5000}"
+      MARKET_IMPORT_DOWNLOAD_TIMEOUT: "${MARKET_IMPORT_DOWNLOAD_TIMEOUT:-600}"
+    command: ["--interval", "${MARKET_IMPORT_INTERVAL_SECONDS:-21600}"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx
