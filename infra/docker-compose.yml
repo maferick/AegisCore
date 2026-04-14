@@ -425,6 +425,60 @@ services:
         condition: service_healthy
     networks: [aegiscore]
 
+  # market_poller — one-shot Python job that walks enabled rows in
+  # market_watched_locations, pulls current order books from ESI, and
+  # bulk-inserts into market_orders. Emits one `market.orders_snapshot_ingested`
+  # outbox event per successful location poll (consumed by the Python
+  # relay → InfluxDB rollups + valuation recomputes in later rollout
+  # steps).
+  #
+  # Phase 1 covers NPC stations only (region endpoint + location filter,
+  # no auth). Admin-owned and donor-owned structure polling (auth'd via
+  # eve_service_tokens / eve_market_tokens) layer on top in later rollout
+  # steps of ADR-0004 without changing this service's shape.
+  #
+  # Cadence lives outside the container. The scheduled runner is the
+  # `scheduler` container (Laravel's schedule:work), wired in
+  # routes/console.php as a cron entry that dispatches this service via
+  # `docker compose run --rm`. For operator one-shots use
+  # `make market-poll`.
+  market_poller:
+    build:
+      context: ../python
+      dockerfile: market_poller.Dockerfile
+    image: aegiscore/market-poller:0.1.0
+    container_name: market_poller
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      # ESI connection details — reuses the same env names the PHP
+      # plane uses for light-sync calls so operators only remember one
+      # set. The "proper" Python ESI client with full rate-limit /
+      # refresh / JWT-verify logic is still ADR-0002 phase-2 #12
+      # territory; this is the first concrete caller.
+      ESI_BASE_URL: "${ESI_BASE_URL:-https://esi.evetech.net/latest}"
+      ESI_USER_AGENT: "${ESI_USER_AGENT:-AegisCore/0.1 (+ops@example.com)}"
+      ESI_TIMEOUT_SECONDS: "${ESI_TIMEOUT_SECONDS:-15}"
+
+      # Failure + rate-limit discipline. Defaults match the docstring
+      # on market_poller/config.py; tune per deployment only if an
+      # operator has a reason.
+      MARKET_POLL_RATE_LIMIT_SAFETY_MARGIN: "${MARKET_POLL_RATE_LIMIT_SAFETY_MARGIN:-5}"
+      MARKET_POLL_ERROR_LIMIT_SAFETY_MARGIN: "${MARKET_POLL_ERROR_LIMIT_SAFETY_MARGIN:-10}"
+      MARKET_POLL_MAX_CONSECUTIVE_403S: "${MARKET_POLL_MAX_CONSECUTIVE_403S:-3}"
+      MARKET_POLL_MAX_CONSECUTIVE_5XX: "${MARKET_POLL_MAX_CONSECUTIVE_5XX:-5}"
+      MARKET_POLL_BATCH_SIZE: "${MARKET_POLL_BATCH_SIZE:-5000}"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx

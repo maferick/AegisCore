@@ -8,6 +8,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`python/market_poller/` — live market-data poller (step 2 of
+  ADR-0004's rollout).** First concrete caller on the Python-plane
+  ESI track flagged by ADR-0002 § phase-2 #12. One-shot container
+  (`make market-poll`) that walks enabled rows in
+  `market_watched_locations`, pulls the current order book from ESI
+  per row, bulk-inserts into `market_orders`, and emits one
+  `market.orders_snapshot_ingested` outbox event per successful
+  location poll.
+  - **Phase 1 handles NPC stations only** — region endpoint
+    (`GET /markets/{region_id}/orders/`) + client-side location
+    filter, no auth required. Paginates via `X-Pages`. Admin-owned
+    and donor-owned structure polling (auth'd via `eve_service_tokens`
+    / `eve_market_tokens`) layer on top in later rollout steps
+    without changing the package shape — the runner branches on
+    `location_type`.
+  - **Jita 4-4 seeded as the permanent baseline** via a new
+    `2026_04_14_000009_seed_jita_market_watched_location` migration:
+    `region_id = 10000002`, `location_id = 60003760`,
+    `owner_user_id = NULL`, `enabled = true`. Re-runnable: the insert
+    is guarded by an existence check so migration rollback/forward
+    doesn't double-seed, and the rollback only deletes rows with no
+    poll history.
+  - **Reactive rate-limit posture** — reads
+    `X-Ratelimit-Remaining`/`Reset` and `X-ESI-Error-Limit-Remain`/`Reset`
+    on every response; sleeps (capped at 30/60s) when at or below the
+    configured safety margin. On 429/420 honours `Retry-After` and
+    raises `TransientEsiError`; no in-process retry (the cadence is
+    the retry).
+  - **Failure discipline per ADR-0004 § Failure handling** —
+    consecutive-failure counter on `market_watched_locations`,
+    auto-disable after 3 × 403 (`disabled_reason = no_access`) or
+    5 × 5xx/timeout (`disabled_reason = upstream_failing` or
+    `upstream_unreachable`). Single success resets the counter.
+    A `disable_immediately(reason, message)` path exists for the
+    security-boundary violations the later donor-token steps will
+    need (ownership mismatch, missing scope); unused in phase 1.
+  - **Atomic per-location transactions** — `pymysql` connection runs
+    with `autocommit=False`, each location's rows + bookkeeping +
+    outbox event commit together or roll back together. A failure
+    in one location doesn't taint the next.
+  - **Idempotent inserts** — `INSERT IGNORE` on
+    `(observed_at, source, location_id, order_id)`, relying on the PK
+    from ADR-0004. Replaying a tick within the same `observed_at`
+    is a no-op; `rows_inserted` (affected-rows) naturally drops to
+    zero on retries.
+  - **Source-string convention** for provenance:
+    `esi_region_<region_id>_<location_id>` for NPC rows,
+    `esi_structure_<structure_id>` reserved for the later structure
+    path. Human-readable on purpose — shows up in logs + audit queries
+    often enough that the IDs inline beat an opaque hash.
+  - Ships with its own `python/market_poller.Dockerfile`,
+    `python/requirements-market.txt`, a `market_poller` service in
+    `infra/docker-compose.yml` under the `tools` profile, and a
+    `make market-poll` target. Sibling to `sde_importer` and
+    `graph_universe_sync`; the `log.py` / `db.py` scaffolding is
+    duplicated rather than promoted to `python/_common/` — three
+    copies is still under the "rule of three" tripwire and the
+    implementations haven't diverged.
 - **ADR-0004 + schema foundation for market-data ingest.** Architecture
   decision record and the four MariaDB migrations the market pillar
   needs before any poller / importer / UI code lands.

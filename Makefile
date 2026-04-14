@@ -37,6 +37,7 @@ help:
 	@echo "  make sde-check              run the SDE version-drift check now (inline)"
 	@echo "  make sde-import             download CCP's SDE and load all ref_* tables (one-shot)"
 	@echo "  make neo4j-sync-universe    project ref_* universe topology into Neo4j (one-shot)"
+	@echo "  make market-poll            pull order-book snapshots into market_orders (one-shot)"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -100,7 +101,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll
 build:
 	$(COMPOSE) build
 
@@ -208,6 +209,22 @@ sde-import:
 #   GRAPH_ARGS="--rebuild"                 # full wipe + re-merge
 neo4j-sync-universe:
 	$(COMPOSE) --profile tools run --rm --build graph_universe_sync $(GRAPH_ARGS)
+
+# One pass of the market poller — walks enabled market_watched_locations,
+# fetches each location's current order book from ESI, bulk-inserts into
+# market_orders, emits one `market.orders_snapshot_ingested` outbox event
+# per successful location. One-shot; the caller owns the cadence.
+#
+# `--build` forces compose to rebuild the image from `python/` before
+# running, mirroring sde-import / neo4j-sync-universe for the same
+# "git pull should take effect next run" reason.
+#
+# Overrides:
+#   MARKET_ARGS="--dry-run"                         # fetch + log, don't insert
+#   MARKET_ARGS="--only-location-id=60003760"       # only poll Jita 4-4
+#   MARKET_ARGS="--log-level=DEBUG"                 # verbose per-page logs
+market-poll:
+	$(COMPOSE) --profile tools run --rm --build market_poller $(MARKET_ARGS)
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
