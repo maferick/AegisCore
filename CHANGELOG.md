@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Private Market Hub overlay — policy foundation (ADR-0005).**
+  Donor / admin-only feature laying canonical-hub identity on top
+  of the existing `market_watched_locations` driver table. Three
+  new tables:
+  - **`market_hubs`** — one row per unique
+    `(location_type, location_id)`. Jita gets backfilled as
+    `is_public_reference = true`; future donor-registered
+    structures land here as private hubs. Deletable only when not
+    the Jita baseline (mirrors `MarketWatchedLocation`'s guard).
+  - **`market_hub_collectors`** — zero-or-many tokens authorised
+    to poll a hub. Carries `is_primary`, `is_active`, and failure
+    bookkeeping (`last_failure_at`, `consecutive_failure_count`,
+    `failure_reason`) per ADR-0005 § Failover: the poller cycles
+    to a backup collector on ACL / 5xx failure and only freezes
+    the hub when zero active collectors remain.
+  - **`market_hub_entitlements`** — viewer grants. ENUM
+    `subject_type` = `user | corp | alliance` pre-wired for
+    phase-2 group sharing; v1 matches `user` only and logs a
+    warning if it sees group grants without a resolver.
+- **`MarketHubAccessPolicy`** — single chokepoint for the
+  intersection rule `can_view = (isDonor || isAdmin) AND
+  has_hub_access`. Public-reference hubs short-circuit. Exposes
+  `canView(User, MarketHub)`, `visibleHubsFor(User): Builder`,
+  and a lockstep test asserting both agree on the same fixture
+  set per ADR-0005.
+- **`User::isAdmin()`** — factored out of `canAccessPanel()` so
+  non-Filament feature policies (starting with the market hub
+  overlay) can check admin status without a Panel object. Preserves
+  the phase-1 escape hatch (no-linked-characters → admin) so
+  operator-seeded bootstrap accounts keep working.
+- **`users.default_private_market_hub_id`** — optional per-user
+  preference for the pinned comparison target. Entitlement loss
+  silently demotes the UI to "no default", never a hard error.
+- **`market_watched_locations.hub_id`** — nullable FK into the new
+  canonical table, backfilled for every existing row. Poller
+  migration to pick tokens via `market_hub_collectors` is a
+  follow-up.
+- See docs/adr/0005-private-market-hub-overlay.md.
 - **`python/outbox_relay/` — first concrete consumer of the
   MariaDB outbox; projects market events into InfluxDB.** Per
   ADR-0003 § InfluxDB and ADR-0004 § Live polling, InfluxDB is a
