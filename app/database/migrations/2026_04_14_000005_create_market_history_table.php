@@ -54,6 +54,20 @@ return new class extends Migration
         // is where MariaDB wants them (ALTER TABLE ... PARTITION BY
         // after-the-fact requires the table to be empty, which is fine
         // now but not on re-runs in branched envs).
+        //
+        // Defensive DROP IF EXISTS: an earlier broken version of this
+        // migration (see PR #56) wrapped the CREATE inside Schema::create,
+        // which made Laravel's Blueprint run an empty `CREATE TABLE ()`
+        // AFTER our DB::statement had already created the table. The
+        // Blueprint then errored with a syntax failure, and the migration
+        // was marked failed — but the table was already there. Since the
+        // failed migration also never recorded itself in the `migrations`
+        // table, subsequent runs would try to recreate the table and
+        // trip "Base table or view already exists". Dropping first makes
+        // recovery from that specific fail-state automatic. On clean
+        // installs it's a no-op; on a later `migrate:refresh` you'd
+        // expect the drop anyway.
+        DB::statement('DROP TABLE IF EXISTS market_history');
         DB::statement(<<<'SQL'
             CREATE TABLE market_history (
                 trade_date          DATE            NOT NULL,

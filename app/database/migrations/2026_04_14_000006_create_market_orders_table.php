@@ -66,6 +66,14 @@ return new class extends Migration
         // from the Blueprint BEFORE the DB::statement inside the closure
         // fired, which blew up on the empty column list. Dropping the
         // Blueprint wrapper is the fix.
+        //
+        // Defensive DROP IF EXISTS — same rationale as the twin comment
+        // in 2026_04_14_000005_create_market_history_table.php. An
+        // earlier-broken version of this migration could have created
+        // the table inside a failed Schema::create wrapper; dropping
+        // first makes recovery automatic on the re-run after the fix
+        // from PR #56 lands.
+        DB::statement('DROP TABLE IF EXISTS market_orders');
         DB::statement(<<<'SQL'
             CREATE TABLE market_orders (
                 observed_at         TIMESTAMP(6)    NOT NULL,
