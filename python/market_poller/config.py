@@ -95,7 +95,14 @@ class Config:
     @classmethod
     def from_env(cls, **overrides) -> "Config":
         def env(key: str, default: str | None = None, required: bool = False) -> str:
-            v = os.environ.get(key, default)
+            # Treat unset AND empty-string as "not provided" — compose
+            # passes empty strings into the container when an upstream
+            # env is unset (e.g. `${FOO:-}` expansion), and we want
+            # those to fall through to the documented default rather
+            # than land as "" on int()/parse_date()/etc. callers.
+            v = os.environ.get(key)
+            if not v:
+                v = default
             if required and not v:
                 raise RuntimeError(f"Missing required env var: {key}")
             return v or ""

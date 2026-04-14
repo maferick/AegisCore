@@ -446,7 +446,7 @@ services:
     build:
       context: ../python
       dockerfile: market_poller.Dockerfile
-    image: aegiscore/market-poller:0.1.0
+    image: aegiscore/market-poller:0.1.1
     container_name: market_poller
     profiles: [tools]
     user: "1000:1000"
@@ -510,7 +510,7 @@ services:
     build:
       context: ../python
       dockerfile: market_importer.Dockerfile
-    image: aegiscore/market-importer:0.1.0
+    image: aegiscore/market-importer:0.1.1
     container_name: market_importer
     profiles: [tools]
     user: "1000:1000"
@@ -562,7 +562,7 @@ services:
     build:
       context: ../python
       dockerfile: market_poller.Dockerfile
-    image: aegiscore/market-poller:0.1.0
+    image: aegiscore/market-poller:0.1.1
     container_name: market_poll_scheduler
     restart: unless-stopped
     user: "1000:1000"
@@ -615,7 +615,7 @@ services:
     build:
       context: ../python
       dockerfile: market_importer.Dockerfile
-    image: aegiscore/market-importer:0.1.0
+    image: aegiscore/market-importer:0.1.1
     container_name: market_import_scheduler
     restart: unless-stopped
     user: "1000:1000"
