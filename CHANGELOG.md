@@ -62,6 +62,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgrading an existing deployment: move any custom `*.cnf` files from
   `$AEGISCORE_ROOT/docker/mariadb/config/` into the tracked
   `mariadb/conf.d/` (and commit them) before `make restart mariadb`.
+- **MariaDB tuned for a 16 GiB memory budget (`mariadb/conf.d/aegiscore.cnf`).**
+  First real content in the new override file. `innodb_buffer_pool_size=12G`
+  takes ~75 % of the budget; the remaining ~4 GiB covers per-connection
+  buffers, temp tables (`tmp_table_size=64M`, `max_heap_table_size=64M`),
+  and OS / library overhead. InnoDB I/O knobs tuned for SSD
+  (`innodb_io_capacity=2000`, `_max=4000`, `innodb_flush_method=O_DIRECT`);
+  durability left at the ACID default (`innodb_flush_log_at_trx_commit=1`)
+  per ADR-0003's "MariaDB is canonical" posture. `max_connections=300`
+  covers php-fpm + Horizon + scheduler + Python pollers with headroom,
+  and `skip-name-resolve` drops the reverse-DNS round trip on auth since
+  all callers live on the internal `aegiscore` Docker network with no
+  PTR records. Slow-query log turned on at `long_query_time=1.0` into
+  `/var/log/mysql/slow.log` (bind-mounted to
+  `$AEGISCORE_ROOT/docker/mariadb/logs` for host-side logrotate).
+  Operators on smaller hosts should shrink `innodb_buffer_pool_size`
+  first, then `max_connections`; operators on ZFS should switch
+  `innodb_flush_method` to `fsync` so the buffer pool doesn't fight
+  the ARC; operators on spinning disk should drop `innodb_io_capacity`
+  and `_max` to ~200 / 400 so the flusher doesn't saturate the device.
 
 ### Added
 - **Private Market Hub overlay — policy foundation (ADR-0005).**
