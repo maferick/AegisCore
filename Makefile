@@ -38,6 +38,7 @@ help:
 	@echo "  make sde-import             download CCP's SDE and load all ref_* tables (one-shot)"
 	@echo "  make neo4j-sync-universe    project ref_* universe topology into Neo4j (one-shot)"
 	@echo "  make market-poll            pull order-book snapshots into market_orders (one-shot)"
+	@echo "  make market-import          import EVE Ref daily market-history CSVs (one-shot)"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -101,7 +102,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll market-import
 build:
 	$(COMPOSE) build
 
@@ -225,6 +226,26 @@ neo4j-sync-universe:
 #   MARKET_ARGS="--log-level=DEBUG"                 # verbose per-page logs
 market-poll:
 	$(COMPOSE) --profile tools run --rm --build market_poller $(MARKET_ARGS)
+
+# Import EVE Ref daily market-history CSV dumps into `market_history`.
+# Reconciles against totals.json — only (re)downloads days that are
+# missing locally or have fewer rows than the published total.
+# Idempotent on re-run: once a day is complete locally, the reconcile
+# check skips it.
+#
+# First-run backfill from 2025-01-01 → yesterday UTC takes a while
+# (~470 days × ~700 KB per download) but each day is its own
+# transaction so interrupting + restarting loses only the in-flight
+# day. Subsequent runs are quick — reconcile + 1-2 new days.
+#
+# Overrides:
+#   MARKET_IMPORT_ARGS="--dry-run"                          # fetch + count, don't commit
+#   MARKET_IMPORT_ARGS="--only-date=2026-04-14"             # single day only
+#   MARKET_IMPORT_ARGS="--from=2024-06-01 --to=2024-12-31"  # custom window
+#   MARKET_IMPORT_ARGS="--force-redownload"                 # bypass reconcile
+#   MARKET_IMPORT_ARGS="--log-level=DEBUG"
+market-import:
+	$(COMPOSE) --profile tools run --rm --build market_importer $(MARKET_IMPORT_ARGS)
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test

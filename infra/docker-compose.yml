@@ -479,6 +479,53 @@ services:
         condition: service_healthy
     networks: [aegiscore]
 
+  # market_importer — one-shot Python job that pulls EVE Ref's daily
+  # market-history CSV dumps from data.everef.net, reconciles them
+  # against the local `market_history` table via totals.json, and
+  # bulk-upserts every missing or partial day. Emits one
+  # `market.history_snapshot_loaded` outbox event per imported day.
+  #
+  # Run cadence: once per day after EVE Ref's scrape job publishes
+  # (they update throughout the day, so a 30-minute cadence also
+  # works — the reconcile check skips already-complete days cheaply).
+  # Phase 1 uses `make market-import`; schedule integration is the
+  # same pattern as market_poller (Laravel scheduler shells out).
+  market_importer:
+    build:
+      context: ../python
+      dockerfile: market_importer.Dockerfile
+    image: aegiscore/market-importer:0.1.0
+    container_name: market_importer
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      # EVE Ref source. Override base URL only if pointing at a mirror
+      # (none published as of this writing — data.everef.net is the
+      # only upstream). The user-agent follows the same convention as
+      # ESI_USER_AGENT so AegisCore traffic is identifiable to their
+      # operator.
+      EVEREF_BASE_URL: "${EVEREF_BASE_URL:-https://data.everef.net/market-history}"
+      EVEREF_TOTALS_URL: "${EVEREF_TOTALS_URL:-https://data.everef.net/market-history/totals.json}"
+      ESI_USER_AGENT: "${ESI_USER_AGENT:-AegisCore/0.1 (+ops@example.com)}"
+
+      # Import window + tuning. MARKET_IMPORT_MIN_DATE defaults to
+      # 2025-01-01 per ADR-0004 ("from 2025 forward"); pre-2025 history
+      # available from EVE Ref if an operator wants it.
+      MARKET_IMPORT_MIN_DATE: "${MARKET_IMPORT_MIN_DATE:-2025-01-01}"
+      MARKET_IMPORT_MAX_DATE: "${MARKET_IMPORT_MAX_DATE:-}"
+      MARKET_IMPORT_BATCH_SIZE: "${MARKET_IMPORT_BATCH_SIZE:-5000}"
+      MARKET_IMPORT_DOWNLOAD_TIMEOUT: "${MARKET_IMPORT_DOWNLOAD_TIMEOUT:-600}"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx

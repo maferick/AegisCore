@@ -8,6 +8,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`python/market_importer/` — EVE Ref historical market-history
+  importer (step 3 of ADR-0004's rollout).** Reconciles local
+  `market_history` rows against EVE Ref's published per-day totals
+  at `data.everef.net/market-history/totals.json`, downloads the
+  bz2-compressed CSV for every day that's missing or partial, and
+  bulk-upserts into MariaDB. One-shot container (`make market-import`)
+  — one invocation = one reconcile pass.
+  - **Ported from EVE Ref's Java `import-market-history` command**
+    rather than reusing it directly: their importer supports
+    PostgreSQL + H2 only, MariaDB is "planned" but not shipped.
+    Porting the logic (reconcile against totals.json, per-day
+    transactions, idempotent upserts) is ~500 lines of Python and
+    keeps our execution plane homogeneous with `sde_importer` +
+    `graph_universe_sync` + `market_poller`.
+  - **Idempotent by construction.** `INSERT ... ON DUPLICATE KEY UPDATE`
+    on the PK `(trade_date, region_id, type_id)` matches ADR-0004's
+    uniqueness contract. Re-running a day after a partial load, an
+    upstream count update, or a corrupt CSV converges on the
+    latest-EVEref-known values. Reconciliation skips already-complete
+    days cheaply — a repeat run after a successful import is
+    essentially a totals.json fetch + a local `COUNT(*) GROUP BY`
+    + exit.
+  - **Per-day transaction boundary.** `autocommit=False`; every day's
+    rows + outbox event commit together or roll back together. A
+    corrupt CSV mid-stream or an unexpected parser error rolls the
+    whole day back and the next run re-attempts from scratch.
+  - **Column-order-agnostic parser.** `csv.DictReader` keys by header
+    row, so EVE Ref could reshuffle columns upstream without breaking
+    us. Required columns asserted on first read — a missing column
+    fails fast as `CsvFormatError` rather than silently skipping
+    rows.
+  - **Source + observation_kind stamps.** Every row stamped with
+    `source = 'everef_market_history'` + `observation_kind =
+    'historical_dump'`, both defined in ADR-0004's enum set.
+    Provenance is a query away, not a grep-of-logs away.
+  - **Default import window 2025-01-01 → yesterday UTC** per
+    ADR-0004 ("from 2025 forward"). Operators can rewind to any date
+    EVE Ref has published (their dataset goes back to 2003-05-10);
+    pre-2025 loads pile into the `p2025_01` partition since the
+    migration only pre-creates 2025-01 through 2026-12 + MAXVALUE,
+    so earlier partitions want to be added first for proper pruning
+    on queries against those months.
+  - **Emits `market.history_snapshot_loaded`** into the outbox per
+    imported day (producer `market_importer`, version 1). Payload:
+    `{trade_date, rows_received, rows_affected, source,
+    observation_kind, loaded_at}`.
+  - Ships with its own `python/market_importer.Dockerfile`,
+    `python/requirements-market-import.txt`, a `market_importer`
+    service in `infra/docker-compose.yml` under the `tools` profile,
+    and a `make market-import` target (overrides via
+    `MARKET_IMPORT_ARGS="--from=... --to=..."`,
+    `"--only-date=..."`, `"--dry-run"`, `"--force-redownload"`).
+    Sibling to `sde_importer` / `graph_universe_sync` /
+    `market_poller`; `log.py` / `db.py` scaffolding is duplicated
+    for the fourth time. That's the "rule of three" tripwire — next
+    caller promotes the scaffolding to `python/_common/` and flips
+    all four to import from there.
 - **`python/market_poller/` — live market-data poller (step 2 of
   ADR-0004's rollout).** First concrete caller on the Python-plane
   ESI track flagged by ADR-0002 § phase-2 #12. One-shot container
