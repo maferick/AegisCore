@@ -43,64 +43,67 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('market_history', function () {
-            // Built via raw SQL so the RANGE partition clause + composite
-            // PK land in the `CREATE TABLE` statement where MariaDB wants
-            // them. Laravel's Blueprint doesn't model partitioning, and
-            // an `ALTER TABLE ... PARTITION BY` after-the-fact requires
-            // the table to be empty — which it is right now but won't
-            // be on a re-run in a branched env.
-            DB::statement(<<<'SQL'
-                CREATE TABLE market_history (
-                    trade_date          DATE            NOT NULL,
-                    region_id           INT UNSIGNED    NOT NULL,
-                    type_id             INT UNSIGNED    NOT NULL,
-                    average             DECIMAL(20, 2)  NOT NULL,
-                    highest             DECIMAL(20, 2)  NOT NULL,
-                    lowest              DECIMAL(20, 2)  NOT NULL,
-                    volume              BIGINT UNSIGNED NOT NULL,
-                    order_count         INT UNSIGNED    NOT NULL,
-                    http_last_modified  TIMESTAMP       NULL,
-                    source              VARCHAR(64)     NOT NULL,
-                    observation_kind    ENUM('historical_dump','incremental_poll') NOT NULL,
-                    created_at          TIMESTAMP       NULL,
-                    updated_at          TIMESTAMP       NULL,
-                    PRIMARY KEY (trade_date, region_id, type_id),
-                    KEY idx_market_history_region_type (region_id, type_id),
-                    KEY idx_market_history_type       (type_id)
-                )
-                ENGINE=InnoDB
-                DEFAULT CHARSET=utf8mb4
-                COLLATE=utf8mb4_unicode_ci
-                PARTITION BY RANGE COLUMNS (trade_date) (
-                    PARTITION p2025_01 VALUES LESS THAN ('2025-02-01'),
-                    PARTITION p2025_02 VALUES LESS THAN ('2025-03-01'),
-                    PARTITION p2025_03 VALUES LESS THAN ('2025-04-01'),
-                    PARTITION p2025_04 VALUES LESS THAN ('2025-05-01'),
-                    PARTITION p2025_05 VALUES LESS THAN ('2025-06-01'),
-                    PARTITION p2025_06 VALUES LESS THAN ('2025-07-01'),
-                    PARTITION p2025_07 VALUES LESS THAN ('2025-08-01'),
-                    PARTITION p2025_08 VALUES LESS THAN ('2025-09-01'),
-                    PARTITION p2025_09 VALUES LESS THAN ('2025-10-01'),
-                    PARTITION p2025_10 VALUES LESS THAN ('2025-11-01'),
-                    PARTITION p2025_11 VALUES LESS THAN ('2025-12-01'),
-                    PARTITION p2025_12 VALUES LESS THAN ('2026-01-01'),
-                    PARTITION p2026_01 VALUES LESS THAN ('2026-02-01'),
-                    PARTITION p2026_02 VALUES LESS THAN ('2026-03-01'),
-                    PARTITION p2026_03 VALUES LESS THAN ('2026-04-01'),
-                    PARTITION p2026_04 VALUES LESS THAN ('2026-05-01'),
-                    PARTITION p2026_05 VALUES LESS THAN ('2026-06-01'),
-                    PARTITION p2026_06 VALUES LESS THAN ('2026-07-01'),
-                    PARTITION p2026_07 VALUES LESS THAN ('2026-08-01'),
-                    PARTITION p2026_08 VALUES LESS THAN ('2026-09-01'),
-                    PARTITION p2026_09 VALUES LESS THAN ('2026-10-01'),
-                    PARTITION p2026_10 VALUES LESS THAN ('2026-11-01'),
-                    PARTITION p2026_11 VALUES LESS THAN ('2026-12-01'),
-                    PARTITION p2026_12 VALUES LESS THAN ('2027-01-01'),
-                    PARTITION p_future VALUES LESS THAN MAXVALUE
-                )
-            SQL);
-        });
+        // Raw DDL — not wrapped in `Schema::create()` because the
+        // Blueprint builder doesn't model partitions, composite PKs,
+        // or ENUM literals the way this schema needs. Wrapping it was
+        // the first attempt; Laravel then ran an empty `create table
+        // market_history ()` from the Blueprint BEFORE the `DB::statement`
+        // inside the closure, blowing up on the empty column list.
+        // Dropping the Blueprint wrapper is the fix. Partition clause +
+        // composite PK land in one CREATE TABLE statement below, which
+        // is where MariaDB wants them (ALTER TABLE ... PARTITION BY
+        // after-the-fact requires the table to be empty, which is fine
+        // now but not on re-runs in branched envs).
+        DB::statement(<<<'SQL'
+            CREATE TABLE market_history (
+                trade_date          DATE            NOT NULL,
+                region_id           INT UNSIGNED    NOT NULL,
+                type_id             INT UNSIGNED    NOT NULL,
+                average             DECIMAL(20, 2)  NOT NULL,
+                highest             DECIMAL(20, 2)  NOT NULL,
+                lowest              DECIMAL(20, 2)  NOT NULL,
+                volume              BIGINT UNSIGNED NOT NULL,
+                order_count         INT UNSIGNED    NOT NULL,
+                http_last_modified  TIMESTAMP       NULL,
+                source              VARCHAR(64)     NOT NULL,
+                observation_kind    ENUM('historical_dump','incremental_poll') NOT NULL,
+                created_at          TIMESTAMP       NULL,
+                updated_at          TIMESTAMP       NULL,
+                PRIMARY KEY (trade_date, region_id, type_id),
+                KEY idx_market_history_region_type (region_id, type_id),
+                KEY idx_market_history_type       (type_id)
+            )
+            ENGINE=InnoDB
+            DEFAULT CHARSET=utf8mb4
+            COLLATE=utf8mb4_unicode_ci
+            PARTITION BY RANGE COLUMNS (trade_date) (
+                PARTITION p2025_01 VALUES LESS THAN ('2025-02-01'),
+                PARTITION p2025_02 VALUES LESS THAN ('2025-03-01'),
+                PARTITION p2025_03 VALUES LESS THAN ('2025-04-01'),
+                PARTITION p2025_04 VALUES LESS THAN ('2025-05-01'),
+                PARTITION p2025_05 VALUES LESS THAN ('2025-06-01'),
+                PARTITION p2025_06 VALUES LESS THAN ('2025-07-01'),
+                PARTITION p2025_07 VALUES LESS THAN ('2025-08-01'),
+                PARTITION p2025_08 VALUES LESS THAN ('2025-09-01'),
+                PARTITION p2025_09 VALUES LESS THAN ('2025-10-01'),
+                PARTITION p2025_10 VALUES LESS THAN ('2025-11-01'),
+                PARTITION p2025_11 VALUES LESS THAN ('2025-12-01'),
+                PARTITION p2025_12 VALUES LESS THAN ('2026-01-01'),
+                PARTITION p2026_01 VALUES LESS THAN ('2026-02-01'),
+                PARTITION p2026_02 VALUES LESS THAN ('2026-03-01'),
+                PARTITION p2026_03 VALUES LESS THAN ('2026-04-01'),
+                PARTITION p2026_04 VALUES LESS THAN ('2026-05-01'),
+                PARTITION p2026_05 VALUES LESS THAN ('2026-06-01'),
+                PARTITION p2026_06 VALUES LESS THAN ('2026-07-01'),
+                PARTITION p2026_07 VALUES LESS THAN ('2026-08-01'),
+                PARTITION p2026_08 VALUES LESS THAN ('2026-09-01'),
+                PARTITION p2026_09 VALUES LESS THAN ('2026-10-01'),
+                PARTITION p2026_10 VALUES LESS THAN ('2026-11-01'),
+                PARTITION p2026_11 VALUES LESS THAN ('2026-12-01'),
+                PARTITION p2026_12 VALUES LESS THAN ('2027-01-01'),
+                PARTITION p_future VALUES LESS THAN MAXVALUE
+            )
+        SQL);
     }
 
     public function down(): void
