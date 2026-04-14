@@ -15,4 +15,54 @@
 # image bump, so it's where operator-visible tuning belongs.
 
 [mysqld]
-# (intentionally empty — add overrides below as the stack grows)
+# ===== Memory budget ≈ 16 GiB =====
+# InnoDB's buffer pool is the dominant consumer. Sized at ~75 % of the
+# 16 GiB budget; the remaining ~4 GiB covers per-connection buffers,
+# temp tables, and OS / library overhead under peak concurrency.
+#
+# Verify effective values on a running server with:
+#   docker compose exec mariadb mariadb -uroot -p \
+#     -e "SHOW VARIABLES LIKE 'innodb_buffer%'; \
+#         SHOW VARIABLES LIKE 'innodb_log%'; \
+#         SHOW VARIABLES LIKE 'max_connections';"
+innodb_buffer_pool_size        = 12G
+innodb_log_buffer_size         = 64M
+innodb_log_file_size           = 1G
+
+# In-memory temp tables before MariaDB spills them to disk — bumped
+# from the 16 M default so analytic joins over `ref_*` tables (SDE
+# imports) stay RAM-resident on a first pass.
+tmp_table_size                 = 64M
+max_heap_table_size            = 64M
+
+# ===== InnoDB durability + I/O =====
+# ACID on the canonical store: flush log on every commit. Per ADR-0003
+# MariaDB is the system of record — don't relax to 2 without accepting
+# that a host crash could lose up-to-1s of committed writes that the
+# outbox-relay replay story doesn't fully recover.
+innodb_flush_log_at_trx_commit = 1
+# O_DIRECT on ext4 / xfs so the buffer pool isn't double-cached by the
+# page cache. Switch to `fsync` on ZFS to avoid fighting the ARC.
+innodb_flush_method            = O_DIRECT
+# SSD-tuned I/O throughput; dial down (e.g. 200 / 400) on spinning
+# disk or the flusher will saturate the device.
+innodb_io_capacity             = 2000
+innodb_io_capacity_max         = 4000
+
+# ===== Connections =====
+# 300 ceiling covers php-fpm pool + Horizon workers + scheduler +
+# Python pollers (market-poller, outbox-relay, neo4j-sync, sde-importer)
+# + operator tooling headroom. Each connection's per-session buffers
+# stay at MariaDB defaults, so worst-case extra RAM is bounded.
+max_connections                = 300
+# All clients live on the internal `aegiscore` Docker network and have
+# no PTR records — skip the reverse-DNS round trip on auth so a slow /
+# missing resolver doesn't stall login.
+skip-name-resolve
+
+# ===== Slow-query log =====
+# /var/log/mysql is bind-mounted to $AEGISCORE_ROOT/docker/mariadb/logs
+# on the host. Rotate via host-side logrotate, not inside the container.
+slow_query_log                 = 1
+slow_query_log_file            = /var/log/mysql/slow.log
+long_query_time                = 1.0
