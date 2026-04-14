@@ -1,0 +1,13 @@
+# outbox_relay deps.
+#
+# Reads from MariaDB (pymysql), writes to InfluxDB
+# (influxdb-client). Pinned to minor for reproducible image
+# builds; patch bumps for security fixes are fine.
+influxdb-client~=1.45
+pymysql~=1.1
+# influxdb-client pulls in urllib3, certifi, reactivex, setuptools
+# transitively — listed here for visibility:
+#   urllib3 (HTTP transport)
+#   certifi (CA bundle)
+#   reactivex (used by the BATCHING write mode; we use SYNCHRONOUS,
+#              still a transitive dep)

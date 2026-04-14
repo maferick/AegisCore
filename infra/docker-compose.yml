@@ -640,6 +640,96 @@ services:
         condition: service_healthy
     networks: [aegiscore]
 
+  # outbox_relay — long-lived consumer of the MariaDB `outbox` table.
+  # Routes `market.*` events to typed projectors that write derived
+  # series to InfluxDB. Per ADR-0003 § InfluxDB: derived store, Python
+  # writes, no canonical ownership — InfluxDB can be dropped + rebuilt
+  # from MariaDB at any time.
+  #
+  # Phase-1 routing surface (see python/outbox_relay/projectors/dispatch.py):
+  #
+  #   market.history_snapshot_loaded   → measurement `market_history`
+  #   market.orders_snapshot_ingested  → measurement `market_orderbook`
+  #
+  # Unknown event_types are LEFT IN PLACE (not marked processed) so a
+  # future projector deployment can pick them up. The relay's claim
+  # WHERE filters on the registered event types only.
+  #
+  # Failure handling: a projector that throws bumps `attempts` +
+  # records `last_error` on the outbox row but does NOT mark
+  # processed. After OUTBOX_RELAY_MAX_ATTEMPTS the row stops being
+  # claimed (parked as a dead letter). Operator resets attempts to
+  # 0 to retry — typical recovery after fixing a projector bug.
+  #
+  # `make outbox-relay` runs a one-shot drain via the tools profile
+  # (separate transient container); useful for "process the backlog
+  # now" or testing a projector change.
+  outbox_relay:
+    build:
+      context: ../python
+      dockerfile: outbox_relay.Dockerfile
+    image: aegiscore/outbox-relay:0.1.0
+    container_name: outbox_relay
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+
+      # InfluxDB sink. Token must have write access to BUCKET in ORG.
+      INFLUXDB_HOST: "http://influxdb2:8086"
+      INFLUXDB_TOKEN: "${INFLUXDB_ADMIN_TOKEN}"
+      INFLUXDB_ORG: "${INFLUXDB_ORG:-aegiscore}"
+      INFLUXDB_BUCKET: "${INFLUXDB_BUCKET:-primary}"
+
+      # Relay-loop knobs. Defaults match the docstring on
+      # outbox_relay/config.py; tune per deployment only if needed.
+      OUTBOX_RELAY_BATCH_SIZE: "${OUTBOX_RELAY_BATCH_SIZE:-50}"
+      OUTBOX_RELAY_MAX_ATTEMPTS: "${OUTBOX_RELAY_MAX_ATTEMPTS:-5}"
+      OUTBOX_RELAY_POLL_INTERVAL_SECONDS: "${OUTBOX_RELAY_POLL_INTERVAL_SECONDS:-5}"
+    command: ["--interval", "${OUTBOX_RELAY_POLL_INTERVAL_SECONDS:-5}"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      influxdb2:
+        condition: service_healthy
+    networks: [aegiscore]
+
+  # outbox_relay_oneshot — sibling under the `tools` profile that
+  # runs `python -m outbox_relay` with no --interval (drain-once
+  # mode). Triggered by `make outbox-relay` for ad-hoc backlog
+  # processing or projector-change testing without restarting the
+  # long-lived service.
+  outbox_relay_oneshot:
+    build:
+      context: ../python
+      dockerfile: outbox_relay.Dockerfile
+    image: aegiscore/outbox-relay:0.1.0
+    container_name: outbox_relay_oneshot
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      INFLUXDB_HOST: "http://influxdb2:8086"
+      INFLUXDB_TOKEN: "${INFLUXDB_ADMIN_TOKEN}"
+      INFLUXDB_ORG: "${INFLUXDB_ORG:-aegiscore}"
+      INFLUXDB_BUCKET: "${INFLUXDB_BUCKET:-primary}"
+      OUTBOX_RELAY_BATCH_SIZE: "${OUTBOX_RELAY_BATCH_SIZE:-50}"
+      OUTBOX_RELAY_MAX_ATTEMPTS: "${OUTBOX_RELAY_MAX_ATTEMPTS:-5}"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      influxdb2:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx

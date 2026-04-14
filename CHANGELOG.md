@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`python/outbox_relay/` — first concrete consumer of the
+  MariaDB outbox; projects market events into InfluxDB.** Per
+  ADR-0003 § InfluxDB and ADR-0004 § Live polling, InfluxDB is a
+  derived store written by Python. Until now the
+  `market.history_snapshot_loaded` and
+  `market.orders_snapshot_ingested` outbox events were piling up
+  with no consumer. The new long-lived `outbox_relay` container
+  drains them on a 5-second poll cadence and writes typed
+  measurements to InfluxDB.
+  - **Two projectors registered in
+    `projectors/dispatch.py::PROJECTOR_REGISTRY`:**
+    - `market.history_snapshot_loaded` →
+      measurement **`market_history`** (one point per
+      `(region_id, type_id)` per `trade_date`, 1:1 from MariaDB
+      rows). Cardinality: ~1.4M unique series total.
+    - `market.orders_snapshot_ingested` →
+      measurement **`market_orderbook`** (one point per
+      `(type_id, side)` per snapshot — *aggregates*, not per-order
+      points). Fields: `best_price`, `weighted_avg_price`,
+      `total_volume_remain`, `order_count`. Aggregation chosen
+      over raw-order points because per-`order_id` series would
+      blow up cardinality and never get queried.
+  - **Claim pattern: `SELECT ... FOR UPDATE SKIP LOCKED LIMIT N`**
+    per CONTRACTS.md. Filtered by `event_type IN (known projectors)`
+    so unknown event types stay in the queue for future projector
+    deployments — adding a Neo4j or OpenSearch consumer later
+    doesn't require re-emitting events.
+  - **Dead-letter discipline.** Projector failures bump
+    `attempts` + record `last_error` on the row but don't poison
+    the batch. After `OUTBOX_RELAY_MAX_ATTEMPTS` (default 5) the
+    row stops being claimed; operator resets `attempts=0` to
+    retry after fixing the root cause.
+  - **Two-connection design.** Outbox-claim connection
+    (`autocommit=False`, holds the row lock); projector-read
+    connection (`autocommit=True`, runs the
+    `market_history` / `market_orders` SELECTs). Separates the
+    claim transaction from the projector's potentially-long
+    DB read so the row lock isn't held for the whole projection.
+  - **CLI mirrors the established pattern:** `--interval N`
+    (loop forever, sleep N seconds when idle) for the long-lived
+    container; `--interval 0` (default) drains the queue once and
+    exits — what `make outbox-relay` invokes via the `tools`
+    profile sibling service `outbox_relay_oneshot`. Both share
+    the same image (`aegiscore/outbox-relay:0.1.0`).
+  - Ships with `python/outbox_relay.Dockerfile`,
+    `python/requirements-outbox-relay.txt` (httpx-free; uses
+    `influxdb-client~=1.45` + `pymysql~=1.1`), two compose
+    services (long-lived + tools-profile one-shot), and a
+    `make outbox-relay` target.
+  - **Adding a new projector** is a 2-line change: drop a module
+    under `projectors/`, add one entry to `PROJECTOR_REGISTRY`.
+    The relay framework itself never knows about specific event
+    types.
+
 ### Fixed
 - **`market_poll_scheduler` crashed on every restart with
   `unrecognized arguments: --interval 300`.** Compose's default
