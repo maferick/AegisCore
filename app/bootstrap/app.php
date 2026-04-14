@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // registered explicitly — the framework only auto-discovers
         // the default path.
         \App\Reference\Console\CheckSdeVersionCommand::class,
+        \App\Domains\UsersCharacters\Console\PollDonationsCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting

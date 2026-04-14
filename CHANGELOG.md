@@ -44,8 +44,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     pointing at the page; replaces the old "Log in with EVE Online"
     user-menu item, which (in the admin context) was confusing
     because the operator is already logged in.
+- **EVE donations character SSO flow + 5-minute wallet poller.** Third
+  SSO flow alongside login + service. Built around a single in-game
+  character that *receives* ISK donations from supporters; future
+  ad-removal logic gates on whether a logged-in user has donated —
+  donor → user linkage materialises automatically without any manual
+  step. ADR-0002 § phase-2 amendment carries the design rationale.
+  - **Hard character lock at the SSO callback.**
+    `EVE_SSO_DONATIONS_CHARACTER_ID` env var pins the flow to one
+    EVE character ID. The callback rejects mismatched authorisations
+    with a clear "log out of EVE SSO and re-authorise as the correct
+    character" error rather than upserting the wrong-character token.
+    Single scope: `esi-wallet.read_character_wallet.v1`. Deliberately
+    excludes `publicData` since donor names resolve via the unauth'd
+    `/universe/names/` endpoint. New admin-only route
+    `/auth/eve/donations-redirect` kicks off the round-trip; same
+    `/auth/eve/callback` dispatches by session-stashed `flow` marker
+    (`'login'` / `'service'` / `'donations'`).
+  - **New `eve_donations_tokens` table.** Sibling of
+    `eve_service_tokens` (not shared with a `kind` column) so the
+    boundary is enforced at the schema level — a buggy donations
+    poller can't SQL-typo its way to a service token (or vice
+    versa). Same `'encrypted'` cast + `$hidden` pattern. Singleton:
+    one row per stack, upserted on `character_id`.
+  - **Reactive Laravel-side refresh.**
+    `EveSsoClient::refreshAccessToken()` + new `EveSsoRefreshedToken`
+    DTO. Single-character + single-scheduler-instance means no
+    distributed lock yet (per ADR-0002's original "needs locks
+    eventually" caveat). The poller refreshes when
+    `isAccessTokenFresh()` is false, persists the rotated refresh
+    token before doing anything else, and warns if the refresh
+    response drops the wallet scope (donor revoked the app on
+    `community.eveonline.com/support/third-party-applications`).
+  - **5-minute wallet poller.**
+    `App\Domains\UsersCharacters\Jobs\PollDonationsWallet` dispatched
+    via `php artisan eve:poll-donations` (also runs `--sync` for
+    operator debugging). Scheduled from `routes/console.php` via
+    `EVE_DONATIONS_POLL_CRON` (default `*/5 * * * *`); wallet journal
+    is cached server-side ~1h by CCP so most ticks are conditional-GET
+    304-cheap. Filters `ref_type === 'player_donation'`, upserts by
+    `journal_ref_id` (CCP's primary key for the journal entry → idempotent
+    re-runs), then resolves new donor names via batched
+    `POST /universe/names/`. `withoutOverlapping(10)` belt-and-braces
+    against a stalled tick double-rotating the refresh token.
+  - **`eve_donations` table.** `journal_ref_id` UNIQUE for the
+    upsert. `donor_character_id` indexed for the
+    `User::isDonor()` join; deliberately NO foreign key to
+    `characters.character_id` — donors don't need an AegisCore
+    account to donate. When they later log in via SSO, the existing
+    `upsertCharacterAndUser()` flow creates the character row keyed
+    on the same ID and the predicate starts returning true with
+    zero migration. ISK amount stored as `DECIMAL(20, 2)` for exact
+    precision (a float cast loses ISK on large donations).
+  - **`User::isDonor()` predicate.** One-line gate for future
+    ad-removal logic (`if (! $user->isDonor()) { renderAds(); }`).
+    No visible "donor" UI surface — the linkage exists only in
+    code so it's ready when ads land, without requiring any
+    cross-cutting refactor at that point.
+  - **Filament page `/admin/eve-donations`.** Token status panel
+    (character + scopes + freshness + audit-trail), authorise CTA,
+    and a 50-row donations ledger with donor name + ISK + reason
+    + timestamp. Aggregate footer shows total ISK and unique donor
+    count, both summed in SQL to keep DECIMAL precision exact.
+    Hides itself from navigation when SSO or the donations
+    character ID isn't configured. Stored token character vs.
+    configured character mismatch surfaces a rose-coloured warning
+    panel (the SSO callback should never let it in, but defensive).
+  - **Admin user-menu entry "Authorise donations character"**, only
+    when both SSO is configured and `EVE_SSO_DONATIONS_CHARACTER_ID`
+    is set — same gate the navigation entry uses, so neither shows
+    a dead-end click.
 
 ### Changed
+- **Landing page hero gets a large brand-mark SVG.** The same hex
+  shield from the header / favicon, sized
+  `clamp(140px, 18vw, 220px)` so it scales with viewport width but
+  never dwarfs the text. Sits left of the existing hero copy
+  (`AegisCore — defensive intel platform for New Eden`) on a
+  flex two-column layout, with a subtle 5s cyan drop-shadow pulse
+  via CSS `@keyframes`. Honours `prefers-reduced-motion` (animation
+  disabled). Stacks vertically below 720px viewport width, hidden
+  entirely below 480px so phone screens don't waste vertical
+  real-estate before the CTAs. Pure CSS — no Tailwind utility
+  classes (the landing page deliberately stays self-contained
+  inline styles).
 - **Landing page rebuild.** Inline brand-mark SVG + wordmark in the
   header (links back to home), with a hover-glow filter on the mark.
   Right side of the header now hosts both the new authenticated user

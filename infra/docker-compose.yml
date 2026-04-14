@@ -243,6 +243,15 @@ services:
       # Comma-separated EVE character IDs that get Filament /admin access.
       # IDs (not names) — names are mutable, IDs are not. See ADR-0002.
       EVE_SSO_ADMIN_CHARACTER_IDS: "${EVE_SSO_ADMIN_CHARACTER_IDS:-}"
+      # Donations character (third SSO flow) — single in-game character
+      # that receives ISK donations. The poller hits its wallet journal
+      # on EVE_DONATIONS_POLL_CRON cadence and records player_donation
+      # entries. Empty CHARACTER_ID disables both the SSO flow + the
+      # poller. See ADR-0002 § phase-2 amendment + .env.example.
+      EVE_SSO_DONATIONS_CHARACTER_ID: "${EVE_SSO_DONATIONS_CHARACTER_ID:-}"
+      EVE_SSO_DONATIONS_CHARACTER_NAME: "${EVE_SSO_DONATIONS_CHARACTER_NAME:-}"
+      EVE_SSO_DONATIONS_SCOPES: "${EVE_SSO_DONATIONS_SCOPES:-esi-wallet.read_character_wallet.v1}"
+      EVE_DONATIONS_POLL_CRON: "${EVE_DONATIONS_POLL_CRON:-*/5 * * * *}"
 
       # ---------------------------------------------------------------
       # ESI — esi.evetech.net (light synchronous calls only on this plane)

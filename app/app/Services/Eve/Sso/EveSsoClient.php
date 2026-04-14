@@ -162,6 +162,69 @@ final class EveSsoClient
     }
 
     /**
+     * Trade a stored refresh token for a fresh access token.
+     *
+     * Used by sustained-polling callers (currently the donations
+     * wallet poller; the Python execution plane will take over for
+     * heavier workloads — see ADR-0002 § phase-2 amendment). EVE SSO
+     * v2 returns a new refresh token on every call (token rotation),
+     * so callers MUST persist `$refreshed->refreshToken` even when it
+     * looks unchanged — failing to do so eventually invalidates the
+     * stored token and we lose ESI access until a manual re-auth.
+     *
+     * Caller is responsible for distributed locking when multiple
+     * processes might hold the same refresh token. Single-instance
+     * scheduler (the donations case) doesn't need a lock; the
+     * Python plane will when it lands.
+     */
+    public function refreshAccessToken(string $refreshToken): EveSsoRefreshedToken
+    {
+        $response = Http::asForm()
+            ->withBasicAuth($this->clientId, $this->clientSecret)
+            ->withHeaders([
+                'Host' => 'login.eveonline.com',
+            ])
+            ->post($this->tokenUrl, [
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $refreshToken,
+            ]);
+
+        if (! $response->successful()) {
+            throw new EveSsoException(
+                "EVE SSO token refresh failed: HTTP {$response->status()} — {$response->body()}",
+            );
+        }
+
+        /** @var array<string, mixed> $data */
+        $data = $response->json();
+
+        $accessToken = (string) ($data['access_token'] ?? '');
+        $newRefreshToken = (string) ($data['refresh_token'] ?? '');
+
+        if ($accessToken === '' || $newRefreshToken === '') {
+            throw new EveSsoException(
+                'EVE SSO token refresh returned an incomplete response (missing access or refresh token).',
+            );
+        }
+
+        // Re-decode the JWT — character + scopes can drift on refresh
+        // (e.g. the user revoked one scope on
+        // https://community.eveonline.com/support/third-party-applications/).
+        // The poller uses these to detect "we no longer have the
+        // scopes we thought we did" and raise an alert.
+        $identity = $this->decodeJwtPayload($accessToken);
+
+        return new EveSsoRefreshedToken(
+            accessToken: $accessToken,
+            refreshToken: $newRefreshToken,
+            expiresIn: (int) ($data['expires_in'] ?? 0),
+            characterId: $identity['character_id'],
+            characterName: $identity['name'],
+            scopes: $identity['scopes'],
+        );
+    }
+
+    /**
      * Unverified JWT payload decode.
      *
      * We DO NOT verify the signature. See class docblock + ADR-0002 for the

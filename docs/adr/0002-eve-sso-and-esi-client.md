@@ -257,3 +257,54 @@ Phase 2 (separate ADR amendment):
     refresh token). Reactive Laravel-side refresh would land in another
     PR if the first sustained polling work proves we need it before the
     Python plane is built.
+13. ~~Donations character (third SSO flow) + 5-minute wallet poller.~~
+    Landed early as the first Laravel-side sustained polling caller.
+    Architecture summary, kept here so future readers don't have to
+    spelunk PRs:
+
+    - **Third token kind, separate table.** `eve_donations_tokens`
+      lives alongside `eve_service_tokens` rather than sharing one
+      table with a `kind` column. Schema-level boundary so a buggy
+      donations poller cannot SQL-typo its way to a service-character
+      token (or vice versa). Same `'encrypted'` cast pattern, same
+      `$hidden` columns; only the table name differs.
+    - **Hard character lock.** `EVE_SSO_DONATIONS_CHARACTER_ID` env
+      var pins the flow to one EVE character. The SSO callback rejects
+      mismatched authorisations with an error — never upserts a
+      wrong-character token. Donations-flow scope set is a single
+      `esi-wallet.read_character_wallet.v1`; deliberately excludes
+      `publicData` since donor name resolution uses the unauth'd
+      `/universe/names/` endpoint.
+    - **Reactive Laravel-side refresh.** Conditions in the original
+      "Phase 2 #12" entry above (single-character, single-instance
+      scheduler) are met: no distributed lock needed yet. The
+      `EveSsoClient::refreshAccessToken()` method + `EveSsoRefreshedToken`
+      DTO handle the rotation. Callers MUST persist the new
+      `refresh_token` returned on every refresh — CCP rotates them on
+      every call. When/if a second polling caller appears that breaks
+      the single-instance assumption, add a row-level advisory lock
+      keyed on the token's primary key before the refresh.
+    - **Donor → user linkage by character ID, no denormalisation.**
+      `eve_donations.donor_character_id` is the only link;
+      `User::isDonor()` joins through `characters.character_id` to
+      detect donors. Donors don't need an AegisCore account to donate
+      — when they later log in via SSO, the existing
+      `upsertCharacterAndUser()` flow creates the row with the same
+      character ID and the predicate starts returning true
+      automatically. No backfill, no migration. The future ad-removal
+      gate is therefore a one-line `if (! $user->isDonor())` check
+      rather than a cross-cutting refactor.
+    - **Plane boundary.** Strictly speaking 5-minute polling belongs
+      on the Python execution plane per this ADR's split. But: a
+      single character + single endpoint + 5-minute cadence + dozens
+      of donors total stays well inside the < 100-row guidance and
+      the < 2s budget per tick. When the donor base outgrows that
+      (or any second sustained-polling caller lands on Laravel and
+      the bookkeeping multiplies), this whole job hands off — the
+      scheduler entry just dispatches a Python task instead of a
+      PHP job.
+
+    See `App\Domains\UsersCharacters\Jobs\PollDonationsWallet`,
+    `App\Filament\Pages\EveDonations`, and the
+    `2026_04_14_000002_create_eve_donations_tokens_table.php` /
+    `2026_04_14_000003_create_eve_donations_table.php` migrations.
