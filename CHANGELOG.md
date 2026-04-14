@@ -8,6 +8,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Admin-owned player-structure polling (step 4a of ADR-0004's
+  rollout).** The Python market poller can now read
+  `/markets/structures/{id}/` for `market_watched_locations` rows
+  with `location_type = 'player_structure'` and `owner_user_id IS
+  NULL`, using the `eve_service_tokens` singleton the Laravel
+  `/admin/eve-service-character` flow authored. Donor-owned
+  structure polling (`owner_user_id = <user>`, backed by
+  `eve_market_tokens`) stays deferred to step 5.
+  - **`market_poller/laravel_encrypter.py`** — Laravel-compatible
+    AES-256-CBC + HMAC-SHA256 `'encrypted'` cast interop. Reads and
+    writes the same envelope format Laravel 12's
+    `Illuminate\Encryption\Encrypter` uses, so tokens the PHP plane
+    wrote can be decrypted by Python and rotated refresh tokens can
+    be re-encrypted back into the shared row. Only AES-256-CBC
+    (Laravel's default cipher) is supported; AES-256-GCM envelopes
+    raise an explicit "not supported" error rather than producing
+    wrong plaintext. APP_KEY parsing handles both the
+    `base64:xxx` form Laravel writes and a bare base64 string.
+    19 stdlib-unittest cases cover round-trip, APP_KEY parsing,
+    MAC tamper detection (flipped iv/value/mac all reject), wrong-key
+    rejection, envelope structure validation (bad base64 / bad JSON
+    / missing fields / non-object), and the AES-GCM rejection path.
+  - **`market_poller/sso.py`** — `POST /v2/oauth/token` refresh via
+    `httpx`, mirroring the Laravel `EveSsoClient::refreshAccessToken()`
+    shape (Basic auth with client_id/secret, `Host:
+    login.eveonline.com` belt-and-braces header, unverified JWT
+    payload decode for character_id + scopes). Typed error classes:
+    `SsoTransientError` (5xx/network/timeout; retry next tick),
+    `SsoPermanentError` (400/401; stale refresh_token or user
+    revoked app — no auto-retry), `SsoMalformedResponseError`
+    (missing fields or wrong JWT shape).
+  - **`market_poller/auth.py`** — loads the singleton
+    `eve_service_tokens` row under `SELECT ... FOR UPDATE` so a
+    hypothetical second poller instance serialises on the row lock
+    rather than double-rotating the refresh token (which CCP
+    invalidates on every refresh — that's how tokens die). Refresh
+    triggers at `expires_at <= now() + 60s`. Persists the rotated
+    refresh token BEFORE using the new access token for anything, so
+    a crash between refresh and first use doesn't orphan the
+    credential. Scope-gates the token: missing
+    `esi-markets.structure_markets.v1` is a security-boundary
+    violation (`ServiceTokenScopeMissing`) that maps to immediate
+    row disable with `disabled_reason = 'scope_missing'`, no grace
+    counter.
+  - **`market_poller/esi.py`** — new `structure_orders(structure_id,
+    access_token)` generator mirrors `region_orders()` shape,
+    paginates via `X-Pages`, sends `Authorization: Bearer <token>`.
+    The `RawOrder` dataclass's `system_id` field now documents that
+    it's 0 for structure-endpoint orders (field not returned by
+    CCP; also not persisted into `market_orders`).
+  - **`market_poller/runner.py`** — branches on `location_type`:
+    NPC stations take the existing region-orders path; admin-owned
+    structures take the new service-token path. Service token is
+    loaded LAZILY + CACHED: stacks with no structure rows never
+    touch the token, and the first structure row in a pass pays the
+    load + refresh round-trip that every subsequent structure row
+    reuses (including the cached error — one failed load doesn't
+    retry for every row). Donor-owned rows are log-skipped pending
+    step 5. New failure classification: `ServiceTokenNotConfigured`
+    and `ServiceTokenMissing` are routine skips (no failure-counter
+    tick — APP_KEY unset or admin hasn't authorised yet, both
+    legitimate); `ServiceTokenScopeMissing` is immediate disable;
+    everything else buckets with transient 5xx.
+  - **Compose + requirements wired:** `market_poller` service
+    receives `APP_KEY`, `EVE_SSO_CLIENT_ID`,
+    `EVE_SSO_CLIENT_SECRET`, `EVE_SSO_TOKEN_URL` via existing env
+    passthrough. New dep `cryptography~=43.0` added to
+    `requirements-market.txt` for the AES implementation.
 - **`python/market_importer/` — EVE Ref historical market-history
   importer (step 3 of ADR-0004's rollout).** Reconciles local
   `market_history` rows against EVE Ref's published per-day totals

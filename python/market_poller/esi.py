@@ -70,14 +70,16 @@ class TransientEsiError(EsiError):
 
 @dataclass(frozen=True)
 class RawOrder:
-    """The subset of ESI order fields we persist. Matches the shape of
-    /markets/{region_id}/orders/ entries; see
-    https://esi.evetech.net/ui/#/Market/get_markets_region_id_orders."""
+    """The subset of ESI order fields we persist. Covers both
+    `/markets/{region_id}/orders/` and `/markets/structures/{id}/`.
+    The structure endpoint omits `system_id` from its response — we
+    tolerate that by defaulting to 0 at parse time; the column isn't
+    persisted in `market_orders` so it's a harmless placeholder."""
 
     order_id: int
     type_id: int
     location_id: int
-    system_id: int
+    system_id: int  # 0 for structure-endpoint orders (field not returned).
     is_buy_order: bool
     price: float
     volume_remain: int
@@ -144,11 +146,69 @@ class EsiClient:
             self._respect_rate_limits(resp)
             page += 1
 
+    def structure_orders(self, structure_id: int, access_token: str) -> Iterator[RawOrder]:
+        """Stream orders from `/markets/structures/{id}/`. Requires a
+        Bearer token scoped `esi-markets.structure_markets.v1` whose
+        underlying character has docking access at the structure.
+
+        The structure endpoint is location-specific (unlike the region
+        endpoint + filter pattern), so every returned order already
+        belongs to this structure. No client-side filter is needed;
+        callers pass `filter_location_id=None` into `persist.insert_orders`.
+
+        `system_id` is not in the structure endpoint's response — we
+        default to 0 in RawOrder. The column isn't persisted into
+        `market_orders` so it's a typed placeholder, not lost data.
+        """
+        page = 1
+        total_pages = 1
+        while page <= total_pages:
+            log.debug(
+                "fetching structure orders page",
+                structure_id=structure_id,
+                page=page,
+                total_pages=total_pages,
+            )
+            resp = self._get(
+                f"/markets/structures/{structure_id}/",
+                params={"page": page},
+                access_token=access_token,
+            )
+            if page == 1:
+                total_pages = int(resp.headers.get("x-pages", "1"))
+
+            for entry in resp.json():
+                yield RawOrder(
+                    order_id=int(entry["order_id"]),
+                    type_id=int(entry["type_id"]),
+                    location_id=int(entry["location_id"]),
+                    system_id=0,
+                    is_buy_order=bool(entry["is_buy_order"]),
+                    price=float(entry["price"]),
+                    volume_remain=int(entry["volume_remain"]),
+                    volume_total=int(entry["volume_total"]),
+                    min_volume=int(entry["min_volume"]),
+                    range=str(entry["range"]),
+                    duration=int(entry["duration"]),
+                    issued=str(entry["issued"]),
+                )
+
+            self._respect_rate_limits(resp)
+            page += 1
+
     # -- internals --------------------------------------------------------
 
-    def _get(self, path: str, params: dict | None = None) -> httpx.Response:
+    def _get(
+        self,
+        path: str,
+        params: dict | None = None,
+        access_token: str | None = None,
+    ) -> httpx.Response:
+        headers: dict[str, str] | None = None
+        if access_token is not None:
+            headers = {"Authorization": f"Bearer {access_token}"}
         try:
-            resp = self._http.get(path, params=params)
+            resp = self._http.get(path, params=params, headers=headers)
         except httpx.TimeoutException as exc:
             raise TransientEsiError(None, f"timeout on GET {path}: {exc}") from exc
         except httpx.RequestError as exc:

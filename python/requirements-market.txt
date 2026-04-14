@@ -2,11 +2,18 @@
 #
 # Pulls order-book snapshots from ESI (httpx), reads driver rows +
 # writes market_orders + outbox events to MariaDB (pymysql), stamps
-# outbox event_ids with ULIDs. Pinned to minor so image builds are
-# reproducible; patch bumps for security fixes are fine.
+# outbox event_ids with ULIDs. `cryptography` powers
+# laravel_encrypter.py, which decrypt/encrypts eve_service_tokens
+# rows so the Python plane can read + rotate Laravel-authored tokens
+# for admin-owned structure polling (ADR-0004 § Live polling +
+# ADR-0002 § phase-2 #12).
+#
+# Pinned to minor so image builds are reproducible; patch bumps for
+# security fixes are fine.
 httpx~=0.27
 pymysql~=1.1
 python-ulid~=3.0
+cryptography~=43.0
 # python-ulid 3.0.x has an unconditional `from typing_extensions import Self`
 # but only declares typing_extensions as a dep on Python < 3.11 — fine on
 # 3.10, blows up at import time on 3.12 (our base image). Pin it ourselves

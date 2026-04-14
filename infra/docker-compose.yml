@@ -474,6 +474,22 @@ services:
       MARKET_POLL_MAX_CONSECUTIVE_403S: "${MARKET_POLL_MAX_CONSECUTIVE_403S:-3}"
       MARKET_POLL_MAX_CONSECUTIVE_5XX: "${MARKET_POLL_MAX_CONSECUTIVE_5XX:-5}"
       MARKET_POLL_BATCH_SIZE: "${MARKET_POLL_BATCH_SIZE:-5000}"
+
+      # Auth surface for admin-owned structure polling (ADR-0004 step 4).
+      # APP_KEY is the Laravel encryption key — required so the Python
+      # plane can decrypt the eve_service_tokens row the Laravel
+      # `/admin/eve-service-character` flow wrote, and re-encrypt the
+      # rotated refresh_token back into it. EVE_SSO_CLIENT_ID / SECRET
+      # are the same CCP app credentials the Laravel plane uses; we
+      # need them to hit POST /v2/oauth/token for refreshes.
+      #
+      # Empty values are fine on a stack that doesn't poll player
+      # structures yet — the runner skips player_structure rows with
+      # a log line rather than erroring out.
+      APP_KEY: "${APP_KEY:-}"
+      EVE_SSO_CLIENT_ID: "${EVE_SSO_CLIENT_ID:-}"
+      EVE_SSO_CLIENT_SECRET: "${EVE_SSO_CLIENT_SECRET:-}"
+      EVE_SSO_TOKEN_URL: "${EVE_SSO_TOKEN_URL:-https://login.eveonline.com/v2/oauth/token}"
     depends_on:
       mariadb:
         condition: service_healthy

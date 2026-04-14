@@ -15,10 +15,16 @@ from dataclasses import dataclass, field, replace
 
 # Kinds of watched location this package knows how to poll. The runner
 # filters the driver-table query by this set; anything else is logged
-# and skipped. Phase 1 ships `npc_station` only — structure polling
-# needs auth'd ESI + the eve_market_tokens table and lands in a later
-# rollout step per ADR-0004.
-SUPPORTED_LOCATION_TYPES: frozenset[str] = frozenset({"npc_station"})
+# and skipped.
+#
+#   - npc_station:     region endpoint + client-side location filter,
+#                      no auth.
+#   - player_structure: admin-owned (owner_user_id IS NULL) paths use
+#                      the eve_service_tokens service character; donor-
+#                      owned (owner_user_id = <user>) paths use
+#                      eve_market_tokens and land in the next rollout
+#                      step (ADR-0004 § donor self-service).
+SUPPORTED_LOCATION_TYPES: frozenset[str] = frozenset({"npc_station", "player_structure"})
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,25 @@ class Config:
     # operators running on smaller / bigger DBs.
     batch_size: int
 
+    # Authentication surface for admin-owned player_structure polling.
+    # All three must be populated for structure polling to work:
+    #
+    #   - `app_key` is Laravel's APP_KEY — the same `base64:...` value
+    #     that encrypted the stored service token. Required so the
+    #     Python plane can decrypt the token and re-encrypt the
+    #     rotated refresh_token back into the shared row.
+    #   - `eve_sso_client_id` / `eve_sso_client_secret` are the same
+    #     EVE_SSO_* app credentials the Laravel SSO flow uses;
+    #     required for `POST /v2/oauth/token` (refresh_token grant).
+    #
+    # Empty values are tolerated: a stack that hasn't configured
+    # structure polling yet simply skips player_structure rows with a
+    # log line. See market_poller/auth.py § ServiceTokenNotConfigured.
+    app_key: str
+    eve_sso_client_id: str
+    eve_sso_client_secret: str
+    eve_sso_token_url: str
+
     # Op modes.
     dry_run: bool                      # Log + fetch, skip the DB write.
     only_location_ids: frozenset[int]  # Empty = every enabled row; populated
@@ -89,6 +114,13 @@ class Config:
             max_consecutive_403s=int(env("MARKET_POLL_MAX_CONSECUTIVE_403S", "3")),
             max_consecutive_5xx=int(env("MARKET_POLL_MAX_CONSECUTIVE_5XX", "5")),
             batch_size=int(env("MARKET_POLL_BATCH_SIZE", "5000")),
+            app_key=env("APP_KEY", ""),
+            eve_sso_client_id=env("EVE_SSO_CLIENT_ID", ""),
+            eve_sso_client_secret=env("EVE_SSO_CLIENT_SECRET", ""),
+            eve_sso_token_url=env(
+                "EVE_SSO_TOKEN_URL",
+                "https://login.eveonline.com/v2/oauth/token",
+            ),
             dry_run=False,
             only_location_ids=frozenset(),
         )

@@ -9,28 +9,34 @@ One-shot container: one invocation = one pass. The calling cadence
 lives outside this package (Laravel scheduler, cron, systemd timer
 — operator's call).
 
-## Phase 1 scope
+## Scope
 
-Phase 1 handles **NPC stations only**:
+Polls two kinds of row in `market_watched_locations`:
 
-- Read enabled rows from `market_watched_locations` where
-  `location_type = 'npc_station'`.
-- For each row, fetch `/markets/{region_id}/orders/` (no auth), paginate
-  via `X-Pages`, client-side filter to the row's `location_id`, bulk
-  `INSERT IGNORE` into `market_orders`.
-- Stamp `observation_kind = 'snapshot'`,
-  `source = esi_region_<region_id>_<location_id>`,
-  `observed_at = now(UTC)` (shared across the whole pass).
-- Emit one `market.orders_snapshot_ingested` outbox event per
-  successful location poll.
+1. **NPC stations** (`location_type = 'npc_station'`) — region endpoint
+   + client-side location filter, no auth.
+2. **Admin-owned player structures** (`location_type = 'player_structure'`
+   with `owner_user_id IS NULL`) — structure endpoint using the
+   `eve_service_tokens` singleton the Laravel
+   `/admin/eve-service-character` flow authored. Requires
+   `esi-markets.structure_markets.v1` scope.
 
 **Jita 4-4 is the seeded baseline** (region 10000002, location
 60003760) and runs on every pass.
 
-Admin-owned and donor-owned structure polling (auth'd via
-`eve_service_tokens` / `eve_market_tokens`) lands in later rollout
-steps of ADR-0004 without changing this package's shape — the runner
-branches on `location_type`.
+Donor-owned structure polling (`location_type = 'player_structure'`
+with `owner_user_id = <user>`, backed by `eve_market_tokens`) is the
+next rollout step per ADR-0004. Rows exist in
+`market_watched_locations` but are log-skipped by this package until
+that step lands.
+
+Per-location output: stamp `observation_kind = 'snapshot'`, bulk
+`INSERT IGNORE` into `market_orders`, emit one
+`market.orders_snapshot_ingested` outbox event.
+
+Source-string convention:
+- `esi_region_<region_id>_<location_id>` for NPC rows.
+- `esi_structure_<structure_id>` for structure rows.
 
 ## Run
 
@@ -85,6 +91,15 @@ All env-driven, no dotenv. `infra/docker-compose.yml` passes:
 | `MARKET_POLL_MAX_CONSECUTIVE_403S`    | `3`                                            | auto-disable threshold (no-access) |
 | `MARKET_POLL_MAX_CONSECUTIVE_5XX`     | `5`                                            | auto-disable threshold (upstream fail) |
 | `MARKET_POLL_BATCH_SIZE`              | `5000`                                         | rows per `executemany` |
+| `APP_KEY`                             | _unset_                                        | Laravel encryption key; required for structure polling. Accepts `base64:xxx` or bare base64. |
+| `EVE_SSO_CLIENT_ID`                   | _unset_                                        | CCP app client ID; required for service-token refresh. |
+| `EVE_SSO_CLIENT_SECRET`               | _unset_                                        | CCP app client secret; required for service-token refresh. |
+| `EVE_SSO_TOKEN_URL`                   | `https://login.eveonline.com/v2/oauth/token`   | override for testing only |
+
+The last four are only needed for admin-owned structure polling. A
+stack without player structures can leave them empty — the poller
+skips structure rows cleanly with a log line (see
+`ServiceTokenNotConfigured` in `auth.py`).
 
 ## Failure discipline
 
@@ -105,13 +120,50 @@ Per ADR-0004 § Failure handling:
 
 Sustained ESI polling lives on the Python execution plane per
 [ADR-0002](../../docs/adr/0002-eve-sso-and-esi-client.md). This is
-the first concrete caller — the "proper" Python ESI client (per-group
-bucket tracker, refresh handling, JWT signature verification) is
-still tracked as ADR-0002 § phase-2 #12. Until it lands, this package
-inlines exactly the ESI surface it needs: a minimal `httpx.Client`
-wrapper with reactive rate-limit awareness. When a second caller
-arrives (admin structure poller, donor structure poller), promote
-the HTTP client to a shared module.
+the first concrete caller and delivers the refresh-handling piece
+ADR-0002 § phase-2 #12 flagged as pending. What's here:
+
+- Reactive per-request rate-limit awareness (reads
+  `X-Ratelimit-Remaining` / `X-ESI-Error-Limit-Remain` on every
+  response, sleeps when at or below configured margins).
+- Refresh via `POST /v2/oauth/token` with row-level `SELECT FOR UPDATE`
+  on `eve_service_tokens` (`auth.py`) — a hypothetical second poller
+  instance serialises on the DB row rather than double-rotating the
+  refresh token.
+- Laravel-compatible `'encrypted'` cast interop (`laravel_encrypter.py`):
+  AES-256-CBC + HMAC-SHA256 envelope, same wire format Laravel 12
+  uses. 19 unittest cases cover round-trip, MAC tamper, AES-GCM
+  rejection, and envelope structure validation.
+- JWT signature verification is still deferred (same justification as
+  ADR-0002 § JWT verification — TLS is the trust boundary). The JWKS
+  dance is the remaining phase-2 #12 item.
+
+### Laravel-compatible encrypter
+
+The Python plane needs to read tokens the Laravel `/admin` flow
+encrypted into `eve_service_tokens`. `laravel_encrypter.py` ports
+the `Illuminate\Encryption\Encrypter` wire format (AES-256-CBC +
+HMAC-SHA256, base64-JSON envelope, `Crypt::encryptString()`-style
+no-serialize path). The Python poller can both decrypt stored tokens
+and re-encrypt rotated refresh tokens back into the shared row, so
+Laravel-side code reading `$token->refresh_token` keeps working
+transparently.
+
+Only AES-256-CBC is supported. If Laravel is reconfigured to
+AES-256-GCM (set via `cipher` in `config/app.php`), decrypt throws a
+specific "not supported" error rather than producing wrong plaintext.
+
+## Tests
+
+```sh
+cd python/
+python -m unittest market_poller.test_laravel_encrypter -v
+```
+
+19 stdlib-unittest cases around the Laravel encrypter — round-trip,
+APP_KEY parsing, MAC tamper detection, AES-GCM rejection, envelope
+structure validation. Requires the `cryptography` wheel installed
+(pin in `requirements-market.txt`).
 
 ## Layout
 
@@ -121,13 +173,17 @@ python/
 ├── requirements-market.txt
 └── market_poller/
     ├── __init__.py
-    ├── __main__.py      # `python -m market_poller`
-    ├── cli.py           # argparse
-    ├── config.py        # env → Config dataclass
-    ├── log.py           # stderr kv formatter
-    ├── db.py            # pymysql connection helper (autocommit off)
-    ├── esi.py           # httpx client: region-orders endpoint, pagination, rate-limit
-    ├── persist.py       # market_orders bulk upsert + watched-locations bookkeeping
-    ├── outbox.py        # emit market.orders_snapshot_ingested
-    └── runner.py        # orchestrator: load locations → poll each → commit/rollback
+    ├── __main__.py                      # `python -m market_poller`
+    ├── cli.py                           # argparse
+    ├── config.py                        # env → Config dataclass
+    ├── log.py                           # stderr kv formatter
+    ├── db.py                            # pymysql connection helper (autocommit off)
+    ├── esi.py                           # httpx: region-orders + structure-orders endpoints
+    ├── sso.py                           # POST /v2/oauth/token (refresh_token grant)
+    ├── laravel_encrypter.py             # AES-256-CBC + HMAC-SHA256 Laravel-compatible
+    ├── auth.py                          # load + refresh service token with row-level lock
+    ├── persist.py                       # market_orders bulk upsert + watched-locations bookkeeping
+    ├── outbox.py                        # emit market.orders_snapshot_ingested
+    ├── runner.py                        # orchestrator: load → branch → poll → commit
+    └── test_laravel_encrypter.py        # stdlib unittest for the encrypter
 ```
