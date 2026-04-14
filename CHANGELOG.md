@@ -445,7 +445,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`market_orders`** (composite PK
     `(observed_at, source, location_id, order_id)`, monthly `RANGE`
     partitioned on `observed_at`) — one row per order observation,
-    live ESI snapshots or future order-book dumps. `TIMESTAMP(6)`
+    live ESI snapshots or future order-book dumps. `DATETIME(6)`
     microsecond precision on `observed_at` so poller batches cluster
     contiguously per snapshot; `location_id` is `BIGINT UNSIGNED`
     because Upwell structure IDs crossed `INT` max long ago.

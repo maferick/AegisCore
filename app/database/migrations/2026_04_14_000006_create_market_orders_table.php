@@ -37,12 +37,18 @@ use Illuminate\Support\Facades\Schema;
 | 64-bit (CCP's structure-ID allocation crossed the INT max long ago).
 | NPC station IDs fit in 32 bits but we use one column for both.
 |
-| `observed_at` is TIMESTAMP(6) — microsecond precision. The poller
-| batches many orders into a single snapshot with the same timestamp;
-| the microseconds aren't about per-row resolution, they're about not
-| losing information when CCP's `Last-Modified` header carries
-| sub-second data and we occasionally want to align observations with
-| ESI cache headers for debugging.
+| `observed_at` is DATETIME(6) — microsecond precision. Originally
+| TIMESTAMP(6), but MariaDB's `PARTITION BY RANGE COLUMNS` rejects
+| TIMESTAMP (error 1659 "not allowed type for this type of
+| partitioning") because of TIMESTAMP's implicit session-timezone
+| conversion. DATETIME is functionally identical for our use case —
+| we always write UTC from both planes (Python uses
+| `datetime.now(timezone.utc)`, Laravel's app timezone is UTC) — and
+| removes the implicit-conversion footgun as a bonus. Microsecond
+| precision still matters for the same reason: the poller batches
+| many orders into a single snapshot with the same timestamp and we
+| occasionally want to align observations with CCP's `Last-Modified`
+| sub-second header for debugging.
 |
 | `observation_kind` classifies ingestion provenance:
 |   - `snapshot`          — point-in-time full book (live or dump).
@@ -76,7 +82,7 @@ return new class extends Migration
         DB::statement('DROP TABLE IF EXISTS market_orders');
         DB::statement(<<<'SQL'
             CREATE TABLE market_orders (
-                observed_at         TIMESTAMP(6)    NOT NULL,
+                observed_at         DATETIME(6)     NOT NULL,
                 source              VARCHAR(64)     NOT NULL,
                 location_id         BIGINT UNSIGNED NOT NULL,
                 order_id            BIGINT UNSIGNED NOT NULL,
