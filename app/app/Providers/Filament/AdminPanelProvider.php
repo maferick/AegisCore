@@ -41,8 +41,8 @@ use Illuminate\View\Middleware\ShareErrorsFromSession;
  *
  * The primary colour is the same `#4fd0d0` cyan accent the landing page
  * uses. Brand lockup (hex-shield logo + "AegisCore" wordmark), favicon
- * and a themed dark backdrop are set below so the admin and the
- * marketing page read as the same product.
+ * and a themed dark backdrop (star map + sensor grid) are wired below so
+ * the admin and the marketing page read as the same product.
  */
 class AdminPanelProvider extends PanelProvider
 {
@@ -69,9 +69,9 @@ class AdminPanelProvider extends PanelProvider
             ->favicon(asset('favicon.svg'))
             // Landing page is always dark; defaulting the admin to dark
             // keeps the two surfaces visually aligned on first paint.
-            // Users can still toggle light mode via the Filament user
-            // menu — the themed backdrop render hook below only
-            // activates under `html.dark` so light mode stays legible.
+            // Users can still toggle light mode — the themed backdrop
+            // render hook (below) is scoped to `html.dark` so light
+            // mode keeps the stock Filament palette.
             ->defaultThemeMode(ThemeMode::Dark)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
@@ -165,15 +165,15 @@ class AdminPanelProvider extends PanelProvider
                     ? view('filament.auth.eve-login-button')->render()
                     : '',
             )
-            // Themed backdrop — mirrors the landing page's dark HUD look
-            // so the admin doesn't jump to a neutral grey on navigation.
-            // Injected as a `<style>` block in <head> instead of a
-            // compiled Filament theme CSS so we avoid adding a second
-            // Vite entry point / theme build step for what is purely
-            // cosmetic overlay work. Scoped to `html.dark body.fi-body`
-            // (and the login-screen variant `.fi-simple-body`) — under
-            // light mode the default Filament palette stays intact.
-            // See resources/views/landing.blade.php for the original.
+            // Themed backdrop — mirrors the landing page's star-map / HUD
+            // look so the admin doesn't jump to a neutral grey on
+            // navigation. Injected as a <style> block in <head> instead
+            // of a compiled Filament theme CSS so we avoid adding a
+            // second Vite entry point / theme build step for what is
+            // purely cosmetic overlay work. The CSS itself is scoped to
+            // `html.dark body.fi-body` / `.fi-simple-body`, so light
+            // mode keeps the default Filament palette intact. See
+            // resources/views/landing.blade.php for the original.
             ->renderHook(
                 PanelsRenderHook::HEAD_END,
                 fn (): string => view('filament.theme.backdrop')->render(),
