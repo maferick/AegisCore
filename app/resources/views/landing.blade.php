@@ -46,13 +46,39 @@
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; }
 
+        /* ---------- Themed backdrop ----------
+         * Five stacked layers that nod to the brand without shouting.
+         * Top → bottom, each pinned (`fixed`) so the backdrop stays put
+         * while content scrolls — the hero reads as if it's overlaid
+         * on a HUD, not pasted on a coloured sheet.
+         *
+         *   1. Hex-shield watermark (center)   — same mark as the logo,
+         *                                        dialled to ~20% stroke
+         *                                        opacity. Scales with
+         *                                        viewport.
+         *   2. Sensor dot matrix               — 28px grid of faint
+         *                                        cyan dots. Reads as
+         *                                        "HUD texture", not
+         *                                        noise, at normal zoom.
+         *   3. Cyan atmospheric glow (top-L)   — existing.
+         *   4. Gold atmospheric glow (bot-R)   — existing.
+         *   5. Solid dark base                 — var(--bg) fallback.
+         *
+         * All stroke/fill opacities are baked into the SVG so we don't
+         * need a pseudo-element with `opacity`. Keeps the body one
+         * stacking context — header/main/footer sit on top naturally. */
         body {
             font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
                   'Helvetica Neue', Arial, sans-serif;
             background:
+                url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'><path d='M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z' stroke='%234fd0d0' stroke-width='0.6' stroke-opacity='0.28' fill='none'/><path d='M32 18 L44 25 L44 39 L32 46 L20 39 L20 25 Z' stroke='%23e5a900' stroke-width='0.4' stroke-opacity='0.22' fill='none'/><g stroke='%23e5a900' stroke-width='0.55' stroke-linecap='round' stroke-opacity='0.22'><line x1='32' y1='22' x2='32' y2='27'/><line x1='32' y1='37' x2='32' y2='42'/><line x1='22' y1='32' x2='27' y2='32'/><line x1='37' y1='32' x2='42' y2='32'/></g><circle cx='32' cy='32' r='1.5' fill='%234fd0d0' fill-opacity='0.25'/></svg>")
+                    center center / min(72vh, 72vw) no-repeat,
+                radial-gradient(rgba(79, 208, 208, 0.045) 1px, transparent 1.5px)
+                    0 0 / 28px 28px,
                 radial-gradient(ellipse at 15% -10%, rgba(79, 208, 208, 0.10) 0%, transparent 45%),
                 radial-gradient(ellipse at 85% 110%, rgba(229, 169, 0, 0.05) 0%, transparent 45%),
                 var(--bg);
+            background-attachment: fixed, fixed, fixed, fixed, scroll;
             color: var(--text);
             min-height: 100vh;
             display: flex;

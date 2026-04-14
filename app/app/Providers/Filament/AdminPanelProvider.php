@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Services\Eve\Sso\EveSsoClient;
+use Filament\Enums\ThemeMode;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -38,8 +39,10 @@ use Illuminate\View\Middleware\ShareErrorsFromSession;
  * ADR-0002 for the rationale; will tighten to spatie/laravel-permission
  * roles when UsersCharacters lands them.
  *
- * The primary colour is the same `#ff6b35` accent the landing page uses, so
- * the admin and the marketing page feel like the same product.
+ * The primary colour is the same `#4fd0d0` cyan accent the landing page
+ * uses. Brand lockup (hex-shield logo + "AegisCore" wordmark), favicon
+ * and a themed dark backdrop are set below so the admin and the
+ * marketing page read as the same product.
  */
 class AdminPanelProvider extends PanelProvider
 {
@@ -56,6 +59,20 @@ class AdminPanelProvider extends PanelProvider
                 // accent, so the admin shares the same language.
                 'primary' => Color::Cyan,
             ])
+            // Brand lockup in the sidebar / login screen. Matches the
+            // landing header: hex-shield mark + "AegisCore" wordmark.
+            // `favicon.svg` is the same file the landing page + browser
+            // tab use, so the identity is one asset, three surfaces.
+            ->brandName('AegisCore')
+            ->brandLogo(fn (): string => asset('favicon.svg'))
+            ->brandLogoHeight('1.75rem')
+            ->favicon(asset('favicon.svg'))
+            // Landing page is always dark; defaulting the admin to dark
+            // keeps the two surfaces visually aligned on first paint.
+            // Users can still toggle light mode via the Filament user
+            // menu — the themed backdrop render hook below only
+            // activates under `html.dark` so light mode stays legible.
+            ->defaultThemeMode(ThemeMode::Dark)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
@@ -147,6 +164,19 @@ class AdminPanelProvider extends PanelProvider
                 fn (): string => EveSsoClient::isConfigured()
                     ? view('filament.auth.eve-login-button')->render()
                     : '',
+            )
+            // Themed backdrop — mirrors the landing page's dark HUD look
+            // so the admin doesn't jump to a neutral grey on navigation.
+            // Injected as a `<style>` block in <head> instead of a
+            // compiled Filament theme CSS so we avoid adding a second
+            // Vite entry point / theme build step for what is purely
+            // cosmetic overlay work. Scoped to `html.dark body.fi-body`
+            // (and the login-screen variant `.fi-simple-body`) — under
+            // light mode the default Filament palette stays intact.
+            // See resources/views/landing.blade.php for the original.
+            ->renderHook(
+                PanelsRenderHook::HEAD_END,
+                fn (): string => view('filament.theme.backdrop')->render(),
             )
             ->middleware([
                 EncryptCookies::class,
