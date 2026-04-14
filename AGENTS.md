@@ -21,10 +21,15 @@ Priority:
 5. Engineering elegance
 
 ## Runtime model
-- **Control Plane (Laravel 12 / PHP 8.4):** UI, API, settings, auth, RBAC,
-  light orchestration.
-- **Execution Plane (Python):** ingestion, compute, graph pipelines, indexing,
-  any job that reads/writes primary domain data.
+- **Control Plane (Laravel 12 / PHP 8.4) owns:** settings / UI / API / auth /
+  RBAC; donor hub preferences + admin workflows; light synchronous ESI paths
+  (SSO token exchange, donations wallet poll) per
+  [ADR-0002](docs/adr/0002-eve-sso-and-esi-client.md). No heavy ingest or
+  compute.
+- **Execution Plane (Python) owns:** ingestion; ESI enrichment + cache client
+  behaviour for heavy polling (killmails, rosters, markets at scale) per
+  [ADR-0002](docs/adr/0002-eve-sso-and-esi-client.md); projection workers
+  (Neo4j, OpenSearch, InfluxDB); recompute and backfill jobs.
 - No heavy compute in PHP.
 
 ## Plane boundary (policy, not best-effort)
@@ -76,12 +81,30 @@ When you write a new job, pick the plane before you pick the class.
 outbox row; the work itself runs in the execution plane.
 
 ## Data ownership (hard rule)
-- **MariaDB**: canonical source of truth + `outbox` table.
-- **Neo4j**: graph projection only (Python writes).
-- **OpenSearch**: search/aggregation projection only (Python writes).
-- **InfluxDB**: metrics/time-series only (Python writes).
-- **Redis**: ephemeral — cache, sessions, Laravel queues, Horizon state.
-  Never the system of record for anything.
+
+Codified in [ADR-0003](docs/adr/0003-data-placement-freeze.md).
+
+- **MariaDB** — canonical source of truth.
+  - Killmails: killmail, victim, attackers, items.
+  - Character / corp / alliance identity + temporal history.
+  - Valuation records with provenance (source, fallback flag, version,
+    `time_used_at`).
+  - Raw market observations used as valuation inputs.
+  - `outbox` table.
+  - `ref_*` SDE reference tables — see
+    [ADR-0001](docs/adr/0001-static-reference-data.md).
+- **Redis** — acceleration only, never a system of record. Roles include
+  cache, sessions, Laravel/Horizon queue state, hot ESI cache, negative
+  cache, single-flight / request-coalescing locks, short-lived rate-limit
+  helpers. A Redis outage impairs latency, never correctness.
+- **Neo4j** — derived. Relationship graph for spy investigation;
+  co-participation and affiliation edges. Python writes. No canonical
+  ownership.
+- **OpenSearch** — derived. Denormalized killmail search docs; analyst
+  filters / facets / timelines. Python writes. No canonical ownership.
+- **InfluxDB** — derived. Market series and rollups aggregated from
+  MariaDB raw market observations; optional valuation-trend analytics.
+  Python writes. No canonical ownership.
 
 Derived stores must be rebuildable from MariaDB + external sources. This
 applies to static reference data (EVE SDE) too — see
