@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Horizon spawned zero worker processes; scheduled + dispatched
+  jobs piled up in Redis with no consumer.** Root cause: no
+  `config/horizon.php` was published, so Horizon fell back to the
+  package's vendored default, which only declares supervisors for
+  `APP_ENV ∈ {production, local}`. AegisCore runs with
+  `APP_ENV=dev` (from `AEGISCORE_ENV=dev` — see .env.example +
+  compose) and stages with `staging` / `prod`; none of those strings
+  match the vendored environments, so the master started, found no
+  supervisor spec for the current environment, spawned zero workers,
+  and every `ShouldQueue` dispatch (daily SDE version check, 5-minute
+  donations wallet poll, …) accumulated in Redis unconsumed.
+
+  Symptom on `/horizon`: "Status: Active" in the header but an empty
+  supervisor row, `Total Processes: 0`, and "Jobs Past Hour" ticking
+  up (dispatches) without corresponding completions. Donations
+  dashboard stayed empty even after a real in-game ISK transfer
+  because the poll job never actually ran.
+
+  Fix: publish `config/horizon.php` with an explicit supervisor spec
+  for every `APP_ENV` we deploy under (`dev`, `staging`, `prod`) plus
+  fallbacks for the stock Laravel values (`production`, `local`) so
+  an operator running `APP_ENV=production php artisan horizon` still
+  spawns workers. Supervisor itself is vanilla: auto-balanced pool on
+  the `default` queue against the `redis` connection (matches
+  `QUEUE_CONNECTION=redis` + `REDIS_QUEUE=default`). `maxProcesses`
+  scales per-env (dev: 1, staging: 3, prod: 5). After deploy, an
+  operator `make restart` recycles the horizon container; the jobs
+  already queued from the previous (broken) dispatches drain
+  immediately — idempotent upserts mean nothing has to be rerun by
+  hand.
+
+  Compose comment on the `horizon` service updated to explicitly warn
+  against relying on the vendor defaults. Healthcheck comment
+  clarified: `horizon:status` is a liveness probe only, not a
+  correctness oracle — it reports the master as "running" even when
+  zero workers are defined. That failure mode is prevented at config
+  time by this ADR-0002-shaped supervisor spec, not caught at runtime.
+
 ### Added
 - **AegisCore brand mark — SVG logo + favicon.** Pointy-top hex shield
   in cyan (the EVE HUD "go / friendly / selected" colour from the
