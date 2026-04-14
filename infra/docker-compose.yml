@@ -383,6 +383,43 @@ services:
         condition: service_healthy
     networks: [aegiscore]
 
+  # graph_universe_sync — one-shot Python job that projects the SDE
+  # universe topology (regions / constellations / systems / stargates /
+  # NPC stations) from MariaDB ref_* tables into Neo4j. Sibling to
+  # sde_importer; runs after `make sde-import` and before the map
+  # renderer can serve graph-backed data.
+  #
+  # Phase 1: operator-triggered via `make neo4j-sync-universe`. Phase 2:
+  # promote to a long-lived consumer of the
+  # `reference.sde_snapshot_loaded` outbox event once the consumer
+  # scaffolding lands. See ADR-0001.
+  graph_universe_sync:
+    build:
+      context: ../python
+      dockerfile: graph_universe_sync.Dockerfile
+    image: aegiscore/graph-universe-sync:0.1.0
+    container_name: graph_universe_sync
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      NEO4J_HOST: "bolt://neo4j:7687"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
+      GRAPH_BATCH_SIZE: "${GRAPH_BATCH_SIZE:-2000}"
+      NEW_EDEN_ONLY: "${GRAPH_NEW_EDEN_ONLY:-true}"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    networks: [aegiscore]
+
   nginx:
     image: nginx:1.27-alpine
     container_name: nginx

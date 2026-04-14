@@ -109,6 +109,11 @@ SPECS: list[TableSpec] = [
             Column("position_x", "position.x", "float"),
             Column("position_y", "position.y", "float"),
             Column("position_z", "position.z", "float"),
+            # CCP ships a schematic 2D position (position2D) used by the
+            # in-game 2D map. Not every dataset includes it, hence the
+            # nullable column pair. See ADR-0001 + map renderer module.
+            Column("position2d_x", "position2D.x", "float"),
+            Column("position2d_y", "position2D.y", "float"),
             _overflow(),
         ],
     ),

@@ -9,6 +9,10 @@ __pycache__/
 .venv/
 venv/
 vendor/
+# Static-asset vendor dir is intentionally tracked — these are
+# pinned third-party JS/CSS we ship with the app (no Vite, no CDN).
+!app/public/vendor/
+!app/public/vendor/**
 .vscode/
 .idea/
 

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\EveSsoController;
+use App\Http\Controllers\Map\MapDataController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -50,3 +51,18 @@ Route::post('/logout', function (Request $request) {
 
     return redirect()->route('home');
 })->name('auth.logout');
+
+// Public map data endpoint for the EVE map renderer module.
+//
+// Unauthenticated by design — every byte returned here originates in
+// CCP's published Static Data Export. Throttled to 60 req/min/IP as a
+// sanity floor against accidental loops in browser code (the renderer
+// only fetches once per mount, so this is well above any legitimate
+// usage).
+//
+// Scopes: universe | region | constellation | subgraph (see
+// App\Reference\Map\Enums\MapScope). Per-scope query-string args are
+// validated by App\Http\Requests\Map\MapDataRequest.
+Route::get('/internal/map/{scope}', MapDataController::class)
+    ->middleware('throttle:60,1')
+    ->name('map.data');

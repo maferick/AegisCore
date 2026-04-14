@@ -1,0 +1,8 @@
+# graph_universe_sync deps.
+#
+# Reads from MariaDB (pymysql), writes to Neo4j via the official driver,
+# and emits outbox ULIDs using python-ulid. Split from the SDE importer
+# requirements so the two one-shot images stay lean.
+neo4j~=5.26
+pymysql~=1.1
+python-ulid~=3.0
