@@ -39,3 +39,5 @@ planning work the roadmap should do.
 
 - [ADR-0001](0001-static-reference-data.md) — SDE static data: MariaDB
   canonical, Neo4j + OpenSearch as derived projections
+- [ADR-0003](0003-data-placement-freeze.md) — Data placement freeze:
+  per-store ownership across the four pillars

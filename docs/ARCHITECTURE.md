@@ -33,15 +33,27 @@ short version:
 ```
 
 ## Data ownership
-- **MariaDB** — canonical source of truth + `outbox` table. Hosts both
-  per-pillar data and cross-cutting `ref_*` reference tables (EVE SDE —
-  see [ADR-0001](adr/0001-static-reference-data.md)).
-- **Redis** — ephemeral: cache, sessions, Laravel queues, Horizon state.
-  Never a system of record.
-- **Neo4j / OpenSearch / InfluxDB** — derived stores. Rebuildable from MariaDB
-  + external sources. Python owns writes. Universe topology is projected
-  from `ref_*` into Neo4j by the `graph_universe_sync` consumer; search
-  projections onto OpenSearch are deferred to phase 2.
+
+Frozen in [ADR-0003](adr/0003-data-placement-freeze.md); `AGENTS.md`
+carries the full per-store role list. Short form:
+
+- **MariaDB** — canonical. Killmails (killmail / victim / attackers /
+  items), character / corp / alliance identity + temporal history,
+  valuation records with provenance, raw market observations used as
+  valuation inputs, `outbox`, and `ref_*` SDE reference tables
+  ([ADR-0001](adr/0001-static-reference-data.md)).
+- **Redis** — acceleration only, never a system of record. Cache,
+  sessions, Laravel/Horizon queue state, hot ESI cache, negative cache,
+  single-flight locks, rate-limit helpers. Outage impairs latency, not
+  correctness.
+- **Neo4j / OpenSearch / InfluxDB** — derived stores, Python writes, no
+  canonical ownership. Rebuildable from MariaDB + external sources.
+  Neo4j holds the relationship graph for spy investigation; OpenSearch
+  holds denormalized killmail search docs + analyst facets; InfluxDB
+  holds market series / rollups aggregated from MariaDB raw observations.
+  Universe topology is projected from `ref_*` into Neo4j by the
+  `graph_universe_sync` consumer; search projections onto OpenSearch are
+  deferred to phase 2.
 
 ## Network topology (Phase 1)
 All services share the `aegiscore` docker network. Nginx is the only service
