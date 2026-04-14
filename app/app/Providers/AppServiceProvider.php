@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
+use App\Services\Eve\Esi\CachedEsiClient;
 use App\Services\Eve\Esi\EsiClient;
+use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiRateLimiter;
 use Illuminate\Support\ServiceProvider;
 
@@ -25,6 +27,23 @@ class AppServiceProvider extends ServiceProvider
         // Laravel singletons. Tests can override with `->instance()`.
         $this->app->singleton(EsiRateLimiter::class, fn () => EsiRateLimiter::fromConfig());
         $this->app->singleton(EsiClient::class, fn () => EsiClient::fromConfig());
+
+        // EsiClientInterface resolves to the payload-caching decorator by
+        // default: fresh hits skip the network, 304s replay a usable body,
+        // transient upstream failures serve the last-good body. Caller code
+        // should type-hint the interface, not either concrete, so the
+        // decorator applies transparently. The kill switch flips the
+        // binding back to the bare transport without a deploy if a cache
+        // correctness issue ever needs isolating.
+        $this->app->singleton(EsiClientInterface::class, function ($app) {
+            $inner = $app->make(EsiClient::class);
+
+            if (! (bool) config('eve.esi.payload_cache_enabled', true)) {
+                return $inner;
+            }
+
+            return CachedEsiClient::fromConfig($inner);
+        });
 
         // Same pattern for the donor-benefits calculator: its rate comes
         // from config('eve.donations.isk_per_day'), which the container

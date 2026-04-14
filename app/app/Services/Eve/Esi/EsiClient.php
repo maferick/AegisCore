@@ -41,7 +41,7 @@ use Illuminate\Support\Facades\Log;
  *
  * Add those when a real caller demands them; don't speculate.
  */
-final class EsiClient
+final class EsiClient implements EsiClientInterface
 {
     public function __construct(
         private readonly string $baseUrl,

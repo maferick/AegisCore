@@ -162,6 +162,35 @@ return [
         'cache_store' => env('ESI_CACHE_STORE', 'redis'),
         'cache_ttl_seconds' => (int) env('ESI_CACHE_TTL_SECONDS', 86400),
 
+        // Payload cache (App\Services\Eve\Esi\CachedEsiClient). Sits on top
+        // of the bare EsiClient transport and stores full response bodies
+        // alongside the validators so:
+        //
+        //   - fresh hits return without a network call
+        //   - 304s replay a usable body (not null) while preserving the
+        //     notModified signal for short-circuit callers
+        //   - transient upstream failures serve the last-good body
+        //     instead of failing the caller
+        //
+        // `payload_fallback_freshness_seconds` is the dwell we assume when
+        // ESI omits `Expires` (rare, but defensive). `stale_if_error`
+        // bounds how old a cached body we'll serve under a 5xx / timeout.
+        // `retention` bounds total entry lifetime in the cache store;
+        // should be >= `cache_ttl_seconds` to avoid drift where the inner
+        // has validators but the outer has evicted the payload. `lock_wait`
+        // bounds single-flight coalescing — peers waiting longer fall
+        // through to a direct fetch instead of starving.
+        'payload_fallback_freshness_seconds' => (int) env('ESI_PAYLOAD_FALLBACK_FRESHNESS_SECONDS', 60),
+        'payload_stale_if_error_seconds' => (int) env('ESI_PAYLOAD_STALE_IF_ERROR_SECONDS', 600),
+        'payload_retention_seconds' => (int) env('ESI_PAYLOAD_RETENTION_SECONDS', 604_800),
+        'payload_lock_wait_seconds' => (int) env('ESI_PAYLOAD_LOCK_WAIT_SECONDS', 5),
+
+        // Kill switch. When false the container binds the bare EsiClient
+        // for EsiClientInterface, bypassing the decorator entirely. Leave
+        // true in production; flip to debug suspected cache-correctness
+        // issues without a deploy.
+        'payload_cache_enabled' => (bool) env('ESI_PAYLOAD_CACHE_ENABLED', true),
+
         // Reactive rate-limit throttle (App\Services\Eve\Esi\EsiRateLimiter).
         //
         //   safety_margin: refuse to send when the limiter's last-known

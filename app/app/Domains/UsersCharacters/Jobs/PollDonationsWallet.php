@@ -7,7 +7,7 @@ namespace App\Domains\UsersCharacters\Jobs;
 use App\Domains\UsersCharacters\Models\EveDonation;
 use App\Domains\UsersCharacters\Models\EveDonationsToken;
 use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
-use App\Services\Eve\Esi\EsiClient;
+use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiException;
 use App\Services\Eve\Esi\EsiRateLimitException;
 use App\Services\Eve\Sso\EveSsoClient;
@@ -89,7 +89,7 @@ class PollDonationsWallet implements ShouldQueue
      */
     public int $timeout = 60;
 
-    public function handle(EsiClient $esi, DonorBenefitCalculator $benefits): void
+    public function handle(EsiClientInterface $esi, DonorBenefitCalculator $benefits): void
     {
         $token = EveDonationsToken::query()->first();
         if ($token === null) {
