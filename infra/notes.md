@@ -6,7 +6,7 @@
 /opt/aegiscore/                  ← project root (git clone)
 ├── infra/docker-compose.yml
 ├── docker/                      ← container state (gitignored)
-│   ├── mariadb/{data,config,logs}
+│   ├── mariadb/{data,logs}
 │   ├── redis/data
 │   ├── opensearch/{data,logs}
 │   ├── influxdb2/{data,config}
@@ -14,6 +14,8 @@
 │   └── nginx/logs
 ├── app/                         ← Laravel control plane source
 │   └── public/index.php         ← front controller (served by nginx + php-fpm)
+├── mariadb/
+│   └── conf.d/aegiscore.cnf     ← MariaDB overrides, read-only mount
 ├── php/
 │   └── conf.d/aegiscore.ini     ← custom php.ini overrides, read-only mount
 ├── infra/
@@ -160,6 +162,13 @@ sees the request as HTTP).
   contain shell metacharacters (`$`, `` ` ``, `"`, `\`). Rotate if needed.
 - **`make bootstrap` fails with permission denied:** the target uses `sudo` on
   purpose because `/opt/aegiscore` is typically root-owned.
+- **`$AEGISCORE_ROOT/docker/mariadb/config/` is empty on the host:** expected —
+  MariaDB overrides live in the tracked `mariadb/conf.d/aegiscore.cnf` under
+  the repo root (same pattern as `php/conf.d/` and `nginx/conf.d/`), mounted
+  read-only at `/etc/mysql/conf.d/` in the container. The packaged defaults
+  (`50-server.cnf`, `50-client.cnf`, etc.) live inside the container at
+  `/etc/mysql/mariadb.conf.d/` and are deliberately not bind-mounted — read
+  them with `docker compose exec mariadb sh -c 'cat /etc/mysql/mariadb.conf.d/50-server.cnf'`.
 - **`make up` rebuilds php-fpm every time:** shouldn't — compose caches by
   image tag. Bump `aegiscore/php-fpm:<version>` in compose when the
   Dockerfile changes and run `make build` explicitly.

@@ -12,7 +12,7 @@ services:
       MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
     volumes:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/data:/var/lib/mysql
-      - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/config:/etc/mysql/conf.d
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/mariadb/conf.d:/etc/mysql/conf.d:ro
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/logs:/var/log/mysql
     ports:
       - "127.0.0.1:3306:3306"
