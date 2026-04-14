@@ -16,7 +16,7 @@
 // Z-order matters because edges look terrible drawn on top of nodes.
 
 import { securityColor, regionColor, edgeColor } from './color.js';
-import { fitToViewport, isVisible } from './projection.js';
+import { fitToViewport, isVisible, rescaleToPixelCanvas } from './projection.js';
 
 const D3 = () => window.d3;
 
@@ -112,8 +112,20 @@ export function render(rootEl, payload, opts) {
         }))
         .filter((e) => e.from && e.to);
 
+    // Normalise node coords into a pixel-like canvas. EVE SDE
+    // positions are astronomical metres (~1e17); without this step the
+    // initial fit scale collapses to ~1e-15, dropping circle radii,
+    // label font-sizes and stroke widths below a single pixel (which
+    // is what produced the "map box appears, empty inside" symptom on
+    // /admin/universe-map). After rescaling, one data unit is roughly
+    // one pixel at the default fit, so the renderer's original metric
+    // constants stay meaningful. Edges keep working because they
+    // reference the same node objects via nodeIndex.
+    const canvasSpan = Math.min(width, height);
+    const effectiveBbox = rescaleToPixelCanvas(nodeData, payload.bbox, canvasSpan);
+
     // Initial fit: choose a transform that frames the bbox.
-    const initial = fitToViewport(payload.bbox, width, height, 32);
+    const initial = fitToViewport(effectiveBbox, width, height, 32);
     const initialT = d3.zoomIdentity.translate(initial.tx, initial.ty).scale(initial.scale);
 
     // Edges as <line>. Width scales mildly with zoom so they don't
