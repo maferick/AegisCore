@@ -16,6 +16,21 @@ export async function mountMapRenderer(rootEl, optionsOverride) {
 
     const options = readOptions(rootEl, optionsOverride);
 
+    // Callers are allowed to emit a map root without a data-url. This
+    // happens on the Filament demo page whenever the user picks a
+    // scope that requires more form input (e.g. Scope=Region before a
+    // region is chosen; Scope=Subgraph before any system IDs are
+    // entered). Treat the missing URL as "nothing to draw yet" —
+    // paint a neutral placeholder and wait for the next mount, rather
+    // than surfacing the red "Failed to load map" error that the
+    // Alpine-based mount path started producing once it began re-firing
+    // on every Livewire update.
+    if (!options.url) {
+        rootEl.innerHTML = '';
+        setStatus(rootEl, 'idle', placeholderMessage(options.scope));
+        return;
+    }
+
     setStatus(rootEl, 'loading', 'Loading map…');
 
     try {
@@ -25,6 +40,15 @@ export async function mountMapRenderer(rootEl, optionsOverride) {
     } catch (err) {
         console.error('[map-renderer] load failed', err);
         setStatus(rootEl, 'error', 'Failed to load map: ' + (err?.message || err));
+    }
+}
+
+function placeholderMessage(scope) {
+    switch (scope) {
+        case 'region': return 'Pick a region to load the map.';
+        case 'constellation': return 'Pick a constellation to load the map.';
+        case 'subgraph': return 'Enter one or more system IDs to load the map.';
+        default: return 'No data URL — nothing to draw yet.';
     }
 }
 
