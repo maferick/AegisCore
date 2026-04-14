@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **EVE map renderer module — drop-in `<x-map.renderer>` Blade
+  component + Filament demo page at `/admin/universe-map`.** Reusable
+  SVG/D3 renderer for systems, stargates and roads, fed by a public
+  JSON endpoint (`GET /internal/map/{scope}` for `universe`, `region`,
+  `constellation`, `subgraph`). Data flows from MariaDB `ref_*` →
+  Neo4j projection (`python -m graph_universe_sync`) → laudis
+  Bolt client → spatie/laravel-data DTO (`MapPayload`) → fetched by
+  the vendored D3 module under `app/public/js/map-renderer/`. Notable
+  details: PHP-side 2D projection (`TOP_DOWN_XZ` uses CCP's
+  `(x, -z)` convention, `POSITION_2D` honours the new `position2d_x/y`
+  columns when present, `AUTO` picks per-row), aggregated/dense
+  universe modes (default aggregated for fast first paint), per-SDE-build
+  cache key in `MapCache`, scope-aware FormRequest validation, public
+  endpoint with `throttle:60,1`. New columns: `position2d_x` /
+  `position2d_y` on `ref_solar_systems` (migration +
+  `python/sde_importer/schema.py` extension). New Python tool:
+  `python/graph_universe_sync` (own Dockerfile, requirements split,
+  Compose `tools` profile, `make neo4j-sync-universe`). Reference
+  Eloquent models added under `app/app/Reference/Models/` for the
+  Filament pickers (`Region`, `Constellation`, `SolarSystem`,
+  `Stargate`, `NpcStation`). Frontend palette mirrors the EVE HUD
+  colours from `landing.blade.php` so the widget feels native in any
+  Aegis page; D3 v7 is vendored under `app/public/vendor/d3/` with a
+  README documenting upstream URL + SHA-256 (no CDN, no Vite).
 - **Donations → ad-free time, with expiry.** Each donation now
   grants the donor `amount / EVE_DONATIONS_ISK_PER_DAY` days of
   ad-free access. Default rate 100_000 ISK = 1 day, operator-tunable

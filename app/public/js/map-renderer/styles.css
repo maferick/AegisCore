@@ -1,0 +1,101 @@
+/*
+ * AegisCore map renderer — scoped styles.
+ *
+ * All selectors are namespaced under `.aegis-map-root` so dropping
+ * the component into any host page (Filament, landing, custom Blade)
+ * won't collide with the host's CSS. EVE HUD palette mirrors
+ * landing.blade.php — keep them in sync.
+ */
+
+.aegis-map-root {
+    position: relative;
+    width: 100%;
+    min-height: 240px;
+    background:
+        radial-gradient(ellipse at 50% 50%, rgba(8, 16, 24, 0.0) 0%, rgba(0, 2, 6, 0.6) 100%),
+        #03070b;
+    border: 1px solid rgba(79, 208, 208, 0.15);
+    border-radius: 6px;
+    overflow: hidden;
+    color: #e5a900;
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.aegis-map-root .aegis-map-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+.aegis-map-root .aegis-map-svg:active {
+    cursor: grabbing;
+}
+
+.aegis-map-root .aegis-map-svg .label {
+    font-family: 'Segoe UI', Roboto, sans-serif;
+    user-select: none;
+}
+
+.aegis-map-root .aegis-map-svg .node {
+    transition: r 120ms ease;
+}
+
+.aegis-map-root .aegis-map-svg .node:hover {
+    filter: drop-shadow(0 0 4px #4fd0d0);
+}
+
+.aegis-map-root .aegis-map-svg .node-hub {
+    filter: drop-shadow(0 0 3px #e5a900);
+}
+
+.aegis-map-root .aegis-map-hud {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    display: inline-flex;
+    gap: 8px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(79, 208, 208, 0.25);
+    border-radius: 3px;
+    pointer-events: none;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.aegis-map-hud-scope {
+    color: #4fd0d0;
+    font-weight: 600;
+}
+
+.aegis-map-hud-counts {
+    color: #c8c8d0;
+}
+
+.aegis-map-hud-build {
+    color: #7a7a82;
+}
+
+.aegis-map-status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(3, 7, 11, 0.85);
+    color: #4fd0d0;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.aegis-map-status[data-kind="error"] {
+    color: #ff3838;
+}
+
+.aegis-map-error {
+    padding: 16px;
+    color: #ff3838;
+    text-align: center;
+}

@@ -22,8 +22,8 @@ WORKDIR /app
 
 # Install requirements first so the layer caches independently of code
 # changes. ~20MB of wheels; no compile step needed for our deps.
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
+COPY requirements-sde.txt ./
+RUN pip install -r requirements-sde.txt
 
 # Then the package itself.
 COPY sde_importer ./sde_importer

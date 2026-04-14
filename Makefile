@@ -34,8 +34,9 @@ help:
 	@echo "    make test              run phpunit via artisan test"
 	@echo "    make lint              pint --test"
 	@echo ""
-	@echo "  make sde-check    run the SDE version-drift check now (inline)"
-	@echo "  make sde-import   download CCP's SDE and load all ref_* tables (one-shot)"
+	@echo "  make sde-check              run the SDE version-drift check now (inline)"
+	@echo "  make sde-import             download CCP's SDE and load all ref_* tables (one-shot)"
+	@echo "  make neo4j-sync-universe    project ref_* universe topology into Neo4j (one-shot)"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -99,7 +100,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe
 build:
 	$(COMPOSE) build
 
@@ -192,6 +193,21 @@ sde-check:
 #   SDE_ARGS="--skip-download --extract-dir=/tmp/sde/extracted"   # iterate on loaders
 sde-import:
 	$(COMPOSE) --profile tools run --rm --build sde_importer $(SDE_ARGS)
+
+# Project SDE universe topology (regions / constellations / systems /
+# stargates / NPC stations) from MariaDB ref_* tables into Neo4j as the
+# graph-backed source for the map renderer module.
+#
+# Run order: `make sde-import` first (populates ref_*), then this target
+# (mirrors the universe to Neo4j). Re-runs are idempotent under MERGE;
+# pass GRAPH_ARGS="--rebuild" to DETACH DELETE the owned labels first.
+#
+# Overrides:
+#   GRAPH_ARGS="--dry-run"                 # log counts; don't write
+#   GRAPH_ARGS="--only=jumps"              # replay one stage
+#   GRAPH_ARGS="--rebuild"                 # full wipe + re-merge
+neo4j-sync-universe:
+	$(COMPOSE) --profile tools run --rm --build graph_universe_sync $(GRAPH_ARGS)
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
