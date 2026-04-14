@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Large donations silently lost their ad-free status; admin page
+  showed "No active donors yet" despite a fresh `player_donation` in
+  the journal.** `eve_donor_benefits.ad_free_until` was declared as
+  `TIMESTAMP`, which caps at `2038-01-19 03:14:07 UTC`. At the default
+  `EVE_DONATIONS_ISK_PER_DAY=100000` rate, a single 1B-ISK donation
+  stacks to ~10,000 days of ad-free (expiry ~2053), overflowing the
+  column. MySQL (strict mode) rejected the upsert; the poller's
+  catch-all `Throwable` in `PollDonationsWallet::handle()` then logged
+  a warning and moved on, so the raw donation row landed in
+  `eve_donations` but no matching `eve_donor_benefits` row was ever
+  created — the donor silently lost their ad-free window. Widened the
+  column to `DATETIME` (range up to 9999-12-31); DATETIME also
+  side-steps TIMESTAMP's implicit session-tz conversion, matching the
+  same rationale we already applied to `market_orders.observed_at`
+  (#58). The source migration and a new alter migration both land the
+  change; operators retrofitting an existing install should run
+  `php artisan eve:donations:recompute` once after migrate to
+  materialise benefit rows that failed to land under the old schema.
 - **`market_poll_scheduler` crashed on every restart with
   `unrecognized arguments: --interval 300`.** Compose's default
   pull/build policy was reusing the locally-cached
