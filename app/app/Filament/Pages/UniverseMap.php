@@ -94,29 +94,53 @@ class UniverseMap extends Page implements HasForms
                         'aggregated' => 'Aggregated (region centroids)',
                         'dense' => 'Dense (every system)',
                     ])
+                    ->live()
                     ->visible(fn ($get) => $get('scope') === 'universe')
                     ->columnSpan(3),
 
+                // The region / constellation pickers use `getSearchResultsUsing`
+                // so typed search actually queries the database instead of
+                // relying on Filament's static-options client filter. The
+                // full region catalog is a few thousand rows; loading it
+                // into the DOM ahead of time was also the reason the search
+                // box showed "No options match your search" even for real
+                // names — the prepopulated options list never arrived in
+                // the lookup the dropdown was filtering against.
                 Select::make('regionId')
                     ->label('Region')
-                    ->options(fn () => Region::query()->orderBy('name')->pluck('name', 'id')->all())
                     ->searchable()
                     ->live()
+                    ->getSearchResultsUsing(fn (string $search): array => Region::query()
+                        ->where('name', 'like', "%{$search}%")
+                        ->orderBy('name')
+                        ->limit(50)
+                        ->pluck('name', 'id')
+                        ->all())
+                    ->getOptionLabelUsing(fn ($value): ?string => Region::query()
+                        ->whereKey($value)
+                        ->value('name'))
                     ->visible(fn ($get) => $get('scope') === 'region' || $get('scope') === 'constellation')
                     ->columnSpan(3),
 
                 Select::make('constellationId')
                     ->label('Constellation')
-                    ->options(function ($get) {
+                    ->searchable()
+                    ->live()
+                    ->getSearchResultsUsing(function (string $search, $get): array {
+                        $q = Constellation::query()
+                            ->where('name', 'like', "%{$search}%")
+                            ->orderBy('name')
+                            ->limit(50);
                         $rid = $get('regionId');
-                        $q = Constellation::query()->orderBy('name');
                         if ($rid) {
                             $q->where('region_id', $rid);
                         }
 
                         return $q->pluck('name', 'id')->all();
                     })
-                    ->searchable()
+                    ->getOptionLabelUsing(fn ($value): ?string => Constellation::query()
+                        ->whereKey($value)
+                        ->value('name'))
                     ->visible(fn ($get) => $get('scope') === 'constellation')
                     ->columnSpan(3),
 
@@ -124,6 +148,7 @@ class UniverseMap extends Page implements HasForms
                     ->label('System IDs')
                     ->placeholder('30000142, 30045349, …')
                     ->helperText('Anchor systems for the subgraph.')
+                    ->live(onBlur: true)
                     ->columnSpan(8)
                     ->visible(fn ($get) => $get('scope') === 'subgraph'),
 
@@ -132,6 +157,7 @@ class UniverseMap extends Page implements HasForms
                     ->numeric()
                     ->minValue(0)
                     ->maxValue(4)
+                    ->live(onBlur: true)
                     ->columnSpan(4)
                     ->visible(fn ($get) => $get('scope') === 'subgraph'),
 
@@ -142,6 +168,7 @@ class UniverseMap extends Page implements HasForms
                         'always' => 'Always visible',
                         'hidden' => 'Hidden',
                     ])
+                    ->live()
                     ->columnSpan(3),
 
                 Select::make('colorBy')
@@ -150,6 +177,7 @@ class UniverseMap extends Page implements HasForms
                         'security' => 'Security status',
                         'region' => 'Region',
                     ])
+                    ->live()
                     ->columnSpan(3),
             ]);
     }
