@@ -140,8 +140,9 @@ return [
     |
     | Phase-1 client is "thin": logs rate-limit headers, honours Retry-After
     | on 429/420, does conditional-GET via Redis-cached ETag / Last-Modified.
-    | Per-group pre-flight throttling and token refresh are phase-2 work,
-    | handled in the Python execution plane.
+    | Reactive per-group pre-flight throttling (bucket + global error-limit
+    | budget) lives in App\Services\Eve\Esi\EsiRateLimiter. Token refresh
+    | and heavy polling stay on the Python execution plane.
     |
     */
     'esi' => [
@@ -172,8 +173,15 @@ return [
         //     up to this many seconds (controllers, cron). Anything longer
         //     throws EsiRateLimitException with the wait time so Horizon
         //     callers can `release($seconds)` instead of pinning a worker.
+        //
+        //   error_limit_safety_margin: refuse to send when CCP's legacy
+        //     global error budget (`X-ESI-Error-Limit-Remain`) has dropped
+        //     to or below this. Fixed-window, 100-errors-per-minute by
+        //     default; a tighter reserve than the bucket margin because
+        //     overflow trips 420 for every route, not just the offender.
         'rate_limit_safety_margin' => (int) env('ESI_RATE_LIMIT_SAFETY_MARGIN', 5),
         'rate_limit_max_wait_seconds' => (int) env('ESI_RATE_LIMIT_MAX_WAIT_SECONDS', 5),
+        'error_limit_safety_margin' => (int) env('ESI_ERROR_LIMIT_SAFETY_MARGIN', 10),
     ],
 
 ];

@@ -104,8 +104,8 @@ client. Phase 1 scope:
   auto-attaches `If-None-Match` / `If-Modified-Since` on the next request.
   3XX responses are half-price in token cost, so this pays for itself on
   repeat fetches.
-- Logs `X-Ratelimit-Group`, `X-Ratelimit-Remaining`, `X-Ratelimit-Used` on
-  every response.
+- Logs `X-Ratelimit-Group`, `X-Ratelimit-Remaining`, `X-Ratelimit-Used`
+  (and `X-ESI-Error-Limit-*`) on every response.
 - Reactive per-group throttle via `App\Services\Eve\Esi\EsiRateLimiter`
   (added in a follow-up to this ADR — the original phase-1 plan punted
   this to Python, but real Laravel-side import callers landed first):
@@ -120,6 +120,15 @@ client. Phase 1 scope:
     group's state from `X-Ratelimit-*` headers. We deliberately don't
     count tokens locally — CCP's `Remaining` is the source of truth, and
     re-counting compounds drift on every parallel worker.
+  - Global error-limit budget (per CCP's
+    [Best Practices](https://developers.eveonline.com/docs/services/esi/best-practices/)
+    page — mutually exclusive with the bucket headers on any single
+    response). We track `X-ESI-Error-Limit-Remain` /
+    `X-ESI-Error-Limit-Reset` in one shared `esi:rl:error` key and
+    pre-flight holds the whole client when the remaining budget drops
+    to/below `error_limit_safety_margin` until the fixed window rolls.
+    Overflow trips 420 on every route (not just the offender), so this
+    margin sits wider than the per-group bucket margin.
   - Not a distributed lock. Two workers can race past `preflight()`;
     the safety margin absorbs small overshoots and the 429 → backoff is
     the safety net. A Lua-script-backed atomic counter is on the table

@@ -21,13 +21,15 @@ use Illuminate\Support\Facades\Log;
  *     request. 3XX responses cost half the tokens of 2XX on ESI's published
  *     rate-limit math, so repeat fetches get noticeably cheaper.
  *   - Reactive rate-limit throttle via {@see EsiRateLimiter}: pre-flight
- *     blocks (or throws) when a known group is in 429 cooldown or running
- *     below `safety_margin` tokens. State is reseeded from
- *     `X-Ratelimit-*` headers on every response.
+ *     blocks (or throws) when a known group is in 429 cooldown, running
+ *     below `safety_margin` tokens, or when the global error budget is
+ *     about to trip 420. State is reseeded from `X-Ratelimit-*` and
+ *     `X-ESI-Error-Limit-*` headers on every response.
  *   - On 429 / 420: tells the limiter to back the group off, then throws
  *     `EsiRateLimitException` carrying `Retry-After`. Callers decide
  *     whether to `release($seconds)` (Horizon) or bubble.
- *   - Logs `X-Ratelimit-*` on every response (debug channel).
+ *   - Logs `X-Ratelimit-*` / `X-ESI-Error-Limit-*` on every response
+ *     (debug channel).
  *
  * Still NOT in scope:
  *
@@ -78,12 +80,12 @@ final class EsiClient
      * absolute URLs are passed through so callers can hit non-default ESI
      * hosts without reconfiguring the client.
      *
-     * @param array<string, scalar|array<int, scalar>> $query
+     * @param  array<string, scalar|array<int, scalar>>  $query
      *
-     * @throws EsiRateLimitException  on 429 / 420 (also raised pre-flight when
-     *                                a known group is in cooldown longer than
-     *                                `rate_limit_max_wait_seconds`).
-     * @throws EsiException           on any other 4xx / 5xx
+     * @throws EsiRateLimitException on 429 / 420 (also raised pre-flight when
+     *                               a known group is in cooldown longer than
+     *                               `rate_limit_max_wait_seconds`).
+     * @throws EsiException on any other 4xx / 5xx
      */
     public function get(string $path, array $query = [], ?string $bearerToken = null): EsiResponse
     {
@@ -282,7 +284,7 @@ final class EsiClient
     }
 
     /**
-     * @param array<string, scalar|array<int, scalar>> $query
+     * @param  array<string, scalar|array<int, scalar>>  $query
      */
     private function cacheKeyFor(string $url, array $query): string
     {
@@ -296,11 +298,28 @@ final class EsiClient
 
     /**
      * @return array<string, string>
+     *
+     * Captures both families of ESI throttle headers. Per CCP's best-practices
+     * doc they're mutually exclusive on any single response: the newer
+     * `X-Ratelimit-*` bucket headers identify a per-route-group token budget,
+     * while the legacy `X-ESI-Error-Limit-*` headers describe a single global
+     * error budget (100 errors / fixed minute) whose overflow trips 420. We
+     * record whichever the response carries and let `EsiRateLimiter` branch.
      */
     private function extractRateLimitHeaders(Response $response): array
     {
         $headers = [];
-        foreach (['X-Ratelimit-Group', 'X-Ratelimit-Limit', 'X-Ratelimit-Remaining', 'X-Ratelimit-Used'] as $name) {
+        $names = [
+            // Bucket-based (sliding window per group).
+            'X-Ratelimit-Group',
+            'X-Ratelimit-Limit',
+            'X-Ratelimit-Remaining',
+            'X-Ratelimit-Used',
+            // Error-based (global fixed-window error budget).
+            'X-ESI-Error-Limit-Remain',
+            'X-ESI-Error-Limit-Reset',
+        ];
+        foreach ($names as $name) {
             $value = $response->header($name);
             if ($value !== '' && $value !== null) {
                 $headers[$name] = (string) $value;

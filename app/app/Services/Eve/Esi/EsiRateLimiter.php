@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\Cache;
 /**
  * Per-group floating-window throttle for ESI requests.
  *
- * Backed by the `eve.esi.cache_store` cache (Redis in prod). Three kinds of
- * keys, all with TTLs so stale entries fall out automatically:
+ * Backed by the `eve.esi.cache_store` cache (Redis in prod). Key families,
+ * all with TTLs so stale entries fall out automatically:
  *
  *   esi:rl:state:{group}    — last-known (remaining, reset_at) for the group.
  *                             Updated from `X-Ratelimit-*` response headers.
@@ -30,6 +30,16 @@ use Illuminate\Support\Facades\Cache;
  *                             group before sending. TTL = 1 day; route
  *                             groupings rarely change between SDE bumps.
  *
+ *   esi:rl:error            — last-known (remaining, reset_at) for the
+ *                             global error-limit budget (CCP's legacy
+ *                             100-errors-per-minute ceiling reported via
+ *                             `X-ESI-Error-Limit-Remain` /
+ *                             `X-ESI-Error-Limit-Reset`). Mutually
+ *                             exclusive with the bucket headers on any
+ *                             single response, but applies to *every* URL
+ *                             regardless of group — one error budget per
+ *                             IP. TTL = (reset_at - now) + safety pad.
+ *
  * Why no "tokens-this-window" counter of our own? CCP's
  * `X-Ratelimit-Remaining` is the source of truth — re-counting tokens
  * locally just compounds drift on every retry / parallel worker. We
@@ -47,8 +57,13 @@ use Illuminate\Support\Facades\Cache;
 final class EsiRateLimiter
 {
     private const KEY_STATE = 'esi:rl:state:';
+
     private const KEY_BACKOFF = 'esi:rl:backoff:';
+
     private const KEY_URL_GROUP = 'esi:rl:url_group:';
+
+    private const KEY_ERROR_STATE = 'esi:rl:error';
+
     private const GLOBAL_GROUP = '_global';
 
     // url_group cache lives a day — long enough to amortise the lookup over
@@ -58,8 +73,15 @@ final class EsiRateLimiter
 
     public function __construct(
         private readonly Repository $cache,
-        /** Refuse to send when remaining tokens drop below this. */
+        /** Refuse to send when remaining bucket tokens drop below this. */
         private readonly int $safetyMargin,
+        /**
+         * Refuse to send when the global error budget
+         * (`X-ESI-Error-Limit-Remain`) drops to or below this. Distinct
+         * from the bucket safety margin because the error budget is one
+         * IP-wide counter whose overflow trips 420 for every route.
+         */
+        private readonly int $errorSafetyMargin,
     ) {}
 
     /**
@@ -73,16 +95,17 @@ final class EsiRateLimiter
         return new self(
             cache: Cache::store((string) ($cfg['cache_store'] ?? 'redis')),
             safetyMargin: (int) ($cfg['rate_limit_safety_margin'] ?? 5),
+            errorSafetyMargin: (int) ($cfg['error_limit_safety_margin'] ?? 10),
         );
     }
 
     /**
      * How long should the caller wait before sending this request?
      *
-     * Returns 0.0 when good to go. Positive seconds when held — by either a
-     * 429 backoff or a depleted group bucket. Caller decides whether to
-     * sleep, `release()` a queue job, or surface the wait as a 503-style
-     * error.
+     * Returns 0.0 when good to go. Positive seconds when held — by any of:
+     * a 429 backoff, a depleted group bucket, or a near-exhausted global
+     * error budget. Caller decides whether to sleep, `release()` a queue
+     * job, or surface the wait as a 503-style error.
      */
     public function preflight(string $url): float
     {
@@ -93,6 +116,20 @@ final class EsiRateLimiter
         $globalBackoff = (int) ($this->cache->get(self::KEY_BACKOFF.self::GLOBAL_GROUP) ?? 0);
         if ($globalBackoff > $now) {
             return (float) ($globalBackoff - $now);
+        }
+
+        // Global error budget — the legacy 100-errors-per-minute ceiling
+        // applies across every route, so a depleted budget holds the whole
+        // client until the window resets. Same safety-margin logic as the
+        // bucket limit but on the error counter: we reserve a handful of
+        // errors so a single retry loop can't drive us into 420 land.
+        $errorState = $this->cache->get(self::KEY_ERROR_STATE);
+        if (is_array($errorState) && isset($errorState['remaining'], $errorState['reset_at'])) {
+            $errRemaining = (int) $errorState['remaining'];
+            $errResetAt = (int) $errorState['reset_at'];
+            if ($errResetAt > $now && $errRemaining <= $this->errorSafetyMargin) {
+                return (float) ($errResetAt - $now);
+            }
         }
 
         $group = $this->groupForUrl($url);
@@ -139,10 +176,25 @@ final class EsiRateLimiter
      * Update group state from a successful (or non-rate-limit failed) ESI
      * response. Always called by the client, regardless of status — even a
      * 304 carries the rate-limit headers.
+     *
+     * Responses carry either the bucket headers (`X-Ratelimit-*`) or the
+     * legacy error-limit headers (`X-ESI-Error-Limit-*`), never both. We
+     * handle each branch independently so the caller never has to care
+     * which scheme ESI is reporting for a given route.
      */
     public function record(string $url, EsiResponse $response): void
     {
         $headers = $response->rateLimit;
+
+        $this->recordBucket($url, $headers);
+        $this->recordErrorLimit($headers);
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     */
+    private function recordBucket(string $url, array $headers): void
+    {
         $group = $headers['X-Ratelimit-Group'] ?? null;
         if ($group === null) {
             return;
@@ -166,6 +218,37 @@ final class EsiRateLimiter
         $this->cache->put(
             self::KEY_STATE.$group,
             ['remaining' => $remaining, 'reset_at' => $resetAt],
+            $ttl,
+        );
+    }
+
+    /**
+     * Persist the global error-limit window from `X-ESI-Error-Limit-*`.
+     *
+     * CCP's error limit is a fixed-window counter (not sliding): `Remain`
+     * drops as we accumulate errors, `Reset` is the whole-second countdown
+     * until the window resets and `Remain` jumps back to its ceiling.
+     * Overflow trips 420 for every route until the window rolls.
+     *
+     * @param  array<string, string>  $headers
+     */
+    private function recordErrorLimit(array $headers): void
+    {
+        $remaining = $headers['X-ESI-Error-Limit-Remain'] ?? null;
+        $resetIn = $headers['X-ESI-Error-Limit-Reset'] ?? null;
+        if ($remaining === null || $resetIn === null) {
+            return;
+        }
+        if (! ctype_digit($remaining) || ! ctype_digit($resetIn)) {
+            return;
+        }
+
+        $resetAt = time() + (int) $resetIn;
+        $ttl = max(1, (int) $resetIn + 5);
+
+        $this->cache->put(
+            self::KEY_ERROR_STATE,
+            ['remaining' => (int) $remaining, 'reset_at' => $resetAt],
             $ttl,
         );
     }
@@ -229,7 +312,7 @@ final class EsiRateLimiter
      * unexpectedly — `record()` then skips state updates rather than
      * extrapolate from garbage.
      *
-     * @param array<string, string> $headers
+     * @param  array<string, string>  $headers
      */
     private function resetEpochFromHeaders(array $headers): ?int
     {
