@@ -6,3 +6,9 @@
 neo4j~=5.26
 pymysql~=1.1
 python-ulid~=3.0
+# python-ulid 3.0.x has an unconditional `from typing_extensions import Self`
+# but only declares typing_extensions as a dep on Python < 3.11 — fine on
+# 3.10, blows up at import time on 3.12 (our base image). Pin it ourselves
+# until python-ulid drops the unconditional import. See:
+#   https://github.com/mdomke/python-ulid/issues — search "typing_extensions".
+typing_extensions>=4.7
