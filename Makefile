@@ -39,6 +39,7 @@ help:
 	@echo "  make neo4j-sync-universe    project ref_* universe topology into Neo4j (one-shot)"
 	@echo "  make market-poll            pull order-book snapshots into market_orders (one-shot)"
 	@echo "  make market-import          import EVE Ref daily market-history CSVs (one-shot)"
+	@echo "  make outbox-relay           drain MariaDB outbox into InfluxDB (one-shot)"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -114,7 +115,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll market-import
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay
 build:
 	$(COMPOSE) build
 
@@ -258,6 +259,19 @@ market-poll:
 #   MARKET_IMPORT_ARGS="--log-level=DEBUG"
 market-import:
 	$(COMPOSE) --profile tools run --rm --build market_importer $(MARKET_IMPORT_ARGS)
+
+# Drain the MariaDB outbox into InfluxDB once + exit. Useful for
+# "process the backlog now" or testing a projector change without
+# bouncing the long-lived `outbox_relay` service. Each tick within
+# the drain claims OUTBOX_RELAY_BATCH_SIZE rows; exits when a pass
+# returns zero claims.
+#
+# Overrides:
+#   OUTBOX_RELAY_ARGS="--log-level=DEBUG"
+#   OUTBOX_RELAY_ARGS="--batch-size=200"
+#   OUTBOX_RELAY_ARGS="--max-attempts=10"
+outbox-relay:
+	$(COMPOSE) --profile tools run --rm --build outbox_relay_oneshot $(OUTBOX_RELAY_ARGS)
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
