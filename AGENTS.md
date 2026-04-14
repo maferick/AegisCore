@@ -33,8 +33,9 @@ This rule is enforced at code review. Violations block merge.
 
 - Laravel queues and Horizon jobs handle **control-plane work only**:
   notifications, audit, webhook fan-out, auth events, UI glue.
-- A Laravel queue job must complete in **< 2s** and touch **< 100 rows**. If
-  it wouldn't, it belongs in Python.
+- A Laravel queue job must target **p95 < 2s**. Row-touch budget is
+  **<= 100 rows by default**; jobs may run up to **<= 500 rows** only with
+  explicit chunking, idempotency, and monitoring. Beyond that, move to Python.
 - **Laravel does not call Python workers directly** and does not push to
   Python's queues. Cross-plane triggers use the **outbox pattern** — Laravel
   writes an intent row to MariaDB's `outbox` table inside the same transaction
@@ -48,8 +49,10 @@ This rule is enforced at code review. Violations block merge.
 When you write a new job, pick the plane before you pick the class.
 
 **Keep in PHP (Laravel queue) when all of these hold:**
-- **Fast:** completes in ~< 2 seconds.
-- **Small:** touches ~< 100 DB rows.
+- **Fast:** p95 completes in ~< 2 seconds.
+- **Small by default:** touches ~<= 100 DB rows.
+- **If 101–500 rows:** use explicit chunking + idempotency + metrics, and keep
+  p95 under 2 seconds.
 - **UI / control-plane shaped:** emails, notifications, audit logs, webhooks,
   export kickoff, cache invalidation.
 - **Not compute-heavy and not long-running.**
@@ -57,7 +60,7 @@ When you write a new job, pick the plane before you pick the class.
 
 **Move to Python when any of these hold:**
 - **Slow or variable runtime** (> 2s, can spike).
-- **Large batch / data scan** (> 100 rows, backfills, replays).
+- **Large batch / data scan** (> 500 rows, backfills, replays).
 - **Compute-heavy** (matching, scoring, graph traversal, aggregation).
 - **Pipeline / projection work** (outbox consume, indexing, graph/search writes).
 - **Needs worker concurrency control or idempotent bulk processing.**

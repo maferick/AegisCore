@@ -30,8 +30,10 @@ to derived stores. The rule is enforced at code review.
    and InfluxDB.
 2. Laravel does not enqueue work directly into Python. Laravel writes an
    `outbox` row; Python consumes it.
-3. Laravel queue jobs (Horizon) must complete in < 2s and touch < 100 rows.
-   Anything bigger belongs in Python.
+3. Laravel queue jobs (Horizon) must target p95 < 2s. Row-touch budget is
+   <= 100 rows by default; 101–500 rows are allowed only with explicit
+   chunking, idempotency, and monitoring. Anything > 500 rows belongs in
+   Python.
 4. `outbox` rows are written **inside the same MariaDB transaction** as the
    business change — never post-commit.
 

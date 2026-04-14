@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // the default path.
         \App\Reference\Console\CheckSdeVersionCommand::class,
         \App\Domains\UsersCharacters\Console\PollDonationsCommand::class,
+        \App\Domains\UsersCharacters\Console\RecomputeDonorBenefitsCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting

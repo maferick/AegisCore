@@ -297,6 +297,22 @@ Phase 2 (separate ADR amendment):
       automatically. No backfill, no migration. The future ad-removal
       gate is therefore a one-line `if (! $user->isDonor())` check
       rather than a cross-cutting refactor.
+    - **ISK-to-ad-free-days conversion, with expiry.** Donations grant
+      `amount / EVE_DONATIONS_ISK_PER_DAY` days of ad-free time
+      (default 100 000 ISK = 1 day, operator-tunable). Stacking is
+      streaming, not summed: a donation inside an active window
+      extends it from the current expiry; a donation after the window
+      elapsed resets it from the new arrival time. `isDonor()` checks
+      a materialised `eve_donor_benefits.ad_free_until` column against
+      `now()`, so donor status flips back to false the moment the
+      accumulated window passes — no cron or cleanup job required.
+      The poll job recomputes touched donors via
+      `DonorBenefitCalculator::recomputeForCharacter()` after every
+      upsert; `php artisan eve:donations:recompute` rebuilds every
+      row at the current rate (used for the one-off post-migration
+      backfill and any time the operator changes the rate — the new
+      rate is retroactive so past donors don't get stuck on the old
+      curve).
     - **Plane boundary.** Strictly speaking 5-minute polling belongs
       on the Python execution plane per this ADR's split. But: a
       single character + single endpoint + 5-minute cadence + dozens
@@ -308,6 +324,8 @@ Phase 2 (separate ADR amendment):
       PHP job.
 
     See `App\Domains\UsersCharacters\Jobs\PollDonationsWallet`,
+    `App\Domains\UsersCharacters\Services\DonorBenefitCalculator`,
     `App\Filament\Pages\EveDonations`, and the
     `2026_04_14_000002_create_eve_donations_tokens_table.php` /
-    `2026_04_14_000003_create_eve_donations_table.php` migrations.
+    `2026_04_14_000003_create_eve_donations_table.php` /
+    `2026_04_14_000004_create_eve_donor_benefits_table.php` migrations.
