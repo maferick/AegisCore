@@ -112,6 +112,28 @@ class ServiceToken:
         return scope in self.scopes
 
 
+@dataclass(frozen=True)
+class MarketToken:
+    """The resolved, decrypted, refreshed-if-stale donor market token.
+
+    Shape-identical to `ServiceToken` but sourced from
+    `eve_market_tokens` (one row per donor character) and always
+    carries a `user_id` — the binding the poller enforces on every
+    fetch (ADR-0004 § Token ownership enforced at read/use).
+    """
+    id: int
+    user_id: int
+    character_id: int
+    character_name: str
+    access_token: str
+    refresh_token: str
+    expires_at: datetime
+    scopes: list[str]
+
+    def has_scope(self, scope: str) -> bool:
+        return scope in self.scopes
+
+
 def load_and_refresh_service_token(
     conn: pymysql.connections.Connection,
     cfg: Config,
@@ -216,6 +238,129 @@ def load_and_refresh_service_token(
     )
 
 
+def load_and_refresh_market_token(
+    conn: pymysql.connections.Connection,
+    cfg: Config,
+    user_id: int,
+    *,
+    required_scopes: tuple[str, ...] = (REQUIRED_STRUCTURE_SCOPE,),
+) -> MarketToken:
+    """Load + refresh-if-stale the market token for `user_id`.
+
+    Phase 5 assumption: one market token per donor (at most one
+    authorised character per donor). A donor with multiple linked
+    EVE characters who has authorised more than one is an edge case
+    we don't fully support — we pick the most-recently-updated row
+    and log the fact that others were ignored. Proper multi-alt
+    support is a future migration that adds `owner_character_id` to
+    `market_watched_locations`.
+
+    Error surface mirrors the service-token path:
+      - ServiceTokenNotConfigured — APP_KEY / SSO creds empty.
+      - ServiceTokenMissing        — no row for this user_id.
+      - ServiceTokenScopeMissing   — row exists but lacks the scope
+                                     (security-boundary disable).
+      - ServiceTokenError          — decrypt / refresh failed.
+    """
+    if not cfg.app_key:
+        raise ServiceTokenNotConfigured(
+            "APP_KEY is empty — Python plane can't decrypt market tokens"
+        )
+    if not cfg.eve_sso_client_id or not cfg.eve_sso_client_secret:
+        raise ServiceTokenNotConfigured(
+            "EVE_SSO_CLIENT_ID / CLIENT_SECRET not configured"
+        )
+
+    try:
+        encrypter = LaravelEncrypter.from_app_key(cfg.app_key)
+    except LaravelEncrypterError as exc:
+        raise ServiceTokenError(f"APP_KEY malformed: {exc}") from exc
+
+    # SELECT FOR UPDATE — parallel pollers serialise here. Two rows
+    # for the same user_id would be the "donor authorised multiple
+    # alts" edge case flagged above; we pick the freshest.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, user_id, character_id, character_name, scopes,
+                   access_token, refresh_token, expires_at
+              FROM eve_market_tokens
+             WHERE user_id = %s
+             ORDER BY updated_at DESC
+             LIMIT 1
+             FOR UPDATE
+            """,
+            (int(user_id),),
+        )
+        row = cur.fetchone()
+    if row is None:
+        conn.rollback()
+        raise ServiceTokenMissing(
+            f"no eve_market_tokens row for user_id={user_id} — donor hasn't "
+            "authorised market access yet"
+        )
+
+    try:
+        access_token = encrypter.decrypt(row["access_token"])
+        refresh_token = encrypter.decrypt(row["refresh_token"])
+    except LaravelEncrypterError as exc:
+        conn.rollback()
+        raise ServiceTokenError(f"decrypt failed: {exc}") from exc
+
+    expires_at = _as_utc(row["expires_at"])
+    scopes = _load_scopes(row["scopes"])
+
+    refresh_due = expires_at <= datetime.now(timezone.utc) + timedelta(seconds=60)
+    if not refresh_due:
+        conn.rollback()
+        _require_scopes(scopes, required_scopes, character_id=int(row["character_id"]))
+        return MarketToken(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            character_id=int(row["character_id"]),
+            character_name=row["character_name"],
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=expires_at,
+            scopes=scopes,
+        )
+
+    log.info(
+        "market token stale, refreshing",
+        user_id=int(row["user_id"]),
+        character_id=int(row["character_id"]),
+        expires_at=expires_at.isoformat(),
+    )
+    try:
+        fresh = refresh_access_token(
+            refresh_token,
+            client_id=cfg.eve_sso_client_id,
+            client_secret=cfg.eve_sso_client_secret,
+            token_url=cfg.eve_sso_token_url,
+        )
+    except SsoPermanentError as exc:
+        conn.rollback()
+        raise ServiceTokenError(f"refresh permanently rejected: {exc}") from exc
+    except SsoError as exc:
+        conn.rollback()
+        raise ServiceTokenError(f"refresh failed: {exc}") from exc
+
+    _persist_market_refreshed(conn, encrypter, row_id=int(row["id"]), fresh=fresh)
+    conn.commit()
+
+    _require_scopes(fresh.scopes, required_scopes, character_id=fresh.character_id)
+    return MarketToken(
+        id=int(row["id"]),
+        user_id=int(row["user_id"]),
+        character_id=fresh.character_id,
+        character_name=fresh.character_name,
+        access_token=fresh.access_token,
+        refresh_token=fresh.refresh_token,
+        expires_at=fresh.expires_at,
+        scopes=fresh.scopes,
+    )
+
+
 # -- internals ------------------------------------------------------------
 
 
@@ -234,6 +379,43 @@ def _persist_refreshed(
         cur.execute(
             """
             UPDATE eve_service_tokens
+               SET access_token   = %s,
+                   refresh_token  = %s,
+                   expires_at     = %s,
+                   scopes         = %s,
+                   character_name = %s,
+                   updated_at     = %s
+             WHERE id = %s
+            """,
+            (
+                enc_access,
+                enc_refresh,
+                fresh.expires_at.astimezone(timezone.utc).replace(tzinfo=None),
+                json.dumps(fresh.scopes),
+                fresh.character_name,
+                datetime.now(timezone.utc).replace(tzinfo=None),
+                row_id,
+            ),
+        )
+
+
+def _persist_market_refreshed(
+    conn: pymysql.connections.Connection,
+    encrypter: LaravelEncrypter,
+    *,
+    row_id: int,
+    fresh: RefreshedToken,
+) -> None:
+    """UPDATE eve_market_tokens with freshly-rotated tokens. Twin of
+    `_persist_refreshed` — kept separate because we want a SQL typo
+    on one table name to be a compile-time rather than a cross-table
+    corruption."""
+    enc_access = encrypter.encrypt(fresh.access_token)
+    enc_refresh = encrypter.encrypt(fresh.refresh_token)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE eve_market_tokens
                SET access_token   = %s,
                    refresh_token  = %s,
                    expires_at     = %s,

@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Donor-owned structure polling in the Python plane (step 5b of
+  ADR-0004's rollout).** The market poller now reads donor-owned
+  structures using the `eve_market_tokens` rows the new fourth SSO
+  flow authors. Completes the end-to-end donor self-service data
+  path: donor authorises character via `/auth/eve/market-redirect`
+  → token encrypted into `eve_market_tokens` → poller reads
+  `/markets/structures/{id}/` with the donor's own bearer →
+  orders land in `market_orders` with source
+  `esi_structure_<structure_id>`.
+  - **`market_poller/auth.py`** gains `load_and_refresh_market_token(conn, cfg, user_id)`
+    — twin of the existing `load_and_refresh_service_token()` keyed
+    on `user_id` rather than the singleton service row. Same
+    `SELECT ... FOR UPDATE` lock pattern so parallel pollers can't
+    double-rotate a donor's refresh token. Same 60-second future-
+    bias for refresh triggering. Same scope-gate enforcement
+    (`esi-markets.structure_markets.v1` required → otherwise raises
+    `ServiceTokenScopeMissing`, which the runner maps to immediate
+    disable).
+  - **New `MarketToken` dataclass** alongside `ServiceToken`. Same
+    shape plus `user_id` — the binding the poller enforces on every
+    fetch.
+  - **`_persist_market_refreshed()`** twin of the service-token
+    persister. Kept as a separate function so a SQL typo on the
+    table name becomes a compile-time error rather than a
+    cross-table corruption.
+  - **`market_poller/runner.py`** replaces the previous
+    "donor-owned structure skipped" log-line with a real branch:
+      - `owner_user_id IS NULL` → service token (admin path).
+      - `owner_user_id IS NOT NULL` → donor market token via the
+        new cache.
+    A new `_MarketTokenCache` mirrors `_ServiceTokenCache` but
+    keys on `user_id` so a donor with N watched structures pays
+    the load+refresh round-trip once per pass, not N times.
+  - **Defensive ownership-mismatch check** at the use-site in
+    `_acquire_structure_token()`: if the loaded market token's
+    `user_id` doesn't match the watched-location's `owner_user_id`,
+    we immediately disable the row with
+    `disabled_reason = 'ownership_mismatch'`. The SELECT-side
+    filter in `load_and_refresh_market_token()` already enforces
+    this, but the use-site check catches any future refactor that
+    loosens the SELECT.
+  - **Phase-5 multi-alt limitation** documented in the auth.py
+    docstring: donors with multiple authorised characters get
+    `ORDER BY updated_at DESC LIMIT 1`. Proper multi-alt support
+    is a future migration that adds `owner_character_id` to
+    `market_watched_locations`.
 - **Fourth SSO flow: donor self-service market authorisation (step
   5a of ADR-0004's rollout).** Donors can now authorise one of their
   linked EVE characters for market-structure reads. Completes the

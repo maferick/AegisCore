@@ -11,7 +11,7 @@ lives outside this package (Laravel scheduler, cron, systemd timer
 
 ## Scope
 
-Polls two kinds of row in `market_watched_locations`:
+Polls three kinds of row in `market_watched_locations`:
 
 1. **NPC stations** (`location_type = 'npc_station'`) — region endpoint
    + client-side location filter, no auth.
@@ -20,15 +20,17 @@ Polls two kinds of row in `market_watched_locations`:
    `eve_service_tokens` singleton the Laravel
    `/admin/eve-service-character` flow authored. Requires
    `esi-markets.structure_markets.v1` scope.
+3. **Donor-owned player structures** (`location_type = 'player_structure'`
+   with `owner_user_id = <user>`) — structure endpoint using that
+   donor's row in `eve_market_tokens`. Requires the same scope. The
+   poller enforces `token.user_id == watched_location.owner_user_id`
+   as an invariant on every fetch — mismatch triggers immediate
+   `disabled_reason = 'ownership_mismatch'` disable (security-
+   boundary violation, no grace counter). ADR-0004 § Structure
+   access is alliance/corp-gated.
 
 **Jita 4-4 is the seeded baseline** (region 10000002, location
 60003760) and runs on every pass.
-
-Donor-owned structure polling (`location_type = 'player_structure'`
-with `owner_user_id = <user>`, backed by `eve_market_tokens`) is the
-next rollout step per ADR-0004. Rows exist in
-`market_watched_locations` but are log-skipped by this package until
-that step lands.
 
 Per-location output: stamp `observation_kind = 'snapshot'`, bulk
 `INSERT IGNORE` into `market_orders`, emit one

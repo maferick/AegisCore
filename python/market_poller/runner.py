@@ -27,13 +27,11 @@ Steps:
 A failure in one location never stops the loop — each has its own
 try/except and its own transaction boundary.
 
-Service-token loading is LAZY + CACHED: if no player_structure rows
-are enabled on this stack, we never attempt to decrypt a service
-token and the APP_KEY / EVE_SSO_* env vars can safely be empty. On
-the first admin-owned structure row we try to load + refresh once,
-cache the result (success or error) for the rest of the pass, and
-fail subsequent structure polls on the cached error without
-re-attempting.
+Token loading is LAZY + CACHED. The service token (admin-owned
+structures) and each donor's market token (donor-owned structures)
+are loaded + refreshed on first need and cached for the rest of
+the pass. Stacks without structure rows never touch either cache;
+donors with multiple watched structures pay the refresh cost once.
 """
 
 from __future__ import annotations
@@ -45,11 +43,13 @@ import pymysql
 
 from market_poller.auth import (
     REQUIRED_STRUCTURE_SCOPE,
+    MarketToken,
     ServiceToken,
     ServiceTokenError,
     ServiceTokenMissing,
     ServiceTokenNotConfigured,
     ServiceTokenScopeMissing,
+    load_and_refresh_market_token,
     load_and_refresh_service_token,
 )
 from market_poller.config import Config, SUPPORTED_LOCATION_TYPES
@@ -91,9 +91,10 @@ def run(cfg: Config) -> int:
             log.info("locations to poll", count=len(locations))
 
             service_cache = _ServiceTokenCache(conn, cfg)
+            market_cache = _MarketTokenCache(conn, cfg)
 
             for loc in locations:
-                outcome = _poll_one(conn, esi, loc, cfg, service_cache)
+                outcome = _poll_one(conn, esi, loc, cfg, service_cache, market_cache)
                 if outcome == "polled":
                     polled += 1
                 elif outcome == "failed":
@@ -144,6 +145,36 @@ class _ServiceTokenCache:
         return self._result
 
 
+class _MarketTokenCache:
+    """Donor market-token cache, keyed on user_id. Same
+    lazy+memoised pattern as `_ServiceTokenCache`. A donor with N
+    watched structures pays the load+refresh round-trip once per
+    pass; the cache also remembers errors so repeated structure
+    rows for a donor with a broken token don't re-attempt per-row.
+    """
+
+    _SENTINEL_UNSET = object()
+
+    def __init__(self, conn: pymysql.connections.Connection, cfg: Config) -> None:
+        self._conn = conn
+        self._cfg = cfg
+        self._by_user: dict[int, object | MarketToken] = {}
+
+    def get(self, user_id: int) -> MarketToken:
+        if user_id not in self._by_user:
+            try:
+                self._by_user[user_id] = load_and_refresh_market_token(
+                    self._conn, self._cfg, user_id,
+                )
+            except ServiceTokenError as exc:
+                self._by_user[user_id] = exc
+        cached = self._by_user[user_id]
+        if isinstance(cached, ServiceTokenError):
+            raise cached
+        assert isinstance(cached, MarketToken)
+        return cached
+
+
 # -- internals ------------------------------------------------------------
 
 
@@ -180,6 +211,7 @@ def _poll_one(
     loc: dict,
     cfg: Config,
     service_cache: _ServiceTokenCache,
+    market_cache: _MarketTokenCache,
 ) -> str:
     """Poll one watched-location row. Returns 'polled' | 'failed' |
     'skipped' for the caller's summary counters."""
@@ -190,17 +222,6 @@ def _poll_one(
             watched_location_id=loc["id"],
             location_type=location_type,
             location_id=loc["location_id"],
-        )
-        return "skipped"
-
-    # Donor-owned structures (owner_user_id IS NOT NULL + player_structure)
-    # are the next rollout step. Skip cleanly rather than half-implementing.
-    if location_type == "player_structure" and loc.get("owner_user_id") is not None:
-        log.info(
-            "donor-owned structure skipped (not yet supported)",
-            watched_location_id=loc["id"],
-            location_id=loc["location_id"],
-            owner_user_id=loc["owner_user_id"],
         )
         return "skipped"
 
@@ -232,13 +253,27 @@ def _poll_one(
             orders_iter = esi.region_orders(int(loc["region_id"]))
             filter_location_id: int | None = int(loc["location_id"])
         else:
-            # player_structure, owner_user_id IS NULL (admin-owned):
-            # service token path.
-            token = _acquire_service_token(conn, loc, cfg, service_cache, observed_at)
-            if token is None:
+            # player_structure. Two paths depending on ownership:
+            #
+            #   - owner_user_id IS NULL  → admin-managed platform
+            #     default. Use the admin's eve_service_tokens row.
+            #   - owner_user_id IS NOT NULL → donor-owned. Use the
+            #     donor's eve_market_tokens row. ADR-0004 § Structure
+            #     access is alliance/corp-gated: there is no
+            #     technical path by which a shared admin token can
+            #     poll arbitrary donor-selected structures.
+            owner_user_id = loc.get("owner_user_id")
+            access_token = _acquire_structure_token(
+                conn, loc, cfg, service_cache, market_cache, observed_at,
+            )
+            if access_token is None:
                 return "failed"
-            orders_iter = esi.structure_orders(int(loc["location_id"]), token.access_token)
+            orders_iter = esi.structure_orders(int(loc["location_id"]), access_token)
             filter_location_id = None  # Structure endpoint is already location-specific.
+            # Silence the linter — owner_user_id is surfaced in failure
+            # logs via the watched-location row itself; we read it
+            # above only to pick the auth path.
+            del owner_user_id
 
         result = insert_orders(
             conn,
@@ -298,70 +333,106 @@ def _poll_one(
     return "polled"
 
 
-def _acquire_service_token(
+def _acquire_structure_token(
     conn: pymysql.connections.Connection,
     loc: dict,
     cfg: Config,
     service_cache: _ServiceTokenCache,
+    market_cache: _MarketTokenCache,
     now: datetime,
-) -> ServiceToken | None:
-    """Get a usable service token for an admin-owned structure poll.
-    Returns None on any failure, after recording the failure /
-    disabling the row as appropriate. The caller short-circuits with
-    a 'failed' outcome.
+) -> str | None:
+    """Return the access_token string to use for this structure poll,
+    or None after recording failure on the row.
 
-    Failure classification:
-      - ServiceTokenNotConfigured  → routine skip (APP_KEY/SSO creds
-                                     empty on this stack). Recorded
-                                     as a non-disable failure.
-      - ServiceTokenMissing         → routine skip (admin hasn't
-                                     authorised yet).
-      - ServiceTokenScopeMissing    → security-boundary disable
-                                     (operator must re-authorise
-                                     with the required scope set).
+    Branches on `owner_user_id`:
+      - NULL  → admin-managed. Use service-character token
+                (`eve_service_tokens`).
+      - int   → donor-owned. Use the donor's market token
+                (`eve_market_tokens` rows with matching user_id).
+                The caller's source-string already bakes in the
+                structure_id; this function just returns the bearer.
+
+    Failure classification is identical for both paths:
+      - ServiceTokenNotConfigured / ServiceTokenMissing → routine
+        skip (no counter tick, logged at info).
+      - ServiceTokenScopeMissing → security-boundary disable
+        immediately (no grace counter).
       - Any other ServiceTokenError → routine failure (decrypt /
-                                     refresh network error).
+        refresh flap), bucketed with 5xx.
+
+    Returns just the access_token so the caller doesn't have to
+    branch on dataclass type (ServiceToken vs MarketToken).
     """
+    owner_user_id = loc.get("owner_user_id")
+    is_donor_path = owner_user_id is not None
+
     try:
-        return service_cache.get()
+        if is_donor_path:
+            token = market_cache.get(int(owner_user_id))
+            # Trust-boundary invariant: the token's user_id MUST
+            # match the row's owner_user_id. SELECT-side filter in
+            # load_and_refresh_market_token already enforces this,
+            # but a defensive assertion at the use-site is cheap and
+            # catches any future refactor that loosens the SELECT.
+            if int(token.user_id) != int(owner_user_id):
+                disable_immediately(
+                    conn, int(loc["id"]),
+                    reason="ownership_mismatch",
+                    message=(
+                        f"market token user_id={token.user_id} does not match "
+                        f"watched location owner_user_id={owner_user_id}"
+                    ),
+                    now=now,
+                )
+                conn.commit()
+                log.warning(
+                    "structure disabled — token ↔ owner mismatch (security violation)",
+                    watched_location_id=loc["id"],
+                    token_user_id=token.user_id,
+                    owner_user_id=owner_user_id,
+                )
+                return None
+            return token.access_token
+        else:
+            return service_cache.get().access_token
+
     except ServiceTokenScopeMissing as exc:
-        # Hard disable: `scope_missing` is the documented disabled_reason.
         disable_immediately(
             conn,
             int(loc["id"]),
             reason="scope_missing",
-            message=f"service token lacks {REQUIRED_STRUCTURE_SCOPE}: {exc}",
+            message=f"token lacks {REQUIRED_STRUCTURE_SCOPE}: {exc}",
             now=now,
         )
         conn.commit()
         log.warning(
-            "structure disabled — service token scope missing",
+            "structure disabled — token scope missing",
             watched_location_id=loc["id"],
             required_scope=REQUIRED_STRUCTURE_SCOPE,
+            owner_user_id=owner_user_id,
             error=str(exc),
         )
         return None
     except (ServiceTokenNotConfigured, ServiceTokenMissing) as exc:
-        # Not a security event, not an upstream flap — just "this stack
-        # isn't set up for structure polling yet". Record the failure
-        # on the row so it shows up in the UI, but do NOT tick the
-        # consecutive counter (would auto-disable on 3 ticks even
-        # though nothing's actually wrong with the row). Instead we
-        # just log + move on; the next pass after the admin
-        # authorises will pick it up.
+        # Neither a security event nor an upstream flap — just "this
+        # stack isn't set up yet for this structure's auth path".
+        # Admin path: APP_KEY empty or admin hasn't authorised.
+        # Donor path: donor hasn't authorised their character yet
+        # (rows created via the picker land before the auth flow
+        # technically could, though the picker UX prevents that).
         log.info(
-            "structure skipped — service token not available",
+            "structure skipped — token not available",
             watched_location_id=loc["id"],
+            owner_user_id=owner_user_id,
             reason=type(exc).__name__,
             error=str(exc),
         )
         return None
     except ServiceTokenError as exc:
-        # Decrypt error / refresh network failure. Bucket with 5xx.
         _handle_failure(
             conn, loc, cfg,
             status_code=None,
-            message=f"service_token_error: {exc}",
+            message=f"token_error: {exc}",
             now=now,
         )
         return None
