@@ -70,9 +70,21 @@ pull:
 # Uses --ff-only so divergent history fails loudly instead of silently
 # creating merge commits. Uses --no-interaction / --force so prompts
 # don't wedge unattended runs.
+#
+# `--build` on `compose up` is load-bearing: without it, long-lived
+# containers (php-fpm, scheduler, horizon, market_poll_scheduler,
+# market_import_scheduler) keep using the locally-cached image even
+# when the source has changed under their feet. Compose only builds
+# missing images by default; with --build it rebuilds when the
+# Dockerfile context content changes (cheap thanks to layer caching
+# when nothing changed). Without this, a `git pull` that updated
+# Python source under `python/market_poller/` would land on disk but
+# the running scheduler would still be on the old image — exactly
+# the failure mode that produced PR-#59's "unrecognized arguments:
+# --interval 300" runtime error.
 update:
 	git pull --ff-only
-	$(COMPOSE) up -d
+	$(COMPOSE) up -d --build
 	$(COMPOSE) exec php-fpm composer install --optimize-autoloader --no-interaction
 	$(COMPOSE) exec php-fpm php artisan migrate --force
 	@echo ""

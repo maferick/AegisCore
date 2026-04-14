@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`market_poll_scheduler` crashed on every restart with
+  `unrecognized arguments: --interval 300`.** Compose's default
+  pull/build policy was reusing the locally-cached
+  `aegiscore/market-poller:0.1.0` image — which predated the
+  `--interval` CLI flag — even though the on-disk Python source had
+  the new flag. Two-part fix: (1) bumped the image tags to
+  `0.1.1` so `compose up` rebuilds them on the next run; (2) added
+  `--build` to `make update`'s `compose up` step so future Python
+  source changes don't get cached-out the same way (cheap thanks to
+  Docker layer caching when nothing changed).
+- **`market_import_scheduler` crashed every tick with
+  `config error error="invalid date value: ''"`.** The
+  `python/market_*/config.py` `env()` helper returned the empty
+  string when an env var was set-but-empty (which is what
+  compose's `${VAR:-}` expansion produces when the host env is
+  unset), bypassing the documented default. `_parse_date("")` then
+  blew up. Same latent class would have hit `int("")` for any
+  empty `MARKET_POLL_BATCH_SIZE` etc. Fixed `env()` in both
+  market configs to treat unset AND empty-string identically →
+  fall back to the default in both cases. Verified end-to-end with
+  a smoke test that exports empty values for both
+  `MARKET_IMPORT_MIN_DATE` / `MAX_DATE` and
+  `MARKET_POLL_BATCH_SIZE`; both Configs now load with their
+  documented defaults (`2025-01-01`, yesterday-UTC, `5000`).
+
 ### Added
 - **Long-lived schedulers for market-poll + market-import (ADR-0004
   § Follow-ups).** Up until now, `make market-poll` and
