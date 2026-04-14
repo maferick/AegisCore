@@ -131,6 +131,33 @@ return [
             // divide by zero and never send expiry backwards.
             'isk_per_day' => (int) env('EVE_DONATIONS_ISK_PER_DAY', 100_000),
         ],
+
+        // ----- Market character (fourth SSO flow, donor self-service) -----
+        //
+        // Scope set requested when a donor clicks "Authorise market
+        // data" on /account/settings. Per ADR-0004 § Live polling the
+        // minimum viable set is:
+        //
+        //   publicData
+        //     — base-identity scope CCP's consent surface expects.
+        //   esi-search.search_structures.v1
+        //     — powers the donor's structure picker (ESI only returns
+        //       IDs the character has ACLs at, which enforces the
+        //       structure-discovery-is-ACL-gated invariant).
+        //   esi-universe.read_structures.v1
+        //     — resolves structure_id → name/system (cached weekly).
+        //   esi-markets.structure_markets.v1
+        //     — the actual market-reads the poller performs.
+        //
+        // Override via env if a deployment wants a different mix
+        // (e.g. dropping `esi-search` once a donor's structure picks
+        // are locked in). Space- or comma-separated. Same parsing
+        // rules as service_scopes.
+        'market_scopes' => env(
+            'EVE_SSO_MARKET_SCOPES',
+            'publicData esi-search.search_structures.v1 '
+            .'esi-universe.read_structures.v1 esi-markets.structure_markets.v1',
+        ),
     ],
 
     /*

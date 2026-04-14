@@ -8,6 +8,472 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Interactive donor structure picker on `/account/settings`
+  (step 5c of ADR-0004's rollout).** Replaces the step-5a static
+  stub with a Livewire-powered interactive surface: donors search
+  for Upwell structures by name, click Watch to add, click Remove
+  to stop polling. Search is backed by the donor's own
+  `/characters/{id}/search/?categories=structure` response, so ESI
+  enforces the ACL — the picker only surfaces structures the
+  donor's character has docking access at. Completes the
+  donor-facing UX that step 5b made functional on the poller
+  side.
+  - **`App\Services\Eve\MarketTokenAuthorizer`** — Laravel-plane
+    twin of the Python `auth.py` lock-based refresh. Wraps a
+    `SELECT ... FOR UPDATE` on the donor's `eve_market_tokens`
+    row, refreshes via `EveSsoClient::refreshAccessToken()` when
+    `expires_at <= now + 60s`, persists the rotated
+    `access_token` + `refresh_token` + new `expires_at` inside the
+    same transaction. Laravel and Python now coordinate on the row
+    lock — whichever grabs it first refreshes; the other picks up
+    the new token. No double-rotation (which would invalidate the
+    stored refresh token and lock the donor out until they manually
+    re-authorise).
+  - **`App\Domains\Markets\Services\StructurePickerService`** —
+    two-phase picker: (1) `search(token, query)` hits
+    `/characters/{id}/search/` with `categories=structure` and
+    returns structure IDs the donor's character has ACLs at;
+    (2) per-ID `/universe/structures/{id}/` resolves name +
+    `solar_system_id`, joined with `ref_solar_systems` for
+    `region_id` (the structure endpoint returns system, not
+    region). Tolerates individual 403/404s on resolve by dropping
+    the candidate — handles the rare case of a character losing
+    access between search and resolve in the same request.
+  - **`App\Livewire\AccountSettings`** — the interactive component.
+    Properties: `query`, `results`, `status`, `error`,
+    `resultStructureIds`. Actions: `search()`, `addStructure(int)`,
+    `removeStructure(int)`. Three server-side invariants:
+    - **`addStructure` validates the ID was in the current
+      session's search results**, not just the client's POST body.
+      Enforces the ADR's "never accept free-form structure IDs"
+      invariant at the server — a forged POST with a guessed
+      structure ID is refused.
+    - **`removeStructure` scopes by `owner_user_id = auth()->id()`**,
+      so a forged row-id can't delete another donor's watched
+      structures.
+    - **Donor-gate re-checked on every action** — if donation
+      expires between page load and action, the flow refuses
+      cleanly.
+  - **View chrome split:**
+    - `resources/views/account/settings.blade.php` → page chrome
+      (header, EVE HUD palette, `@livewireStyles` / `@livewireScripts`).
+    - `resources/views/livewire/account/settings.blade.php` → the
+      three sections the Livewire component drives (identity,
+      market-data CTA + token status, structure picker + watched
+      list).
+    - `AccountSettingsController` slims to "render the outer shell";
+      interactivity moves into the Livewire component.
+  - **Updates UX on add:** successful add clears `$query` +
+    `$results` so the page returns to "search" state rather than
+    leaving the just-added result on screen. `wire:confirm` on
+    Remove so a donor doesn't accidentally un-watch a structure
+    with existing poll history (order history stays regardless —
+    only polling stops).
+  - 4 PHPUnit tests on `MarketTokenAuthorizer` cover: fresh token
+    returns without SSO call, stale token refreshes + persists
+    rotated values, SSO failure throws user-facing `RuntimeException`
+    without updating the row, row-vanished race raises the
+    documented error message.
+- **Donor-owned structure polling in the Python plane (step 5b of
+  ADR-0004's rollout).** The market poller now reads donor-owned
+  structures using the `eve_market_tokens` rows the new fourth SSO
+  flow authors. Completes the end-to-end donor self-service data
+  path: donor authorises character via `/auth/eve/market-redirect`
+  → token encrypted into `eve_market_tokens` → poller reads
+  `/markets/structures/{id}/` with the donor's own bearer →
+  orders land in `market_orders` with source
+  `esi_structure_<structure_id>`.
+  - **`market_poller/auth.py`** gains `load_and_refresh_market_token(conn, cfg, user_id)`
+    — twin of the existing `load_and_refresh_service_token()` keyed
+    on `user_id` rather than the singleton service row. Same
+    `SELECT ... FOR UPDATE` lock pattern so parallel pollers can't
+    double-rotate a donor's refresh token. Same 60-second future-
+    bias for refresh triggering. Same scope-gate enforcement
+    (`esi-markets.structure_markets.v1` required → otherwise raises
+    `ServiceTokenScopeMissing`, which the runner maps to immediate
+    disable).
+  - **New `MarketToken` dataclass** alongside `ServiceToken`. Same
+    shape plus `user_id` — the binding the poller enforces on every
+    fetch.
+  - **`_persist_market_refreshed()`** twin of the service-token
+    persister. Kept as a separate function so a SQL typo on the
+    table name becomes a compile-time error rather than a
+    cross-table corruption.
+  - **`market_poller/runner.py`** replaces the previous
+    "donor-owned structure skipped" log-line with a real branch:
+      - `owner_user_id IS NULL` → service token (admin path).
+      - `owner_user_id IS NOT NULL` → donor market token via the
+        new cache.
+    A new `_MarketTokenCache` mirrors `_ServiceTokenCache` but
+    keys on `user_id` so a donor with N watched structures pays
+    the load+refresh round-trip once per pass, not N times.
+  - **Defensive ownership-mismatch check** at the use-site in
+    `_acquire_structure_token()`: if the loaded market token's
+    `user_id` doesn't match the watched-location's `owner_user_id`,
+    we immediately disable the row with
+    `disabled_reason = 'ownership_mismatch'`. The SELECT-side
+    filter in `load_and_refresh_market_token()` already enforces
+    this, but the use-site check catches any future refactor that
+    loosens the SELECT.
+  - **Phase-5 multi-alt limitation** documented in the auth.py
+    docstring: donors with multiple authorised characters get
+    `ORDER BY updated_at DESC LIMIT 1`. Proper multi-alt support
+    is a future migration that adds `owner_character_id` to
+    `market_watched_locations`.
+- **Fourth SSO flow: donor self-service market authorisation (step
+  5a of ADR-0004's rollout).** Donors can now authorise one of their
+  linked EVE characters for market-structure reads. Completes the
+  four-flow set ADR-0002 anticipated (login / service / donations /
+  market).
+  - **New route `GET /auth/eve/market-redirect`** — auth-gated, not
+    admin-gated (donors aren't admins). Donor-gated at the redirect
+    AND the callback (re-checked in case donation expires mid-flow).
+    Session marker `eve_sso.flow = 'market'` routes the shared
+    `/auth/eve/callback` to the new finisher.
+  - **`redirectAsMarket()` + `finishMarketFlow()` on
+    `EveSsoController`** — mirrors the donations flow's shape with
+    three policy gates the other flows don't need:
+    - **Donor gate:** non-donors get a "become a donor" bounce
+      before the round-trip. Redirect + callback both re-check.
+    - **Character-linkage gate:** the callback character MUST
+      already be linked to the authorising user (via
+      `characters.user_id`). Without this, a session-hijack attacker
+      could authorise any EVE character they control and have its
+      ACLs used to pull market data under the victim's AegisCore
+      account — an authorisation-confusion attack. The controller
+      refuses and surfaces a clear "log in with this character
+      first" error.
+    - **Scope gate:** token must include
+      `esi-markets.structure_markets.v1` or we refuse to store it
+      (storing a functionally-useless token would mislead the
+      poller).
+  - **`App\Domains\UsersCharacters\Models\EveMarketToken`** — fourth
+    flavour of EVE token model, same `'encrypted'` cast pattern as
+    `eve_service_tokens` / `eve_donations_tokens`. Binds a
+    `character_id` (UNIQUE) to a `user_id` (FK with ON DELETE
+    CASCADE — "every market token traces to a live user" enforced
+    at the DB level). Hidden columns so a stray `->toArray()` in a
+    controller can't dump tokens into a response. 7 PHPUnit smoke
+    tests cover encrypted-cast DB round-trip, ciphertext-at-rest
+    verification, hidden-attribute exclusion from arrays/JSON,
+    FK cascade-delete, `isAccessTokenFresh()` + `hasScope()`
+    predicates, and UNIQUE-character-id enforcement.
+  - **`config/eve.php` adds `market_scopes`** (env
+    `EVE_SSO_MARKET_SCOPES`), defaulting to the minimum viable set
+    per ADR-0004 § Live polling: `publicData
+    esi-search.search_structures.v1
+    esi-universe.read_structures.v1
+    esi-markets.structure_markets.v1`.
+  - **`/account/settings` route + `AccountSettingsController` +
+    stub Blade view.** Phase 5a is the minimum viable donor-facing
+    surface: identity, donor status, linked characters, market-data
+    CTA (donor-gated), current market token status, read-only list
+    of watched structures. Uses the same EVE HUD palette as
+    `landing.blade.php` so it feels native. The Livewire
+    structure-picker + add/remove management lands in the next
+    rollout step; this stub is here so the SSO flow's redirects
+    all land on a real route from day one.
+- **Filament admin surface for `market_watched_locations` (step 4b
+  of ADR-0004's rollout).** New `/admin/market-watched-locations`
+  resource lets admins browse every row the Python poller works
+  through, add platform-default entries (NPC stations + player
+  structures), and enable/disable individual rows. Donor-owned rows
+  appear read-only in the list (so operators can spot-check
+  activity) but their create/edit flow stays at `/account/settings`
+  per ADR-0004's Filament/frontend split.
+  - **`App\Domains\Markets\Models\MarketWatchedLocation`** — new
+    Eloquent model under `app/Domains/Markets/`. `Region` +
+    `owner(User)` relations; `scopePlatformOwned` +
+    `scopeDonorOwned`; `isJita()` / `isNpcStation()` /
+    `isPlayerStructure()` predicates. **Belt-and-braces Jita
+    guard**: a `booted()` `deleting` hook throws
+    `DomainException('Jita 4-4 is the platform baseline ...')` if
+    anyone tries to delete the platform Jita row, regardless of the
+    code path (tinker, Artisan, a future service call, etc.). The
+    Filament resource also hides the delete button for Jita, but
+    the model-level guard is the durable protection.
+  - **`MarketWatchedLocationResource`** — one Resource class, three
+    pages (List / Create / Edit). Form branches on `location_type`:
+    NPC rows use a searchable picker over `ref_npc_stations`
+    (matches by system name — "jita", "amarr", "dodixie" — or by
+    exact station ID) and auto-fills `region_id` from the chosen
+    station's system; player-structure rows take a raw structure ID
+    + region ID with a "admin knows what they're doing" helper
+    note. First poll validates structure access; a 403 after the
+    configured consecutive-failure threshold auto-disables the row
+    with `disabled_reason = 'no_access'`, so pasting an
+    inaccessible ID is self-correcting.
+  - **Table columns** surface the operator-relevant telemetry
+    without a second screen: kind (NPC/Structure badge), name,
+    region, owner (platform vs donor), enabled toggle, last-polled
+    age, consecutive-failure count (grey/amber/red badge),
+    disabled_reason. Three filters: location_type, enabled/disabled,
+    platform vs donor-owned.
+  - **Reset-failure-counter action** on the Edit page — common
+    operator workflow of "an upstream ESI hiccup ticked the counter
+    to 2/3 but the row shouldn't auto-disable on the next blip".
+    Zeroes `consecutive_failure_count` + clears `last_error` /
+    `last_error_at` inside one transaction; does NOT touch the
+    `enabled` flag (flipping disabled rows back on is a separate,
+    deliberate action).
+  - **No structure ESI-search picker yet** — that's the natural
+    companion for the donor self-service flow and lands in step 5
+    alongside the `/account/settings` picker. Until then admins
+    paste structure IDs directly.
+  - Navigation slot: **"Markets" group** in the sidebar (new). Sort
+    weight 10, so if future market pages land (price chart page,
+    valuation replay viewer, …) they slot in around this row.
+  - 4 PHPUnit smoke tests under
+    `tests/Unit/Domains/Markets/MarketWatchedLocationTest.php`:
+    Jita seeder sanity, Jita-delete refusal, non-Jita delete
+    succeeds, defensive "donor-owned row with Jita IDs is not
+    protected" case, and boolean/integer cast round-trips.
+- **Admin-owned player-structure polling (step 4a of ADR-0004's
+  rollout).** The Python market poller can now read
+  `/markets/structures/{id}/` for `market_watched_locations` rows
+  with `location_type = 'player_structure'` and `owner_user_id IS
+  NULL`, using the `eve_service_tokens` singleton the Laravel
+  `/admin/eve-service-character` flow authored. Donor-owned
+  structure polling (`owner_user_id = <user>`, backed by
+  `eve_market_tokens`) stays deferred to step 5.
+  - **`market_poller/laravel_encrypter.py`** — Laravel-compatible
+    AES-256-CBC + HMAC-SHA256 `'encrypted'` cast interop. Reads and
+    writes the same envelope format Laravel 12's
+    `Illuminate\Encryption\Encrypter` uses, so tokens the PHP plane
+    wrote can be decrypted by Python and rotated refresh tokens can
+    be re-encrypted back into the shared row. Only AES-256-CBC
+    (Laravel's default cipher) is supported; AES-256-GCM envelopes
+    raise an explicit "not supported" error rather than producing
+    wrong plaintext. APP_KEY parsing handles both the
+    `base64:xxx` form Laravel writes and a bare base64 string.
+    19 stdlib-unittest cases cover round-trip, APP_KEY parsing,
+    MAC tamper detection (flipped iv/value/mac all reject), wrong-key
+    rejection, envelope structure validation (bad base64 / bad JSON
+    / missing fields / non-object), and the AES-GCM rejection path.
+  - **`market_poller/sso.py`** — `POST /v2/oauth/token` refresh via
+    `httpx`, mirroring the Laravel `EveSsoClient::refreshAccessToken()`
+    shape (Basic auth with client_id/secret, `Host:
+    login.eveonline.com` belt-and-braces header, unverified JWT
+    payload decode for character_id + scopes). Typed error classes:
+    `SsoTransientError` (5xx/network/timeout; retry next tick),
+    `SsoPermanentError` (400/401; stale refresh_token or user
+    revoked app — no auto-retry), `SsoMalformedResponseError`
+    (missing fields or wrong JWT shape).
+  - **`market_poller/auth.py`** — loads the singleton
+    `eve_service_tokens` row under `SELECT ... FOR UPDATE` so a
+    hypothetical second poller instance serialises on the row lock
+    rather than double-rotating the refresh token (which CCP
+    invalidates on every refresh — that's how tokens die). Refresh
+    triggers at `expires_at <= now() + 60s`. Persists the rotated
+    refresh token BEFORE using the new access token for anything, so
+    a crash between refresh and first use doesn't orphan the
+    credential. Scope-gates the token: missing
+    `esi-markets.structure_markets.v1` is a security-boundary
+    violation (`ServiceTokenScopeMissing`) that maps to immediate
+    row disable with `disabled_reason = 'scope_missing'`, no grace
+    counter.
+  - **`market_poller/esi.py`** — new `structure_orders(structure_id,
+    access_token)` generator mirrors `region_orders()` shape,
+    paginates via `X-Pages`, sends `Authorization: Bearer <token>`.
+    The `RawOrder` dataclass's `system_id` field now documents that
+    it's 0 for structure-endpoint orders (field not returned by
+    CCP; also not persisted into `market_orders`).
+  - **`market_poller/runner.py`** — branches on `location_type`:
+    NPC stations take the existing region-orders path; admin-owned
+    structures take the new service-token path. Service token is
+    loaded LAZILY + CACHED: stacks with no structure rows never
+    touch the token, and the first structure row in a pass pays the
+    load + refresh round-trip that every subsequent structure row
+    reuses (including the cached error — one failed load doesn't
+    retry for every row). Donor-owned rows are log-skipped pending
+    step 5. New failure classification: `ServiceTokenNotConfigured`
+    and `ServiceTokenMissing` are routine skips (no failure-counter
+    tick — APP_KEY unset or admin hasn't authorised yet, both
+    legitimate); `ServiceTokenScopeMissing` is immediate disable;
+    everything else buckets with transient 5xx.
+  - **Compose + requirements wired:** `market_poller` service
+    receives `APP_KEY`, `EVE_SSO_CLIENT_ID`,
+    `EVE_SSO_CLIENT_SECRET`, `EVE_SSO_TOKEN_URL` via existing env
+    passthrough. New dep `cryptography~=43.0` added to
+    `requirements-market.txt` for the AES implementation.
+- **`python/market_importer/` — EVE Ref historical market-history
+  importer (step 3 of ADR-0004's rollout).** Reconciles local
+  `market_history` rows against EVE Ref's published per-day totals
+  at `data.everef.net/market-history/totals.json`, downloads the
+  bz2-compressed CSV for every day that's missing or partial, and
+  bulk-upserts into MariaDB. One-shot container (`make market-import`)
+  — one invocation = one reconcile pass.
+  - **Ported from EVE Ref's Java `import-market-history` command**
+    rather than reusing it directly: their importer supports
+    PostgreSQL + H2 only, MariaDB is "planned" but not shipped.
+    Porting the logic (reconcile against totals.json, per-day
+    transactions, idempotent upserts) is ~500 lines of Python and
+    keeps our execution plane homogeneous with `sde_importer` +
+    `graph_universe_sync` + `market_poller`.
+  - **Idempotent by construction.** `INSERT ... ON DUPLICATE KEY UPDATE`
+    on the PK `(trade_date, region_id, type_id)` matches ADR-0004's
+    uniqueness contract. Re-running a day after a partial load, an
+    upstream count update, or a corrupt CSV converges on the
+    latest-EVEref-known values. Reconciliation skips already-complete
+    days cheaply — a repeat run after a successful import is
+    essentially a totals.json fetch + a local `COUNT(*) GROUP BY`
+    + exit.
+  - **Per-day transaction boundary.** `autocommit=False`; every day's
+    rows + outbox event commit together or roll back together. A
+    corrupt CSV mid-stream or an unexpected parser error rolls the
+    whole day back and the next run re-attempts from scratch.
+  - **Column-order-agnostic parser.** `csv.DictReader` keys by header
+    row, so EVE Ref could reshuffle columns upstream without breaking
+    us. Required columns asserted on first read — a missing column
+    fails fast as `CsvFormatError` rather than silently skipping
+    rows.
+  - **Source + observation_kind stamps.** Every row stamped with
+    `source = 'everef_market_history'` + `observation_kind =
+    'historical_dump'`, both defined in ADR-0004's enum set.
+    Provenance is a query away, not a grep-of-logs away.
+  - **Default import window 2025-01-01 → yesterday UTC** per
+    ADR-0004 ("from 2025 forward"). Operators can rewind to any date
+    EVE Ref has published (their dataset goes back to 2003-05-10);
+    pre-2025 loads pile into the `p2025_01` partition since the
+    migration only pre-creates 2025-01 through 2026-12 + MAXVALUE,
+    so earlier partitions want to be added first for proper pruning
+    on queries against those months.
+  - **Emits `market.history_snapshot_loaded`** into the outbox per
+    imported day (producer `market_importer`, version 1). Payload:
+    `{trade_date, rows_received, rows_affected, source,
+    observation_kind, loaded_at}`.
+  - Ships with its own `python/market_importer.Dockerfile`,
+    `python/requirements-market-import.txt`, a `market_importer`
+    service in `infra/docker-compose.yml` under the `tools` profile,
+    and a `make market-import` target (overrides via
+    `MARKET_IMPORT_ARGS="--from=... --to=..."`,
+    `"--only-date=..."`, `"--dry-run"`, `"--force-redownload"`).
+    Sibling to `sde_importer` / `graph_universe_sync` /
+    `market_poller`; `log.py` / `db.py` scaffolding is duplicated
+    for the fourth time. That's the "rule of three" tripwire — next
+    caller promotes the scaffolding to `python/_common/` and flips
+    all four to import from there.
+- **`python/market_poller/` — live market-data poller (step 2 of
+  ADR-0004's rollout).** First concrete caller on the Python-plane
+  ESI track flagged by ADR-0002 § phase-2 #12. One-shot container
+  (`make market-poll`) that walks enabled rows in
+  `market_watched_locations`, pulls the current order book from ESI
+  per row, bulk-inserts into `market_orders`, and emits one
+  `market.orders_snapshot_ingested` outbox event per successful
+  location poll.
+  - **Phase 1 handles NPC stations only** — region endpoint
+    (`GET /markets/{region_id}/orders/`) + client-side location
+    filter, no auth required. Paginates via `X-Pages`. Admin-owned
+    and donor-owned structure polling (auth'd via `eve_service_tokens`
+    / `eve_market_tokens`) layer on top in later rollout steps
+    without changing the package shape — the runner branches on
+    `location_type`.
+  - **Jita 4-4 seeded as the permanent baseline** via a new
+    `2026_04_14_000009_seed_jita_market_watched_location` migration:
+    `region_id = 10000002`, `location_id = 60003760`,
+    `owner_user_id = NULL`, `enabled = true`. Re-runnable: the insert
+    is guarded by an existence check so migration rollback/forward
+    doesn't double-seed, and the rollback only deletes rows with no
+    poll history.
+  - **Reactive rate-limit posture** — reads
+    `X-Ratelimit-Remaining`/`Reset` and `X-ESI-Error-Limit-Remain`/`Reset`
+    on every response; sleeps (capped at 30/60s) when at or below the
+    configured safety margin. On 429/420 honours `Retry-After` and
+    raises `TransientEsiError`; no in-process retry (the cadence is
+    the retry).
+  - **Failure discipline per ADR-0004 § Failure handling** —
+    consecutive-failure counter on `market_watched_locations`,
+    auto-disable after 3 × 403 (`disabled_reason = no_access`) or
+    5 × 5xx/timeout (`disabled_reason = upstream_failing` or
+    `upstream_unreachable`). Single success resets the counter.
+    A `disable_immediately(reason, message)` path exists for the
+    security-boundary violations the later donor-token steps will
+    need (ownership mismatch, missing scope); unused in phase 1.
+  - **Atomic per-location transactions** — `pymysql` connection runs
+    with `autocommit=False`, each location's rows + bookkeeping +
+    outbox event commit together or roll back together. A failure
+    in one location doesn't taint the next.
+  - **Idempotent inserts** — `INSERT IGNORE` on
+    `(observed_at, source, location_id, order_id)`, relying on the PK
+    from ADR-0004. Replaying a tick within the same `observed_at`
+    is a no-op; `rows_inserted` (affected-rows) naturally drops to
+    zero on retries.
+  - **Source-string convention** for provenance:
+    `esi_region_<region_id>_<location_id>` for NPC rows,
+    `esi_structure_<structure_id>` reserved for the later structure
+    path. Human-readable on purpose — shows up in logs + audit queries
+    often enough that the IDs inline beat an opaque hash.
+  - Ships with its own `python/market_poller.Dockerfile`,
+    `python/requirements-market.txt`, a `market_poller` service in
+    `infra/docker-compose.yml` under the `tools` profile, and a
+    `make market-poll` target. Sibling to `sde_importer` and
+    `graph_universe_sync`; the `log.py` / `db.py` scaffolding is
+    duplicated rather than promoted to `python/_common/` — three
+    copies is still under the "rule of three" tripwire and the
+    implementations haven't diverged.
+- **ADR-0004 + schema foundation for market-data ingest.** Architecture
+  decision record and the four MariaDB migrations the market pillar
+  needs before any poller / importer / UI code lands.
+  - **`docs/adr/0004-market-data-ingest.md`** freezes: (1) two raw
+    canonical tables (`market_orders` vs `market_history`), not one —
+    genuinely different shapes, uniqueness contracts, and retention
+    curves; (2) historical backfill via EVE Ref's daily CSV dumps at
+    `data.everef.net/market-history/`, imported by a new Python worker
+    (`python/market_importer/`) porting EVE Ref's Java logic to MariaDB
+    since their PostgreSQL-only importer doesn't support our stack;
+    (3) live polling on the Python execution plane from day one — no
+    Laravel-side market poller stepping stone, per the ADR-0002 plane
+    boundary; (4) Jita always-on as a platform baseline, seeded in
+    `market_watched_locations`; (5) per-donor structure authorisation
+    as an architectural invariant — Upwell structure market reads
+    are alliance/corp ACL-gated, so no shared admin token can poll
+    arbitrary donor outposts. Each donor authorises their own
+    character via a fourth SSO flow; the token lands in a dedicated
+    `eve_market_tokens` table bound to their user; the poller
+    enforces `token.user_id == watched_location.owner_user_id` on
+    every call. Structure *discovery* is also ACL-gated: the
+    `/account/settings` picker is a thin wrapper around the donor's
+    own `/characters/{id}/search/?categories=structure`, never
+    free-form ID entry.
+  - **`market_history`** (PK `(trade_date, region_id, type_id)`,
+    monthly `RANGE` partitioned on `trade_date`) — mirrors EVE Ref's
+    shape so dumps import with minimal normalisation. Columns
+    `trade_date` (not `date`, reserved-word hygiene), `average`,
+    `highest`, `lowest`, `volume`, `order_count`,
+    `http_last_modified`, plus `source` + `observation_kind` ENUM
+    (`historical_dump | incremental_poll`) for provenance.
+  - **`market_orders`** (composite PK
+    `(observed_at, source, location_id, order_id)`, monthly `RANGE`
+    partitioned on `observed_at`) — one row per order observation,
+    live ESI snapshots or future order-book dumps. `TIMESTAMP(6)`
+    microsecond precision on `observed_at` so poller batches cluster
+    contiguously per snapshot; `location_id` is `BIGINT UNSIGNED`
+    because Upwell structure IDs crossed `INT` max long ago.
+    `observation_kind` ENUM (`snapshot | incremental_poll |
+    historical_dump`).
+  - **`market_watched_locations`** — the poller's driver table.
+    `location_type` (`npc_station | player_structure`) + explicit
+    `region_id` keeps the record model clean; poller derives "region
+    endpoint + filter" vs "structure endpoint" from `location_type`.
+    `owner_user_id` nullable: `NULL` = admin-managed platform default
+    (Jita and siblings), non-null = donor-owned. Failure discipline
+    built in: `consecutive_failure_count`, `last_error`,
+    `last_error_at`, `disabled_reason`; auto-disable after 3
+    consecutive 403s or 5 consecutive 5xx/timeouts, single success
+    resets the counter. Security-boundary failures (ownership
+    mismatch, missing scope) disable immediately with no grace.
+  - **`eve_market_tokens`** — fourth flavour of EVE token storage
+    (login / service / donations / market). `user_id` FK with
+    `CASCADE ON DELETE` so the "every token traces to a live user"
+    invariant is enforced at the DB level. `character_id` UNIQUE so
+    re-auth upserts. Access/refresh tokens ride Laravel's
+    `'encrypted'` cast, consistent with `eve_service_tokens` and
+    `eve_donations_tokens`.
+  - ADR-0003 § Follow-ups updated to point at ADR-0004; ADR index
+    extended to list 0002 + 0004. No poller, no importer, no UI
+    code in this drop — schema + architectural record only, so the
+    data contract gets reviewed in isolation before runtime code
+    lands on top of it.
 - **EVE map renderer module — drop-in `<x-map.renderer>` Blade
   component + Filament demo page at `/admin/universe-map`.** Reusable
   SVG/D3 renderer for systems, stargates and roads, fed by a public

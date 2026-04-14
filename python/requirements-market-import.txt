@@ -1,0 +1,13 @@
+# market_importer deps.
+#
+# Downloads EVE Ref's daily bz2 CSVs (httpx + stdlib bz2/csv), writes
+# market_history + outbox rows (pymysql), stamps outbox event IDs with
+# ULIDs. Pinned to minor for reproducible image builds; patch bumps
+# for security fixes are fine.
+httpx~=0.27
+pymysql~=1.1
+python-ulid~=3.0
+# python-ulid 3.0.x unconditionally imports Self from typing_extensions
+# but only declares the dep on Python < 3.11 — pin it ourselves so the
+# 3.12 base image can satisfy the import.
+typing_extensions>=4.7

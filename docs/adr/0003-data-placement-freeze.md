@@ -153,9 +153,17 @@ Cross-plane triggering is the outbox pattern, unchanged
 
 ## Follow-ups (not part of this ADR)
 
-- Migration + schema for `valuation_records` and `market_observations`
+- Migration + schema for `valuation_records`
   (pillar: buyall-doctrines and killmails-battle-theaters).
+- ~~Migration + schema for `market_observations`.~~ Superseded by
+  [ADR-0004](0004-market-data-ingest.md) — raw market observations
+  split into two canonical MariaDB tables (`market_orders` and
+  `market_history`) rather than one, for cardinality + retention +
+  uniqueness-contract reasons. Migrations land alongside ADR-0004.
 - Migration + schema for temporal identity history (pillar:
   users-characters and spy-detection).
-- Retention / archival policy for `market_observations` at scale.
-- Phase-2 Python ESI poller per ADR-0002.
+- Retention / archival policy for the raw market tables at scale —
+  partitioning strategy frozen in ADR-0004, drop-partition retention
+  job deferred to a follow-up PR.
+- Phase-2 Python ESI poller per ADR-0002. First concrete caller
+  lands with ADR-0004's market poller.
