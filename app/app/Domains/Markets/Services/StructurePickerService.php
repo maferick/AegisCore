@@ -4,61 +4,63 @@ declare(strict_types=1);
 
 namespace App\Domains\Markets\Services;
 
-use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Reference\Models\SolarSystem;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiException;
-use App\Services\Eve\MarketTokenAuthorizer;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 /**
- * Powers the `/account/settings` structure picker.
+ * ESI-backed Upwell structure picker.
+ *
+ * Powers two surfaces:
+ *
+ *   - `/account/settings` donor picker — donor's own EveMarketToken
+ *     via MarketTokenAuthorizer.
+ *   - `/admin/market-watched-locations` admin create-form picker —
+ *     the platform service character's EveServiceToken via
+ *     ServiceTokenAuthorizer.
  *
  * ADR-0004 § Structure access is alliance/corp-gated: structure
- * *discovery* is ACL-gated. The picker is a thin wrapper around the
- * donor's own `GET /characters/{id}/search/?categories=structure`
- * — ESI only returns IDs the donor's character can see. The system
- * never accepts free-form structure IDs; the only path for an ID to
- * enter `market_watched_locations` is via a search response from
- * the donor's own token within the same request lifetime.
+ * *discovery* is ACL-gated. The picker is a thin wrapper around
+ * `GET /characters/{id}/search/?categories=structure` — ESI only
+ * returns IDs the character can see. The system never accepts
+ * free-form structure IDs; the only path for an ID to enter
+ * `market_watched_locations` / `market_hubs` is via a search
+ * response from a live, authorised token within the same request
+ * lifetime.
+ *
+ * Token-agnostic signature: callers pass `(characterId, accessToken)`
+ * pairs, where the access token is known-fresh (the caller already
+ * ran it through MarketTokenAuthorizer / ServiceTokenAuthorizer).
+ * This service does not touch token rotation — that's the
+ * authorizers' job — which keeps this class testable with a plain
+ * ESI stub and no DB transactions.
  *
  * Two responsibilities:
  *
- *   1. `search(EveMarketToken, query)` — ESI search, return
- *      structure IDs the character has ACLs at.
- *   2. `resolve(EveMarketToken, ids)` — `GET /universe/structures/{id}/`
- *      for each, plus a `ref_solar_systems` join for `region_id`
- *      (the structure endpoint returns `solar_system_id` but not
- *      `region_id`). Returns an array of structured candidates
- *      the UI can display.
+ *   1. `search($characterId, $accessToken, $query)` — ESI search,
+ *      returns resolved structure candidates.
+ *   2. `resolve($characterId, $accessToken, $ids)` — batch
+ *      `/universe/structures/{id}/` + ref_solar_systems join for
+ *      region_id / system_name. Separately callable so "add by
+ *      known ID" flows (future) share one code path with search.
  *
- * Network costs: a 5-character query might return ~20 structure IDs;
- * we then resolve each one with an individual `/universe/structures/`
- * call. That's moderately expensive (10-20 ESI calls per picker
- * search), but:
- *
- *   - ESI caches `/universe/structures/{id}/` for 1 hour; our
- *     CachedEsiClient decorator replays cached bodies.
- *   - Individual calls respect the shared rate-limit budget.
- *   - The picker is user-initiated, low-cadence (a donor adds a
- *     few structures once, not continuously).
- *
- * If this becomes a hotspot, the right fix is a per-result-ID
- * caching layer keyed on `structure_id` + weekly TTL — matches the
- * ADR's "refresh weekly" cadence for name resolution.
+ * Network costs: a 5-character query might return ~20 structure
+ * IDs; we resolve each one individually. That's 10-20 ESI calls
+ * per search. ESI caches `/universe/structures/{id}/` for 1 hour
+ * and our CachedEsiClient decorator replays the body. The picker
+ * is user-initiated and low-cadence — this is not a hot path.
  */
 final class StructurePickerService
 {
     public function __construct(
         private readonly EsiClientInterface $esi,
-        private readonly MarketTokenAuthorizer $authorizer,
     ) {}
 
     /**
-     * Search ESI for structures whose names match `$query`, using the
-     * donor's own token (restricts results to structures they have
-     * ACLs at).
+     * Search ESI for structures whose names match `$query`, scoped to
+     * the character's ACLs (docking rights).
      *
      * Returns resolved candidates:
      *
@@ -73,9 +75,16 @@ final class StructurePickerService
      *         ...
      *     ]
      *
+     * The query can be a structure name OR a system name like
+     * "4-HWWF" — most staging Upwell structures embed their system
+     * name in their display name ("4-HWWF - GSF Keepstar"), so the
+     * structure-category search is usually enough. Enumerating
+     * "all structures in system X" directly is not possible via
+     * ESI — discovery is name-search-only.
+     *
      * @return list<array<string, mixed>>
      */
-    public function search(EveMarketToken $token, string $query): array
+    public function search(int $characterId, string $accessToken, string $query): array
     {
         $query = trim($query);
         if (strlen($query) < 3) {
@@ -85,23 +94,20 @@ final class StructurePickerService
             return [];
         }
 
-        $accessToken = $this->authorizer->freshAccessToken($token);
-
         try {
             $response = $this->esi->get(
-                "/characters/{$token->character_id}/search/",
+                "/characters/{$characterId}/search/",
                 query: ['categories' => 'structure', 'search' => $query],
                 bearerToken: $accessToken,
             );
         } catch (EsiException $e) {
             Log::warning('structure search failed', [
-                'user_id' => $token->user_id,
-                'character_id' => $token->character_id,
+                'character_id' => $characterId,
                 'error' => $e->getMessage(),
             ]);
 
             throw new RuntimeException(
-                'Structure search failed. If this persists, re-authorise market data on your account.',
+                'Structure search failed. If this persists, re-authorise the character whose token is in use.',
                 previous: $e,
             );
         }
@@ -115,29 +121,22 @@ final class StructurePickerService
             return [];
         }
 
-        return $this->resolve($token, $structureIds, accessToken: $accessToken);
+        return $this->resolve($characterId, $accessToken, $structureIds);
     }
 
     /**
      * Resolve a set of structure IDs into structured candidates.
-     * Separately callable so "add by ID" flows (future) can share
-     * the same resolve path as the search flow.
-     *
-     * We tolerate individual 403/404s from `/universe/structures/{id}/`
-     * by dropping that candidate from the result list — it means
-     * the character lost access between the search response and this
-     * resolve (unlikely in the same second, but defensive).
+     * Tolerates individual 403/404s by dropping the candidate —
+     * the character may have lost access between search and resolve.
      *
      * @param  array<int, int>  $structureIds
      * @return list<array<string, mixed>>
      */
-    public function resolve(EveMarketToken $token, array $structureIds, ?string $accessToken = null): array
+    public function resolve(int $characterId, string $accessToken, array $structureIds): array
     {
         if ($structureIds === []) {
             return [];
         }
-
-        $accessToken ??= $this->authorizer->freshAccessToken($token);
 
         // Dedupe + cap — unlikely ESI ever returns >50 matches, but
         // guard against adversarial inputs on future "add by ID" paths.
@@ -154,6 +153,7 @@ final class StructurePickerService
                 );
             } catch (EsiException $e) {
                 Log::info('structure resolve failed, skipping candidate', [
+                    'character_id' => $characterId,
                     'structure_id' => $id,
                     'error' => $e->getMessage(),
                 ]);

@@ -207,6 +207,57 @@
         }
         .user-signout:hover { color: var(--danger); }
 
+        /* ---------- Authenticated nav strip ----------
+         * Thin horizontal nav between header and hero, visible only
+         * when logged in. Links to the user-facing surfaces available
+         * right now. Admins get the Admin entry; donors / admins get
+         * anything donor-gated as it lands.
+         *
+         * Keep the nav SHORT: only link things that exist. Ghost /
+         * coming-soon entries send non-paying users into dead ends and
+         * make the paying-customer feature slate feel hollow. When a
+         * page goes live, add it here. */
+        .nav-strip {
+            border-bottom: 1px solid var(--border);
+            padding: 0.55rem 2rem;
+            background: rgba(10, 10, 11, 0.65);
+            backdrop-filter: blur(6px);
+        }
+        .nav-strip-inner {
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .nav-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 3px;
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--muted);
+            text-decoration: none;
+            border: 1px solid transparent;
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+        .nav-link:hover {
+            color: var(--accent);
+            border-color: rgba(79, 208, 208, 0.35);
+            background: rgba(79, 208, 208, 0.04);
+        }
+        .nav-link--admin {
+            color: var(--gold);
+        }
+        .nav-link--admin:hover {
+            color: var(--gold);
+            border-color: rgba(229, 169, 0, 0.45);
+            background: rgba(229, 169, 0, 0.06);
+        }
+
         /* ---------- Hero ---------- */
         main {
             flex: 1;
@@ -434,6 +485,22 @@
             <div class="env-badge">{{ config('app.env') }}</div>
         </div>
     </header>
+
+    @if ($authUser)
+        {{--
+            Authenticated nav strip. Only live destinations go here —
+            see .nav-strip comment above. Add more entries as the
+            corresponding pages land (Market Hubs Livewire, etc.).
+        --}}
+        <nav class="nav-strip" aria-label="Primary navigation">
+            <div class="nav-strip-inner">
+                <a href="{{ route('account.settings') }}" class="nav-link">Account</a>
+                @if ($isAdmin)
+                    <a href="/admin" class="nav-link nav-link--admin">Admin</a>
+                @endif
+            </div>
+        </nav>
+    @endif
 
     <main>
         <div class="hero">

@@ -5,11 +5,18 @@ declare(strict_types=1);
 namespace App\Filament\Resources;
 
 use App\Domains\Markets\Models\MarketWatchedLocation;
+use App\Domains\Markets\Services\StructurePickerService;
+use App\Domains\UsersCharacters\Models\EveServiceToken;
 use App\Filament\Resources\MarketWatchedLocationResource\Pages;
 use App\Reference\Models\NpcStation;
 use App\Reference\Models\Region;
 use App\Reference\Models\SolarSystem;
+use App\Services\Eve\ServiceTokenAuthorizer;
 use BackedEnum;
+use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Log;
+use RuntimeException;
+use Throwable;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -19,7 +26,6 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
-use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\IconColumn;
@@ -147,40 +153,63 @@ class MarketWatchedLocationResource extends Resource
                             $set('name', self::labelForNpcStation((int) $station->id));
                         }),
 
-                    // Player-structure path. The admin knows the
-                    // structure ID (from zKill, from in-game, from the
-                    // structure owner) and types it in. First poll
-                    // validates access; a 403 auto-disables the row
-                    // with `disabled_reason = no_access` after the
-                    // consecutive-failure threshold. Region_id is
-                    // required and entered separately because
-                    // /universe/structures/{id}/ resolution hasn't
-                    // landed in the admin surface yet (future step).
-                    Group::make([
-                        TextInput::make('location_id')
-                            ->label('Structure ID')
-                            ->required()
-                            ->numeric()
-                            ->minValue(1_000_000_000_000)
-                            ->maxValue(9_999_999_999_999)
-                            ->disabledOn('edit')
-                            ->helperText(
-                                'Upwell structure ID (13-digit range). The service '
-                                .'character must have docking access or the poller '
-                                .'will auto-disable after the configured 403 '
-                                .'threshold.'
-                            ),
-                        TextInput::make('region_id')
-                            ->label('Region ID')
-                            ->required()
-                            ->numeric()
-                            ->minValue(10_000_000)
-                            ->maxValue(14_000_000)
-                            ->disabledOn('edit')
-                            ->helperText('Numeric region ID (e.g. 10000002 for The Forge).'),
-                    ])
+                    // Player-structure path — searchable picker over
+                    // ESI `/characters/{id}/search/?categories=structure`
+                    // using the platform service character's token. The
+                    // admin types a name fragment (system prefix like
+                    // "4-HWWF" or a structure-name fragment) and the
+                    // dropdown shows matching Upwell structures the
+                    // service character has docking rights at.
+                    //
+                    // No free-form paste fallback: discovery is
+                    // ACL-gated and structure IDs outside the service
+                    // character's access set would 403 on first poll
+                    // and auto-disable. Making the admin search via
+                    // the token surfaces that fact up-front, at
+                    // picker time, instead of after a failure sweep.
+                    //
+                    // Region is derived automatically from the resolved
+                    // structure's solar_system_id → ref_solar_systems
+                    // join (the picker returns it pre-resolved).
+                    Select::make('location_id')
+                        ->label('Player structure')
+                        ->required()
+                        ->searchable()
+                        ->preload(false)
+                        ->native(false)
                         ->visible(fn ($get) => $get('location_type') === MarketWatchedLocation::LOCATION_TYPE_PLAYER_STRUCTURE)
-                        ->columns(2),
+                        ->disabledOn('edit')
+                        ->helperText(
+                            'Type a system name (e.g. "4-HWWF") or structure '
+                            .'name fragment. Matches are gated by the service '
+                            .'character\'s docking rights — a structure you '
+                            .'don\'t see here is one the platform can\'t poll.'
+                        )
+                        ->getSearchResultsUsing(fn (string $search): array => self::searchPlayerStructures($search))
+                        ->getOptionLabelUsing(fn ($value) => self::labelForPlayerStructure((int) $value))
+                        ->afterStateUpdated(function ($state, $set): void {
+                            if (! $state) {
+                                return;
+                            }
+                            $resolved = self::cachedStructureResolution((int) $state);
+                            if ($resolved === null) {
+                                return;
+                            }
+                            $set('region_id', $resolved['region_id']);
+                            $set('name', $resolved['name']);
+                        }),
+
+                    // Read-only region mirror for the structure path.
+                    // Populated by afterStateUpdated above; shown so
+                    // the admin can eyeball that the resolved region
+                    // matches expectations before submitting.
+                    TextInput::make('region_id')
+                        ->label('Region ID')
+                        ->numeric()
+                        ->disabled()
+                        ->dehydrated()
+                        ->visible(fn ($get) => $get('location_type') === MarketWatchedLocation::LOCATION_TYPE_PLAYER_STRUCTURE)
+                        ->helperText('Auto-filled from the selected structure\'s solar system.'),
 
                     // Hidden region_id for NPC rows — populated by the
                     // NPC picker's afterStateUpdated hook above. Kept
@@ -427,5 +456,182 @@ class MarketWatchedLocationResource extends Resource
         $systemName = $system?->name ?? 'unknown system';
 
         return sprintf('%s • station %d', $systemName, $stationId);
+    }
+
+    /**
+     * Searchable picker over Upwell player structures, via ESI
+     * `/characters/{id}/search/?categories=structure` using the
+     * platform service character's token.
+     *
+     * The search is ACL-gated on CCP's side: ESI only returns IDs the
+     * service character has docking rights at. That means a
+     * structure we "can't see" here is genuinely one the platform
+     * cannot poll — surfacing that at picker time (empty results)
+     * is better UX than accepting any 13-digit number and
+     * auto-disabling it on the first poll sweep.
+     *
+     * The search string commonly matches the system-name prefix
+     * (e.g. "4-HWWF" → "4-HWWF - GSF Keepstar") because coalition
+     * staging structures embed their system name in their display
+     * name. Structure-name fragments like "Keepstar" or
+     * "Fortizar" also work.
+     *
+     * Each resolved candidate is cached in Laravel's array cache
+     * for the request lifetime (keyed by structure_id) so the
+     * picker's afterStateUpdated hook can look up `region_id` +
+     * `name` without re-resolving against ESI.
+     *
+     * Returns an array keyed by structure_id with composed labels:
+     *
+     *     [
+     *       1035466617946 => 'Perimeter - Tranquility Trading Tower (Perimeter, The Forge)',
+     *       ...
+     *     ]
+     *
+     * @return array<int, string>
+     */
+    private static function searchPlayerStructures(string $search): array
+    {
+        $search = trim($search);
+        if (strlen($search) < 3) {
+            return [];
+        }
+
+        $serviceToken = EveServiceToken::query()->orderByDesc('id')->first();
+        if ($serviceToken === null) {
+            self::notifyPickerError(
+                'No service character authorised',
+                'Authorise a service character under /admin before adding player structures.'
+            );
+
+            return [];
+        }
+
+        try {
+            /** @var ServiceTokenAuthorizer $authorizer */
+            $authorizer = app(ServiceTokenAuthorizer::class);
+            /** @var StructurePickerService $picker */
+            $picker = app(StructurePickerService::class);
+
+            $accessToken = $authorizer->freshAccessToken($serviceToken);
+            $results = $picker->search(
+                characterId: (int) $serviceToken->character_id,
+                accessToken: $accessToken,
+                query: $search,
+            );
+        } catch (RuntimeException $e) {
+            // Surfaced to the admin as a Filament toast so they know
+            // the search failed vs. just "no matches".
+            self::notifyPickerError('Structure search failed', $e->getMessage());
+
+            return [];
+        } catch (Throwable $e) {
+            Log::error('admin structure picker: unexpected exception', [
+                'error' => $e->getMessage(),
+            ]);
+            self::notifyPickerError('Structure search failed', 'Unexpected error — check laravel.log.');
+
+            return [];
+        }
+
+        $options = [];
+        foreach ($results as $r) {
+            $id = (int) $r['structure_id'];
+            // Remember resolution for the afterStateUpdated hook
+            // and for label lookups on edit / preload.
+            self::cacheStructureResolution($id, [
+                'name' => (string) $r['name'],
+                'region_id' => (int) $r['region_id'],
+                'solar_system_id' => (int) $r['solar_system_id'],
+                'system_name' => (string) $r['system_name'],
+            ]);
+
+            $regionName = self::regionNameFor((int) $r['region_id']);
+            $options[$id] = sprintf(
+                '%s (%s, %s)',
+                $r['name'],
+                $r['system_name'],
+                $regionName ?? 'region '.$r['region_id'],
+            );
+        }
+
+        return $options;
+    }
+
+    /**
+     * Label for an already-selected player structure ID. Used by the
+     * Select on edit / on preload round-trip. We try the request-
+     * local resolution cache first; if the row is being edited and
+     * was selected in a previous request, fall back to the stored
+     * display name on the MarketWatchedLocation row (which the
+     * afterStateUpdated hook set on create).
+     */
+    private static function labelForPlayerStructure(int $structureId): string
+    {
+        $resolved = self::cachedStructureResolution($structureId);
+        if ($resolved !== null) {
+            $regionName = self::regionNameFor($resolved['region_id']);
+
+            return sprintf(
+                '%s (%s, %s)',
+                $resolved['name'],
+                $resolved['system_name'],
+                $regionName ?? 'region '.$resolved['region_id'],
+            );
+        }
+
+        $row = MarketWatchedLocation::query()
+            ->where('location_id', $structureId)
+            ->where('location_type', MarketWatchedLocation::LOCATION_TYPE_PLAYER_STRUCTURE)
+            ->first();
+        if ($row?->name) {
+            return (string) $row->name;
+        }
+
+        return 'structure '.$structureId;
+    }
+
+    /**
+     * Request-local cache for ESI-resolved structures. The picker
+     * resolves once during search; the afterStateUpdated hook reads
+     * it back without touching ESI again.
+     *
+     * @param  array{name: string, region_id: int, solar_system_id: int, system_name: string}  $payload
+     */
+    private static function cacheStructureResolution(int $structureId, array $payload): void
+    {
+        self::$structureCache[$structureId] = $payload;
+    }
+
+    /**
+     * @return array{name: string, region_id: int, solar_system_id: int, system_name: string}|null
+     */
+    private static function cachedStructureResolution(int $structureId): ?array
+    {
+        return self::$structureCache[$structureId] ?? null;
+    }
+
+    /** @var array<int, array{name: string, region_id: int, solar_system_id: int, system_name: string}> */
+    private static array $structureCache = [];
+
+    private static function regionNameFor(int $regionId): ?string
+    {
+        $region = Region::find($regionId);
+
+        return $region?->name;
+    }
+
+    private static function notifyPickerError(string $title, string $body): void
+    {
+        try {
+            Notification::make()
+                ->title($title)
+                ->body($body)
+                ->danger()
+                ->send();
+        } catch (Throwable $e) {
+            // Notifications require a Livewire / Filament request
+            // context; if we're called from a test or CLI, swallow.
+        }
     }
 }

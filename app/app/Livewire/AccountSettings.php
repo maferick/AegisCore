@@ -7,6 +7,7 @@ namespace App\Livewire;
 use App\Domains\Markets\Models\MarketWatchedLocation;
 use App\Domains\Markets\Services\StructurePickerService;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
+use App\Services\Eve\MarketTokenAuthorizer;
 use App\Services\Eve\Sso\EveSsoClient;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -143,7 +144,7 @@ class AccountSettings extends Component
      * is validated to be >= 3 chars (ESI minimum for the search
      * endpoint).
      */
-    public function search(StructurePickerService $picker): void
+    public function search(StructurePickerService $picker, MarketTokenAuthorizer $authorizer): void
     {
         $this->error = null;
         $this->status = null;
@@ -164,7 +165,12 @@ class AccountSettings extends Component
         }
 
         try {
-            $this->results = $picker->search($token, $this->query);
+            // The picker is token-agnostic now; resolve a fresh access
+            // token for this donor's EveMarketToken row via the
+            // authorizer (row-locked refresh), then hand raw
+            // (character_id, access_token) to the picker.
+            $accessToken = $authorizer->freshAccessToken($token);
+            $this->results = $picker->search($token->character_id, $accessToken, $this->query);
         } catch (RuntimeException $e) {
             $this->error = $e->getMessage();
 
