@@ -70,6 +70,11 @@ class AdminPanelProvider extends PanelProvider
                 // moment they land, without having to navigate to the
                 // dedicated /admin/system-status page.
                 \App\Filament\Widgets\SystemStatusWidget::class,
+                // Docker stack summary (total / running / unhealthy /
+                // stopped). Backed by the docker-socket-proxy sidecar;
+                // full per-container table lives at
+                // /admin/container-status.
+                \App\Filament\Widgets\ContainerStatusWidget::class,
             ])
             // Horizon lives in the sidebar as a plain nav item (not a Page)
             // because it ships its own Vue SPA that replaces Filament's
