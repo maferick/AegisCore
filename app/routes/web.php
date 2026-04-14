@@ -38,6 +38,14 @@ Route::get('/auth/eve/service-redirect', [EveSsoController::class, 'redirectAsSe
 Route::get('/auth/eve/donations-redirect', [EveSsoController::class, 'redirectAsDonations'])
     ->middleware('auth')
     ->name('auth.eve.donations.redirect');
+// Market flow — donor self-service (ADR-0004 § Live polling). Unlike
+// the service + donations flows this one is NOT admin-locked; any
+// authenticated user can initiate it, but the controller's donor
+// gate + character-linkage check enforces who the token can belong
+// to. See EveSsoController::redirectAsMarket() + finishMarketFlow().
+Route::get('/auth/eve/market-redirect', [EveSsoController::class, 'redirectAsMarket'])
+    ->middleware('auth')
+    ->name('auth.eve.market.redirect');
 
 // Sign-out from any page (currently: the landing page identity badge).
 // POST so it can't be triggered by GET-prefetching or stray <a> clicks
@@ -51,6 +59,17 @@ Route::post('/logout', function (Request $request) {
 
     return redirect()->route('home');
 })->name('auth.logout');
+
+// Account / settings — the donor-facing user surface, ADR-0004 §
+// /account/settings. Phase-1 stub is a simple Blade view showing
+// linked characters, donor status, and (for donors) the market-data
+// authorisation CTA + current token status. The structure-picker +
+// watched-locations management lands as a Livewire component in a
+// follow-up step; the route name is the stable contract the SSO
+// flow's redirects target today.
+Route::get('/account/settings', [\App\Http\Controllers\AccountSettingsController::class, 'show'])
+    ->middleware('auth')
+    ->name('account.settings');
 
 // Public map data endpoint for the EVE map renderer module.
 //

@@ -8,6 +8,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Fourth SSO flow: donor self-service market authorisation (step
+  5a of ADR-0004's rollout).** Donors can now authorise one of their
+  linked EVE characters for market-structure reads. Completes the
+  four-flow set ADR-0002 anticipated (login / service / donations /
+  market).
+  - **New route `GET /auth/eve/market-redirect`** — auth-gated, not
+    admin-gated (donors aren't admins). Donor-gated at the redirect
+    AND the callback (re-checked in case donation expires mid-flow).
+    Session marker `eve_sso.flow = 'market'` routes the shared
+    `/auth/eve/callback` to the new finisher.
+  - **`redirectAsMarket()` + `finishMarketFlow()` on
+    `EveSsoController`** — mirrors the donations flow's shape with
+    three policy gates the other flows don't need:
+    - **Donor gate:** non-donors get a "become a donor" bounce
+      before the round-trip. Redirect + callback both re-check.
+    - **Character-linkage gate:** the callback character MUST
+      already be linked to the authorising user (via
+      `characters.user_id`). Without this, a session-hijack attacker
+      could authorise any EVE character they control and have its
+      ACLs used to pull market data under the victim's AegisCore
+      account — an authorisation-confusion attack. The controller
+      refuses and surfaces a clear "log in with this character
+      first" error.
+    - **Scope gate:** token must include
+      `esi-markets.structure_markets.v1` or we refuse to store it
+      (storing a functionally-useless token would mislead the
+      poller).
+  - **`App\Domains\UsersCharacters\Models\EveMarketToken`** — fourth
+    flavour of EVE token model, same `'encrypted'` cast pattern as
+    `eve_service_tokens` / `eve_donations_tokens`. Binds a
+    `character_id` (UNIQUE) to a `user_id` (FK with ON DELETE
+    CASCADE — "every market token traces to a live user" enforced
+    at the DB level). Hidden columns so a stray `->toArray()` in a
+    controller can't dump tokens into a response. 7 PHPUnit smoke
+    tests cover encrypted-cast DB round-trip, ciphertext-at-rest
+    verification, hidden-attribute exclusion from arrays/JSON,
+    FK cascade-delete, `isAccessTokenFresh()` + `hasScope()`
+    predicates, and UNIQUE-character-id enforcement.
+  - **`config/eve.php` adds `market_scopes`** (env
+    `EVE_SSO_MARKET_SCOPES`), defaulting to the minimum viable set
+    per ADR-0004 § Live polling: `publicData
+    esi-search.search_structures.v1
+    esi-universe.read_structures.v1
+    esi-markets.structure_markets.v1`.
+  - **`/account/settings` route + `AccountSettingsController` +
+    stub Blade view.** Phase 5a is the minimum viable donor-facing
+    surface: identity, donor status, linked characters, market-data
+    CTA (donor-gated), current market token status, read-only list
+    of watched structures. Uses the same EVE HUD palette as
+    `landing.blade.php` so it feels native. The Livewire
+    structure-picker + add/remove management lands in the next
+    rollout step; this stub is here so the SSO flow's redirects
+    all land on a real route from day one.
 - **Filament admin surface for `market_watched_locations` (step 4b
   of ADR-0004's rollout).** New `/admin/market-watched-locations`
   resource lets admins browse every row the Python poller works

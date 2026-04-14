@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Domains\UsersCharacters\Models\Character;
 use App\Domains\UsersCharacters\Models\EveDonationsToken;
+use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Domains\UsersCharacters\Models\EveServiceToken;
 use App\Http\Controllers\Controller;
 use App\Models\User;
@@ -22,9 +23,9 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * /auth/eve — EVE SSO entry + callback for all three flows.
+ * /auth/eve — EVE SSO entry + callback for all four flows.
  *
- * Three flows share the same callback URL so the registered CCP app
+ * Four flows share the same callback URL so the registered CCP app
  * only needs one redirect URI on file:
  *
  *   GET  /auth/eve                       → `redirect()`         (login, publicData)
@@ -33,16 +34,19 @@ use Illuminate\Support\Str;
  *   GET  /auth/eve/donations-redirect    → `redirectAsDonations()` (admin-only,
  *                                                                   wallet-read,
  *                                                                   character-locked)
+ *   GET  /auth/eve/market-redirect       → `redirectAsMarket()`  (donor-gated,
+ *                                                                 per-user,
+ *                                                                 character-linked)
  *   GET  /auth/eve/callback              → `callback()`         (dispatches by
  *                                                                session marker)
  *
- * The session stashes `eve_sso.flow ∈ {'login', 'service', 'donations'}`
+ * The session stashes `eve_sso.flow ∈ {'login', 'service', 'donations', 'market'}`
  * alongside the PKCE state + verifier when redirecting; the callback
  * reads that marker to pick the right handler. Bare callbacks (no
  * marker, e.g. someone pasting the URL) fall through to the safer
  * login handler.
  *
- * ADR-0002 § Token kinds for the policy split:
+ * ADR-0002 § Token kinds + ADR-0004 § Live polling for the policy split:
  *   - login flow: `publicData` scope, token discarded after identity
  *     extraction, identity persisted to characters/users.
  *   - service flow: full scope set from `EVE_SSO_SERVICE_SCOPES`,
@@ -54,6 +58,13 @@ use Illuminate\Support\Str;
  *     consumed by the donations wallet poller. Locked to one
  *     character ID via `EVE_SSO_DONATIONS_CHARACTER_ID` — wrong-character
  *     authorisations bounce with an error rather than upserting.
+ *   - market flow: donor self-service. Each donor authorises their
+ *     OWN character with `esi-markets.structure_markets.v1`. Stored
+ *     encrypted in `eve_market_tokens`, keyed on character_id, bound
+ *     to the authorising user. The callback refuses characters not
+ *     already linked to the authorising user (account-takeover
+ *     defence) and non-donor users (the gate that makes this a
+ *     donor benefit).
  */
 class EveSsoController extends Controller
 {
@@ -66,6 +77,7 @@ class EveSsoController extends Controller
     private const FLOW_LOGIN = 'login';
     private const FLOW_SERVICE = 'service';
     private const FLOW_DONATIONS = 'donations';
+    private const FLOW_MARKET = 'market';
 
     // ---------------------------------------------------------------------
     // Login flow — anyone, publicData scope
@@ -183,6 +195,57 @@ class EveSsoController extends Controller
     }
 
     // ---------------------------------------------------------------------
+    // Market flow — donor self-service, per-user, character-linked
+    // ---------------------------------------------------------------------
+
+    public function redirectAsMarket(Request $request): RedirectResponse
+    {
+        $user = $request->user();
+        if ($user === null) {
+            // The route is `auth`-gated but belt-and-braces.
+            abort(403, 'Login required to authorise market data access.');
+        }
+
+        // Donor gate. Non-donors clicking the button would hit CCP,
+        // authorise, come back, and be bounced from the finisher —
+        // wasted round-trip. Refuse up-front and surface a friendly
+        // "become a donor" CTA instead.
+        if (! $user->isDonor()) {
+            return redirect()->route('account.settings')
+                ->with('error', 'Market data access is a donor benefit. Become a donor to enable it.');
+        }
+
+        try {
+            $sso = EveSsoClient::fromConfig();
+        } catch (EveSsoException $e) {
+            Log::warning('EVE SSO misconfigured (market flow)', ['error' => $e->getMessage()]);
+
+            return redirect()->route('account.settings')
+                ->with('error', 'EVE SSO is not configured on this server.');
+        }
+
+        $scopes = config('eve.sso.market_scopes');
+        if (empty($scopes)) {
+            Log::warning('EVE market flow attempted with empty EVE_SSO_MARKET_SCOPES');
+
+            return redirect()->route('account.settings')
+                ->with('error', 'EVE_SSO_MARKET_SCOPES is empty — no scopes to request.');
+        }
+
+        $redirect = $sso->authorize($scopes);
+
+        $request->session()->put(self::SESSION_STATE, $redirect->state);
+        $request->session()->put(self::SESSION_VERIFIER, $redirect->codeVerifier);
+        $request->session()->put(self::SESSION_FLOW, self::FLOW_MARKET);
+        // Stash the authorising user ID so the finisher can enforce
+        // `token.user_id == authorising_user_id` even though the
+        // callback runs in a fresh request.
+        $request->session()->put('eve_sso.authorized_by_user_id', (int) $user->id);
+
+        return redirect()->away($redirect->url);
+    }
+
+    // ---------------------------------------------------------------------
     // Shared callback — dispatches by session-stashed flow marker
     // ---------------------------------------------------------------------
 
@@ -237,6 +300,7 @@ class EveSsoController extends Controller
         return match ($flow) {
             self::FLOW_SERVICE => $this->finishServiceFlow($request, $token),
             self::FLOW_DONATIONS => $this->finishDonationsFlow($request, $token),
+            self::FLOW_MARKET => $this->finishMarketFlow($request, $token),
             default => $this->finishLoginFlow($request, $token),
         };
     }
@@ -390,6 +454,124 @@ class EveSsoController extends Controller
     }
 
     // ---------------------------------------------------------------------
+    // Market-flow finisher: donor self-service, per-user,
+    // character-linkage-enforced. Two security gates:
+    //
+    //   1. Authorising user must still be a donor (same gate as the
+    //      redirect; re-check in case the donation expired mid-flow).
+    //   2. Callback character MUST already be linked to the
+    //      authorising user (characters.user_id = user_id). Without
+    //      this check, a donor could swap characters on CCP's side
+    //      mid-flow and end up with a market token bound to THEIR
+    //      AegisCore account but backed by a DIFFERENT EVE character —
+    //      a cross-account confusion we do not want.
+    //
+    // ADR-0004 § Structure access is alliance/corp-gated — invariant.
+    // ---------------------------------------------------------------------
+
+    private function finishMarketFlow(Request $request, EveSsoToken $token): RedirectResponse
+    {
+        $authorizedBy = $request->session()->pull('eve_sso.authorized_by_user_id');
+        if (! is_int($authorizedBy) || $authorizedBy <= 0) {
+            Log::warning('EVE market callback missing authorizing user id');
+
+            return redirect()->route('account.settings')
+                ->with('error', 'Market authorisation session expired. Try again.');
+        }
+
+        /** @var User|null $user */
+        $user = User::find($authorizedBy);
+        if ($user === null) {
+            Log::warning('EVE market callback: authorising user vanished', [
+                'authorized_by_user_id' => $authorizedBy,
+            ]);
+
+            return redirect()->route('account.settings')
+                ->with('error', 'Market authorisation failed — authorising user not found.');
+        }
+
+        if (! $user->isDonor()) {
+            // Donor status lapsed between redirect and callback. Refuse
+            // to store the token rather than silently granting access
+            // the donor no longer pays for.
+            Log::info('EVE market callback: authorising user is not a donor', [
+                'user_id' => $user->id,
+                'character_id' => $token->characterId,
+            ]);
+
+            return redirect()->route('account.settings')
+                ->with('error', 'Market data access is a donor benefit. Become a donor to enable it.');
+        }
+
+        // Character-linkage gate. The authorised EVE character MUST
+        // already be one of this user's linked characters (populated
+        // via the login flow). Otherwise an attacker with a partial
+        // session hijack could authorise ANY EVE character they
+        // control and have that character's ACLs used to pull market
+        // data under the victim's AegisCore account — an authorisation-
+        // confusion attack.
+        $characterLinked = Character::query()
+            ->where('user_id', $user->id)
+            ->where('character_id', $token->characterId)
+            ->exists();
+        if (! $characterLinked) {
+            Log::warning('EVE market callback: unlinked character', [
+                'user_id' => $user->id,
+                'character_id' => $token->characterId,
+                'character_name' => $token->characterName,
+            ]);
+
+            return redirect()->route('account.settings')
+                ->with('error', sprintf(
+                    'Authorised character %s is not linked to your account. '.
+                    'Log in with this character via EVE SSO first, then re-try authorising market data.',
+                    $token->characterName,
+                ));
+        }
+
+        // Scope sanity check. Same defensive check as the other flows:
+        // an empty scope set or one missing the functional scope would
+        // mean we stored a token the poller can't actually use. Require
+        // the market scope explicitly — without it the whole flow is
+        // a no-op.
+        if (count($token->scopes) === 0 || ! in_array('esi-markets.structure_markets.v1', $token->scopes, true)) {
+            Log::warning('EVE market callback returned wrong / missing scopes', [
+                'user_id' => $user->id,
+                'character_id' => $token->characterId,
+                'scopes' => $token->scopes,
+            ]);
+
+            return redirect()->route('account.settings')
+                ->with('error', 'Market authorisation did not grant the required scope (esi-markets.structure_markets.v1). Try again.');
+        }
+
+        $expiresAt = now()->addSeconds(max(0, $token->expiresIn));
+
+        EveMarketToken::updateOrCreate(
+            ['character_id' => $token->characterId],
+            [
+                'user_id' => $user->id,
+                'character_name' => $token->characterName,
+                'scopes' => $token->scopes,
+                'access_token' => $token->accessToken,
+                'refresh_token' => $token->refreshToken,
+                'expires_at' => $expiresAt,
+            ],
+        );
+
+        Log::info('EVE market character authorised', [
+            'user_id' => $user->id,
+            'character_id' => $token->characterId,
+            'character_name' => $token->characterName,
+            'scope_count' => count($token->scopes),
+            'expires_at' => $expiresAt->toIso8601String(),
+        ]);
+
+        return redirect()->route('account.settings')
+            ->with('success', "Authorised {$token->characterName} for market-data access.");
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -455,6 +637,9 @@ class EveSsoController extends Controller
                 ->with('error', $message),
             self::FLOW_DONATIONS => redirect()
                 ->route('filament.admin.pages.eve-donations')
+                ->with('error', $message),
+            self::FLOW_MARKET => redirect()
+                ->route('account.settings')
                 ->with('error', $message),
             default => redirect()
                 ->route('filament.admin.auth.login')
