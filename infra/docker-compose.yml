@@ -236,6 +236,10 @@ services:
       EVE_SSO_CLIENT_SECRET: "${EVE_SSO_CLIENT_SECRET:-}"
       EVE_SSO_CALLBACK_URL: "${EVE_SSO_CALLBACK_URL:-}"
       EVE_SSO_LOGIN_SCOPES: "${EVE_SSO_LOGIN_SCOPES:-publicData}"
+      # Service character SSO scopes — the elevated set the admin grants
+      # via /admin/eve-service-character. Default in config/eve.php; see
+      # .env.example for the expanded form. Empty disables the flow.
+      EVE_SSO_SERVICE_SCOPES: "${EVE_SSO_SERVICE_SCOPES:-}"
       # Comma-separated EVE character IDs that get Filament /admin access.
       # IDs (not names) — names are mutable, IDs are not. See ADR-0002.
       EVE_SSO_ADMIN_CHARACTER_IDS: "${EVE_SSO_ADMIN_CHARACTER_IDS:-}"

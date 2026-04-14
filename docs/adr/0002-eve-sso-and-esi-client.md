@@ -47,17 +47,33 @@ the control plane, Python is the execution plane. A Horizon job that polls
   MariaDB. Refresh tokens are not stored — if a user's session expires, they
   log in again.
 
-- **Service character token** (phase 2, later ADR). Elevated scopes
-  (`esi-location.*`, `esi-search.*`, `esi-universe.read_structures.v1`,
-  `esi-markets.structure_markets.v1`, `esi-characters.*`,
-  `esi-corporations.*`, `esi-alliances.*`). Initiated by an admin from
-  `/admin`. Access + refresh tokens stored encrypted, consumed by the Python
-  execution plane for background polling. One service character per
-  deployment to start; scoped-per-feature later.
+- **Service character token** (phase 2 — storage + admin flow landed
+  early in a follow-up to this ADR; Python poller + automatic refresh
+  still pending). Elevated scopes from `EVE_SSO_SERVICE_SCOPES` —
+  default set covers `publicData`, `esi-location.*`, `esi-search.*`,
+  `esi-universe.read_structures.v1`, `esi-markets.structure_markets.v1`,
+  `esi-characters.read_corporation_roles.v1`, `esi-corporations.*`,
+  `esi-alliances.read_contacts.v1`. Initiated by an admin from
+  `/admin/eve-service-character`. Access + refresh tokens stored
+  encrypted at rest in `eve_service_tokens` (Laravel's `'encrypted'`
+  cast, APP_KEY = encryption key), keyed on `character_id` so re-auth
+  upserts. One service character per deployment for now;
+  scoped-per-feature later. Token-refresh handling stays out of this
+  ADR — the Python poller takes that on alongside JWT signature
+  verification.
 
-Keeping these two flows separate means phase 1 ships without any
-encrypted-at-rest token storage, distributed refresh locking, or scope-set
-bookkeeping — all of which belong with the polling subsystem anyway.
+Keeping these two flows separate means the user-login surface still
+ships without any encrypted-at-rest token storage, distributed refresh
+locking, or scope-set bookkeeping. The service-character storage that
+landed early is one row per stack and the refresh dance is deferred to
+the polling subsystem anyway, so it doesn't pull encryption or
+distributed locks into the synchronous request path.
+
+Both flows share `/auth/eve/callback` — the registered CCP app only
+needs one redirect URI on file. The session stashes a `flow` marker
+(`'login'` or `'service'`) when redirecting to /authorize; the callback
+reads it back to dispatch to the right finisher. Bare callbacks (no
+marker) fall through to the safer login finisher.
 
 ### Admin gate
 
@@ -223,7 +239,21 @@ immutable join key is `characters.character_id`.
 
 Phase 2 (separate ADR amendment):
 
-10. `eve_tokens` table + encryption.
-11. `/admin/eve-service-character` flow for elevated-scope login.
+10. ~~`eve_tokens` table + encryption.~~ Landed early as
+    `eve_service_tokens` — schema designed for the singleton service
+    character flow that #11 surfaces. Token columns ride Laravel's
+    `'encrypted'` cast (APP_KEY = encryption key) so a `SELECT *` leak
+    is ciphertext, not bearer tokens. See `2026_04_14_000001_create_eve_service_tokens_table.php`.
+11. ~~`/admin/eve-service-character` flow for elevated-scope login.~~
+    Landed early. Admin-gated route at `/auth/eve/service-redirect`
+    kicks off the elevated-scope SSO round-trip; both flows reuse
+    `/auth/eve/callback` with a session-stashed `flow` marker
+    (`'login'` vs `'service'`) routing to the right finisher. Status +
+    re-auth surface lives at `/admin/eve-service-character`.
 12. Python execution plane ESI poller (per-group bucket tracker, refresh
-    handling, JWT signature verification).
+    handling, JWT signature verification). Still pending — automatic
+    refresh in particular needs distributed locks (two pollers racing
+    to use a stale access token, both refreshing, double-rotating the
+    refresh token). Reactive Laravel-side refresh would land in another
+    PR if the first sustained polling work proves we need it before the
+    Python plane is built.

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    AegisCore brand mark.
+
+    Design language:
+      - Pointy-top hex shield (Aegis) — cyan, the EVE HUD "go / friendly /
+        selected" colour. Same accent as the landing page hero.
+      - Inner hex frame — gold, the EVE HUD "your alliance / your ship"
+        colour. Implicit boundary for the sensor field.
+      - Four cardinal reticle ticks — gold, anchored between the inner hex
+        and the core. Reads as a HUD lock at any size.
+      - Cyan core dot — the intel signature being tracked.
+
+    Symbolism: aegis (defensive shield from Greek myth) + core (sensing,
+    computational centre). Reads as a defensive intel platform — which is
+    exactly what AegisCore is: spy detection, killmail analysis, alliance
+    intel for New Eden.
+
+    Optimised for legibility from 16x16 (browser tab favicon) up to large
+    UI marks. No fine detail that would visually merge at small sizes; all
+    strokes are at least 1.25 wide on the 64-unit canvas (≈0.3px at 16x16).
+    Solid colours only — gradients/filters get stripped by some favicon
+    contexts and would invalidate the small-size guarantee anyway.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="AegisCore">
+    <title>AegisCore</title>
+
+    <!-- Outer hex shield (Aegis). Dark fill so the mark sits on light
+         backgrounds without leaking the page colour through it. -->
+    <path d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z"
+          stroke="#4fd0d0" stroke-width="2.5" stroke-linejoin="round"
+          fill="#0a0a0b"/>
+
+    <!-- Inner hex frame — gold, lighter stroke, structural divider. -->
+    <path d="M32 18 L44 25 L44 39 L32 46 L20 39 L20 25 Z"
+          stroke="#e5a900" stroke-width="1.25" stroke-linejoin="round"
+          opacity="0.7" fill="none"/>
+
+    <!-- HUD reticle: four cardinal ticks pointing inward at the core. -->
+    <g stroke="#e5a900" stroke-width="1.75" stroke-linecap="round">
+        <line x1="32" y1="22" x2="32" y2="27"/>
+        <line x1="32" y1="37" x2="32" y2="42"/>
+        <line x1="22" y1="32" x2="27" y2="32"/>
+        <line x1="37" y1="32" x2="42" y2="32"/>
+    </g>
+
+    <!-- Core dot (intel signature). -->
+    <circle cx="32" cy="32" r="2.75" fill="#4fd0d0"/>
+</svg>

@@ -6,6 +6,15 @@
     moves into a proper layout + Vite bundle — but for phase 1 this is
     the minimum viable "front door" that looks intentional.
 --}}
+@php
+    /** @var \App\Models\User|null $authUser */
+    $authUser = auth()->user();
+    $primaryCharacter = $authUser?->characters()->first();
+    $isAdmin = $authUser
+        ? $authUser->canAccessPanel(\Filament\Facades\Filament::getPanel('admin'))
+        : false;
+    $ssoConfigured = \App\Services\Eve\Sso\EveSsoClient::isConfigured();
+@endphp
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,7 +22,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
     <title>AegisCore — alliance intelligence</title>
-    <link rel="icon" href="data:,">
+    {{-- SVG favicon: scales cleanly from 16px tab icons up. The file is
+         the same brand mark we lock up in the header below. --}}
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
         :root {
             --bg: #0a0a0b;
@@ -60,6 +71,28 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 1rem;
+        }
+        /* Logo lockup: hex shield SVG + wordmark, links back to home.
+         * The SVG mark mirrors public/favicon.svg so the brand reads the
+         * same in the browser tab and on the page itself. */
+        .logo-lockup {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            text-decoration: none;
+            color: var(--text);
+            transition: opacity 0.15s;
+        }
+        .logo-lockup:hover { opacity: 0.85; }
+        .logo-mark {
+            width: 26px;
+            height: 26px;
+            flex-shrink: 0;
+            transition: filter 0.2s;
+        }
+        .logo-lockup:hover .logo-mark {
+            filter: drop-shadow(0 0 6px rgba(79, 208, 208, 0.45));
         }
         .logotype {
             font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
@@ -68,7 +101,14 @@
             text-transform: uppercase;
             color: var(--text);
         }
-        .logotype .dot { color: var(--accent); }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
 
         .env-badge {
             font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
@@ -80,6 +120,63 @@
             border: 1px solid rgba(229, 169, 0, 0.35);
             border-radius: 3px;
         }
+
+        /* ---------- Authenticated user badge ---------- */
+        /* Sits in the header-right slot. Portrait + name + sign-out, in
+         * the same visual register as env-badge so it doesn't dominate
+         * the marketing page. Pill shape distinguishes "this is you" from
+         * the squared "this is metadata" env-badge next to it. */
+        .user-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.25rem 0.55rem 0.25rem 0.3rem;
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+        }
+        .user-portrait {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            border: 1px solid rgba(229, 169, 0, 0.45);
+            background: #000;
+            object-fit: cover;
+            flex-shrink: 0;
+        }
+        .user-portrait--placeholder {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--gold);
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .user-name {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.75rem;
+            color: var(--text);
+            letter-spacing: 0.05em;
+            max-width: 14ch;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .user-signout {
+            background: none;
+            border: none;
+            padding: 0.15rem 0.25rem;
+            margin-left: 0.15rem;
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted);
+            cursor: pointer;
+            transition: color 0.15s;
+        }
+        .user-signout:hover { color: var(--danger); }
 
         /* ---------- Hero ---------- */
         main {
@@ -200,13 +297,71 @@
 
         @media (max-width: 480px) {
             header, main, footer { padding-left: 1.25rem; padding-right: 1.25rem; }
+            .user-name { max-width: 8ch; }
         }
     </style>
 </head>
 <body>
     <header>
-        <div class="logotype">AegisCore<span class="dot">.</span></div>
-        <div class="env-badge">{{ config('app.env') }}</div>
+        {{--
+            Logo lockup. The hex shield SVG below is the same mark as
+            public/favicon.svg — keep them in lockstep when iterating.
+            Anchor → home so logo-click navigates back from any future
+            sub-page.
+        --}}
+        <a href="{{ url('/') }}" class="logo-lockup" aria-label="AegisCore home">
+            <svg class="logo-mark" viewBox="0 0 64 64" fill="none" role="img" aria-hidden="true">
+                <path d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z"
+                      stroke="#4fd0d0" stroke-width="2.5" stroke-linejoin="round"
+                      fill="rgba(10, 10, 11, 0.6)"/>
+                <path d="M32 18 L44 25 L44 39 L32 46 L20 39 L20 25 Z"
+                      stroke="#e5a900" stroke-width="1.25" stroke-linejoin="round"
+                      opacity="0.7" fill="none"/>
+                <g stroke="#e5a900" stroke-width="1.75" stroke-linecap="round">
+                    <line x1="32" y1="22" x2="32" y2="27"/>
+                    <line x1="32" y1="37" x2="32" y2="42"/>
+                    <line x1="22" y1="32" x2="27" y2="32"/>
+                    <line x1="37" y1="32" x2="42" y2="32"/>
+                </g>
+                <circle cx="32" cy="32" r="2.75" fill="#4fd0d0"/>
+            </svg>
+            <span class="logotype">AegisCore</span>
+        </a>
+
+        <div class="header-right">
+            @if ($authUser)
+                {{--
+                    Logged-in identity badge. Portrait + character name +
+                    inline sign-out. We hit images.evetech.net directly —
+                    CCP serves portraits unauth'd over a CDN, so no token
+                    needed and no proxying through the app. `referrerpolicy`
+                    keeps our hostname out of CCP's logs on every render.
+                --}}
+                <div class="user-badge">
+                    @if ($primaryCharacter)
+                        <img class="user-portrait"
+                             src="https://images.evetech.net/characters/{{ $primaryCharacter->character_id }}/portrait?size=64"
+                             alt="{{ $authUser->name }}'s portrait"
+                             width="26" height="26"
+                             loading="lazy" referrerpolicy="no-referrer">
+                    @else
+                        {{-- Operator-seeded account: no EVE character to
+                             pull a portrait for. Show the first letter of
+                             the user name in the gold accent so the badge
+                             still has a visual anchor. --}}
+                        <span class="user-portrait user-portrait--placeholder">
+                            {{ \Illuminate\Support\Str::upper(\Illuminate\Support\Str::substr($authUser->name, 0, 1)) }}
+                        </span>
+                    @endif
+                    <span class="user-name" title="{{ $authUser->name }}">{{ $authUser->name }}</span>
+                    <form method="POST" action="{{ route('auth.logout') }}" style="display: inline;">
+                        @csrf
+                        <button type="submit" class="user-signout" title="Sign out">Sign out</button>
+                    </form>
+                </div>
+            @endif
+            <div class="env-badge">{{ config('app.env') }}</div>
+        </div>
     </header>
 
     <main>
@@ -236,17 +391,32 @@
                 </div>
             </div>
 
+            {{--
+                CTAs gated three ways:
+
+                  - Guest, SSO configured → "Log in with EVE Online"
+                  - Logged-in admin       → "Admin →"
+                  - Logged-in non-admin   → (no primary CTA — they're
+                                            already in; landing stays
+                                            content-only for them)
+
+                Per the EVE_SSO_ADMIN_CHARACTER_IDS allow-list (see
+                ADR-0002 § Admin gate). Operator-seeded accounts (no
+                linked character) also count as admins via the bootstrap
+                escape hatch in `User::canAccessPanel`. The Admin button
+                used to render for everyone, which sent non-admins into
+                a 403 page — now it's only visible to people who can
+                actually use it.
+            --}}
             <div class="actions">
-                <a href="/admin" class="btn btn-primary">Admin &rarr;</a>
-                {{--
-                    "Log in with EVE Online" — only renders when SSO env vars
-                    are populated (mirrors the AdminPanelProvider login-form
-                    render hook gate). Without that check it'd be a dead
-                    link that silently bounces users back via the misconfig
-                    fallback path. See App\Services\Eve\Sso\EveSsoClient.
-                --}}
-                @if (\App\Services\Eve\Sso\EveSsoClient::isConfigured())
-                    <a href="{{ route('auth.eve.redirect') }}" class="btn btn-eve">Log in with EVE Online</a>
+                @if ($authUser)
+                    @if ($isAdmin)
+                        <a href="/admin" class="btn btn-primary">Admin &rarr;</a>
+                    @endif
+                @else
+                    @if ($ssoConfigured)
+                        <a href="{{ route('auth.eve.redirect') }}" class="btn btn-eve">Log in with EVE Online</a>
+                    @endif
                 @endif
                 <a href="https://github.com/maferick/AegisCore" class="btn" rel="noopener">GitHub</a>
             </div>
