@@ -8,6 +8,7 @@ use App\Services\Eve\Esi\CachedEsiClient;
 use App\Services\Eve\Esi\EsiClient;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiRateLimiter;
+use App\Services\Eve\Sso\EveSsoClient;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
 
@@ -53,6 +54,21 @@ class AppServiceProvider extends ServiceProvider
         // Not a singleton because the config value may change between
         // requests in tests (singleton would cache the first value).
         $this->app->bind(DonorBenefitCalculator::class, fn () => DonorBenefitCalculator::fromConfig());
+
+        // EveSsoClient: four primitive deps (client_id, secret, redirect
+        // URI, default scopes) pulled from config('eve.sso'). Every
+        // caller today does EveSsoClient::fromConfig() by hand — that
+        // works for the controller + donations poller, but MarketTokenAuthorizer
+        // (and by extension the Livewire AccountSettings search action)
+        // gets auto-wired via the container, and died with
+        // "Unresolvable dependency resolving [Parameter #0 <required>
+        // string $clientId]" the first time it was invoked.
+        //
+        // Singleton: EveSsoClient is stateless except for its config,
+        // and the config is itself fronted by Laravel's config repo
+        // which is already a singleton. A singleton here is what
+        // `EsiClient` above uses for the same reason.
+        $this->app->singleton(EveSsoClient::class, fn () => EveSsoClient::fromConfig());
     }
 
     /**

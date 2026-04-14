@@ -13,6 +13,8 @@
 @php
     /** @var \App\Models\User|null $user */
     /** @var bool $is_donor */
+    /** @var bool $is_admin */
+    /** @var bool $has_market_access  Either donor or admin — feature gate for the market-data + picker sections. */
     /** @var bool $sso_configured */
     /** @var string|null $market_redirect_url */
     /** @var \App\Domains\UsersCharacters\Models\EveMarketToken|null $market_token */
@@ -52,8 +54,12 @@
         </div>
     </section>
 
-    @if ($is_donor)
+    @if ($has_market_access)
         {{-- ---------- Market data access ---------- --}}
+        {{-- Visible to both donors (paid access) and admins (operator
+             bypass). The "donor" CSS class keeps the same visual
+             treatment — the admin route is a functional bypass, not a
+             different UX. --}}
         <section class="card donor">
             <h2>Market data access</h2>
             <p class="subtitle" style="margin-bottom: 1rem;">

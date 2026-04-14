@@ -88,6 +88,13 @@ class AccountSettings extends Component
         return view('livewire.account.settings', [
             'user' => Auth::user(),
             'is_donor' => $this->isDonor(),
+            'is_admin' => $this->isAdmin(),
+            // Feature gate for the market-data + structure-picker
+            // sections. Admins are allowed through as operators
+            // regardless of donor status — they run the platform
+            // and need to be able to add locations for testing,
+            // support, or moderation. Donors pay for the same access.
+            'has_market_access' => $this->hasMarketAccess(),
             'sso_configured' => EveSsoClient::isConfigured(),
             'market_redirect_url' => EveSsoClient::isConfigured()
                 ? route('auth.eve.market.redirect')
@@ -106,6 +113,26 @@ class AccountSettings extends Component
         $user = Auth::user();
 
         return $user !== null && $user->isDonor();
+    }
+
+    private function isAdmin(): bool
+    {
+        $user = Auth::user();
+
+        return $user !== null && $user->isAdmin();
+    }
+
+    /**
+     * Intersection-free feature gate: admin OR donor. Matches the
+     * "operators + paying customers get the premium surface" rule
+     * the market-hub policy uses for visibility. A user who loses
+     * both (donor expiry + admin revocation) immediately stops
+     * seeing the picker on their next page render — there's no
+     * cached flag.
+     */
+    private function hasMarketAccess(): bool
+    {
+        return $this->isDonor() || $this->isAdmin();
     }
 
     private function marketToken(): ?EveMarketToken
@@ -201,7 +228,9 @@ class AccountSettings extends Component
         if ($user === null) {
             abort(403);
         }
-        if (! $user->isDonor()) {
+        if (! ($user->isDonor() || $user->isAdmin())) {
+            // Admins bypass the donor gate as operators (ADR-0005
+            // intersection rule applied to /account/settings).
             $this->error = 'Market data access is a donor benefit.';
 
             return;
