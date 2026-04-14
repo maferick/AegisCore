@@ -50,3 +50,29 @@ Schedule::command('eve:poll-donations')
     ->onOneServer()
     ->withoutOverlapping(10)
     ->name('eve-poll-donations');
+
+// Donor-benefit safety-net recompute.
+//
+// The poller recomputes per-donor in-line after each upsert, which is
+// the primary path — expiry is materialised moments after the wallet
+// journal reports a new donation. But that in-line recompute runs in
+// the same `handle()` tick AFTER `resolveDonorNames()`; if anything
+// between the upsert and the recompute loop throws (names DB update,
+// transient connection hiccup), the donation row lands in
+// `eve_donations` but the matching `eve_donor_benefits` row never
+// gets written. On the next tick the `journal_ref_id` is no longer
+// "fresh", so the donor drops out of `$insertedCharacterIds` and the
+// missed recompute is never retried — the donor silently loses
+// ad-free status until an operator runs the artisan command by hand.
+//
+// Running the full recompute hourly closes that gap. It's cheap
+// (donor base is dozens of characters, each recompute is microseconds)
+// and idempotent (recomputing an already-correct row just rewrites
+// the same values). Hourly cadence keeps the log noise down while
+// still repairing orphaned benefits within one tick's blast radius
+// for any observer.
+Schedule::command('eve:donations:recompute')
+    ->hourly()
+    ->onOneServer()
+    ->withoutOverlapping(10)
+    ->name('eve-donations-recompute');

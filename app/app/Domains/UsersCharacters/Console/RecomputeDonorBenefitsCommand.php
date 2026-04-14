@@ -12,21 +12,28 @@ use Illuminate\Console\Command;
  * `eve_donations` ledger, against the current
  * `EVE_DONATIONS_ISK_PER_DAY` rate.
  *
- * When to run:
+ * When it runs:
  *
- *   - Once after the `eve_donor_benefits` migration lands, to backfill
- *     benefit rows for donors whose donations were recorded before the
- *     poller grew incremental recompute (i.e. all donations pre-dating
- *     this feature).
- *   - Any time an operator changes `EVE_DONATIONS_ISK_PER_DAY`. The new
- *     rate is retroactive by design: you don't want past donors stuck
- *     on the old (possibly stingier) curve. A run of this command
- *     reseeds every donor's `ad_free_until` at the new rate.
+ *   - Hourly as a scheduled safety net (see routes/console.php). The
+ *     poller recomputes per-donor in-line after each upsert, which is
+ *     the primary path, but if anything throws between the donation
+ *     upsert and the recompute loop the donation lands in
+ *     `eve_donations` without a matching `eve_donor_benefits` row.
+ *     The next poller tick doesn't retry because the journal_ref_id
+ *     is no longer "fresh". An hourly full rebuild closes that gap.
+ *   - On demand after an operator changes `EVE_DONATIONS_ISK_PER_DAY`.
+ *     The new rate is retroactive by design: you don't want past
+ *     donors stuck on the old (possibly stingier) curve. A manual
+ *     run reseeds every donor's `ad_free_until` at the new rate
+ *     without waiting for the hourly tick.
+ *   - Once as a one-shot backfill after the `eve_donor_benefits`
+ *     migration lands, to materialise rows for donors whose donations
+ *     were recorded before the poller grew incremental recompute.
  *
- * Not scheduled. Running it periodically doesn't help — the poll job
- * already recomputes per-donor on upsert, and expiry is time-based so
- * "is this donor currently covered?" is answered at query time without
- * any cron.
+ * Cost: donor base is dozens of characters; each recompute is
+ * microseconds; the whole pass is idempotent (rewriting the same row
+ * with the same values when nothing has changed). Hourly cadence is
+ * comfortably inside the plane-boundary budget.
  */
 final class RecomputeDonorBenefitsCommand extends Command
 {

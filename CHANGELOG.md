@@ -63,6 +63,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     types.
 
 ### Fixed
+- **Donors occasionally lost ad-free status for no visible reason;
+  admin page showed "No active donors yet" despite a fresh
+  `player_donation` row in the ledger.** `PollDonationsWallet`
+  recomputes per-donor benefits in-line after each upsert, but only
+  for donors whose `journal_ref_id` is brand-new on the current tick.
+  If anything between `upsertDonations()` and the recompute loop threw
+  — most easily `resolveDonorNames()`'s `DB::transaction` on a
+  transient connection hiccup, which has no catch at the `handle()`
+  level — the donation row persisted but the matching
+  `eve_donor_benefits` row was never written. On the next tick the
+  `journal_ref_id` was no longer fresh, so the recompute was
+  permanently skipped and only a manual `php artisan
+  eve:donations:recompute` repaired it. Scheduled the existing
+  artisan command hourly as a safety net (`eve-donations-recompute`
+  task in `routes/console.php`) — donor base is dozens of characters
+  and each recompute is microseconds, so a full rebuild every hour is
+  free and self-heals any orphaned benefits within one tick of an
+  observer noticing.
 - **`market_poll_scheduler` crashed on every restart with
   `unrecognized arguments: --interval 300`.** Compose's default
   pull/build policy was reusing the locally-cached
