@@ -98,7 +98,6 @@ update:
 bootstrap:
 	sudo mkdir -p \
 		$(AEGISCORE_ROOT)/docker/mariadb/data \
-		$(AEGISCORE_ROOT)/docker/mariadb/config \
 		$(AEGISCORE_ROOT)/docker/mariadb/logs \
 		$(AEGISCORE_ROOT)/docker/opensearch/data \
 		$(AEGISCORE_ROOT)/docker/opensearch/logs \

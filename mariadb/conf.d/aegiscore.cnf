@@ -1,0 +1,18 @@
+# AegisCore custom MariaDB settings.
+# Loaded from /etc/mysql/conf.d/aegiscore.cnf in the container
+# (see `!includedir /etc/mysql/conf.d/` in the image's /etc/mysql/my.cnf).
+#
+# The packaged MariaDB defaults — the files operators usually want to read
+# (50-server.cnf, 50-client.cnf, 60-galera.cnf, etc.) — live inside the
+# container at /etc/mysql/mariadb.conf.d/ and are NOT bind-mounted, because
+# overwriting them with an empty host dir would break the server. To view
+# them, exec into the container:
+#
+#     docker compose exec mariadb sh -c 'cat /etc/mysql/mariadb.conf.d/50-server.cnf'
+#
+# Settings in this file take precedence over the packaged defaults. Keep
+# the delta small and documented — this is the one place that survives an
+# image bump, so it's where operator-visible tuning belongs.
+
+[mysqld]
+# (intentionally empty — add overrides below as the stack grows)

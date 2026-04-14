@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lets the donor Livewire picker (donor's `eve_market_tokens` row) and
   the admin Filament picker (platform's `eve_service_tokens` row)
   share one code path.
+- **MariaDB override mount moved to `mariadb/conf.d/aegiscore.cnf` (tracked).**
+  The previous mount source was `$AEGISCORE_ROOT/docker/mariadb/config`,
+  a gitignored runtime-state directory that nobody ever populated — so
+  operators trying to read or edit MariaDB settings from the host found
+  an empty dir and assumed the bind-mount was broken. The override source
+  now follows the same convention as `php/conf.d/aegiscore.ini` and
+  `nginx/conf.d/aegiscore.conf`: a tracked file at the repo root, mounted
+  read-only into the container at `/etc/mysql/conf.d/`. The packaged
+  MariaDB defaults (`50-server.cnf` etc.) still live inside the image at
+  `/etc/mysql/mariadb.conf.d/` and are deliberately not bind-mounted.
+  `make bootstrap` no longer creates `docker/mariadb/config/`. Operators
+  upgrading an existing deployment: move any custom `*.cnf` files from
+  `$AEGISCORE_ROOT/docker/mariadb/config/` into the tracked
+  `mariadb/conf.d/` (and commit them) before `make restart mariadb`.
 
 ### Added
 - **Private Market Hub overlay — policy foundation (ADR-0005).**
