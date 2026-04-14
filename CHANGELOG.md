@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Landing-page nav strip for authenticated users.** Logged-in users
+  now see a thin horizontal nav between the header and the hero, with
+  links to the surfaces that currently exist for them:
+  - `Account` — the donor / market-data authorisation surface.
+  - `Admin` — visible only to users who pass `User::isAdmin()`
+    (gold-accented to mirror the existing `Admin →` CTA).
+  The nav deliberately ships with only live destinations — ghost /
+  coming-soon entries are a review-blocker. Add more as the
+  corresponding pages land.
+- **Searchable player-structure picker in the admin create form.**
+  The `/admin/market-watched-locations` create flow no longer requires
+  pasting a 13-digit Upwell ID and a separate region ID. Operators
+  type a system name (e.g. `4-HWWF`) or structure-name fragment and
+  pick from a dropdown of structures the service character has
+  docking rights at, backed by ESI
+  `/characters/{id}/search/?categories=structure`. Region is auto-
+  resolved from the selected structure's `solar_system_id` →
+  `ref_solar_systems` join; display name is pre-filled from the
+  `/universe/structures/{id}/` payload.
+  - Discovery is ACL-gated by design: a structure that doesn't
+    appear in the search is one the platform genuinely can't poll.
+    Surfacing that at picker time is better UX than accepting any
+    ID and auto-disabling after a 403 sweep.
+- **`App\Services\Eve\ServiceTokenAuthorizer`** — Laravel-side fresh-
+  access-token helper for `EveServiceToken`. Mirrors
+  `MarketTokenAuthorizer`: row-locked refresh under
+  `SELECT ... FOR UPDATE` so Python and Laravel can't both refresh
+  the same row in parallel and lose the loser's refresh_token to a
+  CCP-side single-use invalidation. Enables Laravel-plane interactive
+  ESI calls through the admin service character (starting with the
+  structure picker above).
+
+### Changed
+- **`StructurePickerService` is now token-agnostic.** The `search()`
+  and `resolve()` methods take `(int $characterId, string $accessToken,
+  ...)` instead of an `EveMarketToken`. Callers run the token through
+  `MarketTokenAuthorizer` / `ServiceTokenAuthorizer` themselves. This
+  lets the donor Livewire picker (donor's `eve_market_tokens` row) and
+  the admin Filament picker (platform's `eve_service_tokens` row)
+  share one code path.
+
+### Added
 - **Private Market Hub overlay — policy foundation (ADR-0005).**
   Donor / admin-only feature laying canonical-hub identity on top
   of the existing `market_watched_locations` driver table. Three
