@@ -2,13 +2,28 @@
 
 Env vars carry the connection + ESI details; flags only cover the
 op-mode knobs an operator wants from the shell (dry-run, one-location
-replay, batch size override).
+replay, batch size override, loop-mode interval).
+
+Two operating modes:
+
+  - **One-shot** (default, `--interval 0`): runs one pass and exits.
+    What `make market-poll` invokes for ad-hoc operator runs.
+  - **Loop** (`--interval N` where N > 0): runs a pass, sleeps N
+    seconds, runs another pass, repeats forever. What the
+    `market_poll_scheduler` compose service uses to provide the
+    sustained 5-minute cadence ESI region-orders publish on.
+
+A pass that crashes in loop mode is logged + the loop continues
+into its next sleep; the per-location transaction boundary in the
+runner makes a partial-pass crash safe to recover from on the next
+tick.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 from market_poller.config import Config
 from market_poller.log import get, setup
@@ -34,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Pull order-book snapshots from ESI for every enabled row "
             "in market_watched_locations and insert into market_orders. "
-            "One pass per invocation — cadence is the caller's job."
+            "Default: one pass per invocation. With --interval, runs in "
+            "a loop forever."
         ),
     )
     parser.add_argument(
@@ -62,6 +78,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Override MARKET_POLL_BATCH_SIZE (default 5000).",
     )
     parser.add_argument(
+        "--interval",
+        type=int,
+        default=0,
+        help=(
+            "Loop mode — after each pass sleep this many seconds, then "
+            "run again. 0 (default) = single-pass + exit. Recommended "
+            "in-stack value is 300, matching CCP's region-orders cache "
+            "window."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Python logging level (DEBUG, INFO, WARNING, ERROR).",
@@ -84,11 +111,30 @@ def main(argv: list[str] | None = None) -> int:
         log.error("config error", error=str(exc))
         return 2
 
-    try:
-        return run(cfg)
-    except Exception as exc:  # pragma: no cover — top-level safety net
-        log.error("poll aborted", error=str(exc))
-        return 1
+    if args.interval <= 0:
+        # One-shot mode — original behaviour.
+        try:
+            return run(cfg)
+        except Exception as exc:  # pragma: no cover — top-level safety net
+            log.error("poll aborted", error=str(exc))
+            return 1
+
+    # Loop mode. Crashes inside `run()` log + continue; SIGTERM from
+    # `docker compose down` interrupts `time.sleep()` and exits with a
+    # non-zero rc, which docker treats as a normal stop because we're
+    # under `restart: unless-stopped`.
+    log.info("entering loop mode", interval_seconds=args.interval)
+    while True:
+        try:
+            run(cfg)
+        except Exception:  # pragma: no cover — keep the loop running
+            log.exception("pass crashed; will retry on next tick")
+        log.info("pass complete; sleeping", interval_seconds=args.interval)
+        try:
+            time.sleep(args.interval)
+        except KeyboardInterrupt:
+            log.info("interrupted; exiting loop")
+            return 0
 
 
 if __name__ == "__main__":

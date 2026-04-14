@@ -33,6 +33,33 @@ check skips it.
 
 ## Run
 
+### Scheduled (default)
+
+The `market_import_scheduler` compose service runs the reconcile
+in a loop on a 6-hour cadence. EVE Ref updates the day's CSV
+archive throughout the day as their ESI scrape completes; 6h
+catches those updates without hammering their server. Starts
+automatically with `docker compose up` — no operator action
+needed. Tail its logs via:
+
+```sh
+make logs-market_import_scheduler
+```
+
+Override the cadence per deployment via env:
+
+```
+MARKET_IMPORT_INTERVAL_SECONDS=21600   # default — 6h
+```
+
+First-run backfill (2025-01-01 → yesterday) still fires on first
+tick of the scheduler after it starts; expect an hour or two of
+steady-state downloading (~470 days × ~700 KB each ≈ 330 MB). The
+per-day-transaction boundary means restarting the container
+mid-backfill loses at most one day's progress.
+
+### Ad-hoc (operator)
+
 ```sh
 make market-import                                           # reconcile from 2025-01-01
 make market-import MARKET_IMPORT_ARGS="--dry-run"            # fetch + count, rollback
