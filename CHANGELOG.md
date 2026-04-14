@@ -8,24 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Large donations silently lost their ad-free status; admin page
-  showed "No active donors yet" despite a fresh `player_donation` in
-  the journal.** `eve_donor_benefits.ad_free_until` was declared as
-  `TIMESTAMP`, which caps at `2038-01-19 03:14:07 UTC`. At the default
-  `EVE_DONATIONS_ISK_PER_DAY=100000` rate, a single 1B-ISK donation
-  stacks to ~10,000 days of ad-free (expiry ~2053), overflowing the
-  column. MySQL (strict mode) rejected the upsert; the poller's
-  catch-all `Throwable` in `PollDonationsWallet::handle()` then logged
-  a warning and moved on, so the raw donation row landed in
-  `eve_donations` but no matching `eve_donor_benefits` row was ever
-  created — the donor silently lost their ad-free window. Widened the
-  column to `DATETIME` (range up to 9999-12-31); DATETIME also
-  side-steps TIMESTAMP's implicit session-tz conversion, matching the
-  same rationale we already applied to `market_orders.observed_at`
-  (#58). The source migration and a new alter migration both land the
-  change; operators retrofitting an existing install should run
-  `php artisan eve:donations:recompute` once after migrate to
-  materialise benefit rows that failed to land under the old schema.
+- **Donors occasionally lost ad-free status for no visible reason;
+  admin page showed "No active donors yet" despite a fresh
+  `player_donation` row in the ledger.** `PollDonationsWallet`
+  recomputes per-donor benefits in-line after each upsert, but only
+  for donors whose `journal_ref_id` is brand-new on the current tick.
+  If anything between `upsertDonations()` and the recompute loop threw
+  — most easily `resolveDonorNames()`'s `DB::transaction` on a
+  transient connection hiccup, which has no catch at the `handle()`
+  level — the donation row persisted but the matching
+  `eve_donor_benefits` row was never written. On the next tick the
+  `journal_ref_id` was no longer fresh, so the recompute was
+  permanently skipped and only a manual `php artisan
+  eve:donations:recompute` repaired it. Scheduled the existing
+  artisan command hourly as a safety net (`eve-donations-recompute`
+  task in `routes/console.php`) — donor base is dozens of characters
+  and each recompute is microseconds, so a full rebuild every hour is
+  free and self-heals any orphaned benefits within one tick of an
+  observer noticing.
 - **`market_poll_scheduler` crashed on every restart with
   `unrecognized arguments: --interval 300`.** Compose's default
   pull/build policy was reusing the locally-cached

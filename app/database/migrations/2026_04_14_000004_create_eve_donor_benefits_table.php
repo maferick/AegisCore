@@ -59,18 +59,7 @@ return new class extends Migration
             // forward-rolling end-of-window from all donations for this
             // character. NULL means "no donations yet" but those rows
             // shouldn't exist; the calculator never writes a null here.
-            //
-            // DATETIME (not TIMESTAMP) on purpose: a single large donation
-            // at the configured rate can push the expiry well past the
-            // 2038-01-19 TIMESTAMP ceiling. At the default 100k ISK/day
-            // rate, 1B ISK alone stacks to ~2053; there's no good reason
-            // to silently clamp or reject that. DATETIME covers up to
-            // 9999-12-31 so any realistic donation size fits. Both planes
-            // write UTC, so "naked" DATETIME semantics match what we want
-            // and side-step TIMESTAMP's implicit-session-timezone
-            // conversion (same rationale as market_orders.observed_at;
-            // see 2026_04_14_000006_create_market_orders_table.php).
-            $table->dateTime('ad_free_until');
+            $table->timestamp('ad_free_until');
 
             // Aggregate display fields — kept alongside the derived
             // expiry so the donor card UI doesn't need a separate
