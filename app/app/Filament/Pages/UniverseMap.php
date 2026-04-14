@@ -6,13 +6,12 @@ namespace App\Filament\Pages;
 
 use App\Reference\Models\Constellation;
 use App\Reference\Models\Region;
-use Filament\Forms\Components\Group;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
-use Filament\Forms\Form;
+use Filament\Schemas\Schema;
 use Filament\Pages\Page;
 
 /**
@@ -71,7 +70,7 @@ class UniverseMap extends Page implements HasForms
         ]);
     }
 
-    public function form(Form $form): Form
+    public function form(Schema $form): Schema
     {
         return $form
             ->statePath('')
@@ -121,21 +120,19 @@ class UniverseMap extends Page implements HasForms
                     ->visible(fn ($get) => $get('scope') === 'constellation')
                     ->columnSpan(3),
 
-                Group::make([
-                    TagsInput::make('systemIds')
-                        ->label('System IDs')
-                        ->placeholder('30000142, 30045349, …')
-                        ->helperText('Anchor systems for the subgraph.')
-                        ->columnSpan(8),
-                    TextInput::make('hops')
-                        ->label('Hops')
-                        ->numeric()
-                        ->minValue(0)
-                        ->maxValue(4)
-                        ->columnSpan(4),
-                ])
-                    ->columns(12)
-                    ->columnSpan(12)
+                TagsInput::make('systemIds')
+                    ->label('System IDs')
+                    ->placeholder('30000142, 30045349, …')
+                    ->helperText('Anchor systems for the subgraph.')
+                    ->columnSpan(8)
+                    ->visible(fn ($get) => $get('scope') === 'subgraph'),
+
+                TextInput::make('hops')
+                    ->label('Hops')
+                    ->numeric()
+                    ->minValue(0)
+                    ->maxValue(4)
+                    ->columnSpan(4)
                     ->visible(fn ($get) => $get('scope') === 'subgraph'),
 
                 Select::make('labelMode')
