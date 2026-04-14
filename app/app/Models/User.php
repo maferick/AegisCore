@@ -4,6 +4,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Domains\UsersCharacters\Models\Character;
+use App\Domains\UsersCharacters\Models\EveDonation;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -86,5 +87,36 @@ class User extends Authenticatable implements FilamentUser
         return $characters->map(fn ($id) => (string) $id)
             ->intersect($normalized)
             ->isNotEmpty();
+    }
+
+    /**
+     * Has any of this user's linked characters ever donated ISK in-game
+     * to the AegisCore donations character?
+     *
+     * The single side-effect of donating: the future ad-removal logic
+     * gates on this predicate. There's no ad system yet, but recording
+     * the linkage now means when ads land it's a one-line gate
+     * (`if (! $user->isDonor()) { renderAds(); }`) instead of a
+     * cross-cutting refactor.
+     *
+     * Implementation note: joins through `characters.character_id` →
+     * `eve_donations.donor_character_id` rather than storing a
+     * denormalised flag on `users`. Donors don't need an account to
+     * donate — when they later log in via SSO the existing
+     * upsertCharacterAndUser flow keys on the same character_id we
+     * already stored in eve_donations, and this query starts returning
+     * true automatically with no migration. Donor counts are small
+     * (dozens), so the join is cheap.
+     */
+    public function isDonor(): bool
+    {
+        $characterIds = $this->characters()->pluck('character_id');
+        if ($characterIds->isEmpty()) {
+            return false;
+        }
+
+        return EveDonation::query()
+            ->whereIn('donor_character_id', $characterIds)
+            ->exists();
     }
 }

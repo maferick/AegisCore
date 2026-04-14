@@ -70,6 +70,43 @@ return [
             'trim',
             explode(',', (string) env('EVE_SSO_ADMIN_CHARACTER_IDS', '')),
         ))),
+
+        // ----- Donations character (third SSO flow) -----
+        //
+        // Optional in-game character that *receives* ISK donations.
+        // Locked to one character ID so the donations poller can never
+        // accidentally consume a token belonging to another character —
+        // the SSO callback rejects mismatched authorisations rather
+        // than upserting the wrong row. Set `character_id` to null
+        // (empty env var) to disable the flow entirely; the admin page
+        // hides its CTA and the scheduler skips polling.
+        // See ADR-0002 § phase-2 amendment for the rationale.
+        'donations' => [
+            'character_id' => filter_var(
+                env('EVE_SSO_DONATIONS_CHARACTER_ID'),
+                FILTER_VALIDATE_INT,
+                ['options' => ['default' => null]],
+            ),
+            'character_name' => env('EVE_SSO_DONATIONS_CHARACTER_NAME'),
+            // Wallet read is the core scope this token needs; `publicData`
+            // is requested alongside it because CCP's own consent screen
+            // and some SSO-v2 edge cases expect it as the "base" scope of
+            // any authorised session — without it some deployments see
+            // the authorise flow drop the wallet scope silently. Override
+            // via env if a deployment needs a different mix, but keep the
+            // set as narrow as possible to limit the blast radius if the
+            // bearer token ever leaks. Donor name resolution still uses
+            // the unauth'd /universe/names/ endpoint regardless.
+            'scopes' => env(
+                'EVE_SSO_DONATIONS_SCOPES',
+                'publicData esi-wallet.read_character_wallet.v1',
+            ),
+            // Cron expression for the donations poller. Default every
+            // 5 minutes. Wallet journal is cached 1h server-side per
+            // CCP, so a 5-min poll is mostly 304-cheap; the 1-hour
+            // window is the floor on donor-feedback latency.
+            'poll_cron' => env('EVE_DONATIONS_POLL_CRON', '*/5 * * * *'),
+        ],
     ],
 
     /*

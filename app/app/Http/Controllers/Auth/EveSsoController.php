@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Auth;
 
 use App\Domains\UsersCharacters\Models\Character;
+use App\Domains\UsersCharacters\Models\EveDonationsToken;
 use App\Domains\UsersCharacters\Models\EveServiceToken;
 use App\Http\Controllers\Controller;
 use App\Models\User;
@@ -21,29 +22,38 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * /auth/eve — EVE SSO entry + callback for both login and service flows.
+ * /auth/eve — EVE SSO entry + callback for all three flows.
  *
- * Two flows share the same callback URL so the registered CCP app only
- * needs one redirect URI on file:
+ * Three flows share the same callback URL so the registered CCP app
+ * only needs one redirect URI on file:
  *
  *   GET  /auth/eve                       → `redirect()`         (login, publicData)
  *   GET  /auth/eve/service-redirect      → `redirectAsService()` (admin-only,
  *                                                                 elevated scopes)
+ *   GET  /auth/eve/donations-redirect    → `redirectAsDonations()` (admin-only,
+ *                                                                   wallet-read,
+ *                                                                   character-locked)
  *   GET  /auth/eve/callback              → `callback()`         (dispatches by
  *                                                                session marker)
  *
- * The session stashes `eve_sso.flow ∈ {'login', 'service'}` alongside the
- * PKCE state + verifier when redirecting; the callback reads that marker
- * to pick the right handler. Bare callbacks (no marker, e.g. someone
- * pasting the URL) fall through to the safer login handler.
+ * The session stashes `eve_sso.flow ∈ {'login', 'service', 'donations'}`
+ * alongside the PKCE state + verifier when redirecting; the callback
+ * reads that marker to pick the right handler. Bare callbacks (no
+ * marker, e.g. someone pasting the URL) fall through to the safer
+ * login handler.
  *
  * ADR-0002 § Token kinds for the policy split:
  *   - login flow: `publicData` scope, token discarded after identity
  *     extraction, identity persisted to characters/users.
  *   - service flow: full scope set from `EVE_SSO_SERVICE_SCOPES`,
  *     access + refresh tokens stored encrypted in `eve_service_tokens`,
- *     consumed by the Python execution plane and any phase-1 Laravel
- *     callers that need authed ESI access.
+ *     consumed by the Python execution plane and Laravel callers that
+ *     need authed ESI access.
+ *   - donations flow: single-character, single-scope (wallet-read),
+ *     access + refresh tokens stored encrypted in `eve_donations_tokens`,
+ *     consumed by the donations wallet poller. Locked to one
+ *     character ID via `EVE_SSO_DONATIONS_CHARACTER_ID` — wrong-character
+ *     authorisations bounce with an error rather than upserting.
  */
 class EveSsoController extends Controller
 {
@@ -55,6 +65,7 @@ class EveSsoController extends Controller
 
     private const FLOW_LOGIN = 'login';
     private const FLOW_SERVICE = 'service';
+    private const FLOW_DONATIONS = 'donations';
 
     // ---------------------------------------------------------------------
     // Login flow — anyone, publicData scope
@@ -125,6 +136,53 @@ class EveSsoController extends Controller
     }
 
     // ---------------------------------------------------------------------
+    // Donations flow — admin-only, single-character, wallet-read scope
+    // ---------------------------------------------------------------------
+
+    public function redirectAsDonations(Request $request): RedirectResponse
+    {
+        $user = $request->user();
+        if ($user === null || ! $user->canAccessPanel(Filament::getPanel('admin'))) {
+            abort(403, 'Admin access required to authorise the donations character.');
+        }
+
+        // Donations character must be configured before the admin can
+        // start the flow — pointless to round-trip to CCP only to bounce
+        // the resulting token because no character is locked in.
+        $expectedCharacterId = config('eve.sso.donations.character_id');
+        if (! is_int($expectedCharacterId) || $expectedCharacterId <= 0) {
+            return redirect()->route('filament.admin.pages.dashboard')
+                ->with('error', 'EVE_SSO_DONATIONS_CHARACTER_ID is not configured.');
+        }
+
+        try {
+            $sso = EveSsoClient::fromConfig();
+        } catch (EveSsoException $e) {
+            Log::warning('EVE SSO misconfigured (donations flow)', ['error' => $e->getMessage()]);
+
+            return redirect()->route('filament.admin.pages.dashboard')
+                ->with('error', 'EVE SSO is not configured on this server.');
+        }
+
+        $scopes = config('eve.sso.donations.scopes');
+        if (empty($scopes)) {
+            Log::warning('EVE donations character flow attempted with empty EVE_SSO_DONATIONS_SCOPES');
+
+            return redirect()->route('filament.admin.pages.dashboard')
+                ->with('error', 'EVE_SSO_DONATIONS_SCOPES is empty — no scopes to request.');
+        }
+
+        $redirect = $sso->authorize($scopes);
+
+        $request->session()->put(self::SESSION_STATE, $redirect->state);
+        $request->session()->put(self::SESSION_VERIFIER, $redirect->codeVerifier);
+        $request->session()->put(self::SESSION_FLOW, self::FLOW_DONATIONS);
+        $request->session()->put('eve_sso.authorized_by_user_id', (int) $user->id);
+
+        return redirect()->away($redirect->url);
+    }
+
+    // ---------------------------------------------------------------------
     // Shared callback — dispatches by session-stashed flow marker
     // ---------------------------------------------------------------------
 
@@ -176,9 +234,11 @@ class EveSsoController extends Controller
             return $this->bounceFromCallback($flow, 'EVE SSO login failed. Please try again.');
         }
 
-        return $flow === self::FLOW_SERVICE
-            ? $this->finishServiceFlow($request, $token)
-            : $this->finishLoginFlow($request, $token);
+        return match ($flow) {
+            self::FLOW_SERVICE => $this->finishServiceFlow($request, $token),
+            self::FLOW_DONATIONS => $this->finishDonationsFlow($request, $token),
+            default => $this->finishLoginFlow($request, $token),
+        };
     }
 
     // ---------------------------------------------------------------------
@@ -258,6 +318,78 @@ class EveSsoController extends Controller
     }
 
     // ---------------------------------------------------------------------
+    // Donations-flow finisher: character-locked, single-scope, encrypted
+    // token storage. Refuses wrong-character authorisations rather than
+    // leaking a bearer token into the database.
+    // ---------------------------------------------------------------------
+
+    private function finishDonationsFlow(Request $request, EveSsoToken $token): RedirectResponse
+    {
+        $expectedCharacterId = config('eve.sso.donations.character_id');
+
+        // Hard character lock. The whole point of this flow is to
+        // authorise ONE specific in-game character (the one configured
+        // to receive donations). Storing a token belonging to a
+        // different character would mean the poller starts reading
+        // someone else's wallet — a confidentiality + scope-leakage
+        // bug, not just a UX bug.
+        if (! is_int($expectedCharacterId) || $token->characterId !== $expectedCharacterId) {
+            Log::warning('EVE donations callback returned wrong character', [
+                'expected_character_id' => $expectedCharacterId,
+                'received_character_id' => $token->characterId,
+                'received_character_name' => $token->characterName,
+            ]);
+
+            return redirect()->route('filament.admin.pages.eve-donations')
+                ->with('error', sprintf(
+                    'Authorised character is %s (#%d), but donations character is locked to ID %s. ' .
+                    'Log out of EVE SSO (https://login.eveonline.com) and re-authorise as the correct character.',
+                    $token->characterName,
+                    $token->characterId,
+                    $expectedCharacterId === null ? '(unset)' : (string) $expectedCharacterId,
+                ));
+        }
+
+        // Same defensive check as the service flow: an empty scope set
+        // means CCP returned a token that can't actually call ESI on
+        // our behalf. Storing it would mislead the poller.
+        if (count($token->scopes) === 0) {
+            Log::warning('EVE donations callback returned no scopes', [
+                'character_id' => $token->characterId,
+            ]);
+
+            return redirect()->route('filament.admin.pages.eve-donations')
+                ->with('error', 'Donations character authorisation returned no scopes. Try again.');
+        }
+
+        $authorizedBy = $request->session()->pull('eve_sso.authorized_by_user_id');
+        $expiresAt = now()->addSeconds(max(0, $token->expiresIn));
+
+        EveDonationsToken::updateOrCreate(
+            ['character_id' => $token->characterId],
+            [
+                'character_name' => $token->characterName,
+                'scopes' => $token->scopes,
+                'access_token' => $token->accessToken,
+                'refresh_token' => $token->refreshToken,
+                'expires_at' => $expiresAt,
+                'authorized_by_user_id' => is_int($authorizedBy) ? $authorizedBy : null,
+            ],
+        );
+
+        Log::info('EVE donations character authorised', [
+            'character_id' => $token->characterId,
+            'character_name' => $token->characterName,
+            'scope_count' => count($token->scopes),
+            'expires_at' => $expiresAt->toIso8601String(),
+            'authorized_by_user_id' => $authorizedBy,
+        ]);
+
+        return redirect()->route('filament.admin.pages.eve-donations')
+            ->with('success', "Authorised {$token->characterName} for donations wallet polling.");
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -312,17 +444,21 @@ class EveSsoController extends Controller
      * Pick an honest landing place for callback failures based on the
      * flow that was in progress. Login failures bounce to the panel
      * login form (where the inline error still surfaces). Service-flow
-     * failures land back on the service character admin page where the
-     * user clicked Authorise.
+     * + donations-flow failures land back on their respective admin
+     * pages where the user clicked Authorise.
      */
     private function bounceFromCallback(string $flow, string $message): RedirectResponse
     {
-        if ($flow === self::FLOW_SERVICE) {
-            return redirect()->route('filament.admin.pages.eve-service-character')
-                ->with('error', $message);
-        }
-
-        return redirect()->route('filament.admin.auth.login')
-            ->withErrors(['email' => $message]);
+        return match ($flow) {
+            self::FLOW_SERVICE => redirect()
+                ->route('filament.admin.pages.eve-service-character')
+                ->with('error', $message),
+            self::FLOW_DONATIONS => redirect()
+                ->route('filament.admin.pages.eve-donations')
+                ->with('error', $message),
+            default => redirect()
+                ->route('filament.admin.auth.login')
+                ->withErrors(['email' => $message]),
+        };
     }
 }

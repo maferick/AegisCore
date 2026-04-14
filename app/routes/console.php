@@ -30,3 +30,23 @@ Schedule::command('reference:check-sde-version')
     ->timezone('UTC')
     ->onOneServer()
     ->name('sde-version-check');
+
+// Donations wallet poll. Dispatches a Horizon job that pulls the latest
+// page of the donations character's wallet journal, upserts new
+// `player_donation` rows into `eve_donations`, and resolves donor names
+// in one batch /universe/names/ call. Cadence comes from
+// `EVE_DONATIONS_POLL_CRON` (default `*/5 * * * *`). Idempotent by
+// `journal_ref_id` — re-running the same tick is a no-op.
+//
+// `withoutOverlapping` is a belt-and-braces guard: a 5-minute interval
+// against a single ESI page never realistically takes longer than 30s,
+// but if a tick ever does stall we don't want a backed-up second tick
+// double-refreshing the rotated refresh token in parallel.
+//
+// See App\Domains\UsersCharacters\Jobs\PollDonationsWallet for the
+// plane-boundary reasoning (ADR-0002 § phase-2 amendment).
+Schedule::command('eve:poll-donations')
+    ->cron((string) config('eve.sso.donations.poll_cron', '*/5 * * * *'))
+    ->onOneServer()
+    ->withoutOverlapping(10)
+    ->name('eve-poll-donations');

@@ -186,9 +186,51 @@
             justify-content: center;
             padding: 3rem 2rem;
         }
+        /* Hero is a two-column layout on desktop: large brand mark on the
+         * left, the marketing copy + pillars + CTAs on the right. The mark
+         * is decorative — `aria-hidden` on the SVG keeps screen readers
+         * from announcing it twice (the small one in the header is the
+         * accessible identity). On narrow viewports the mark moves above
+         * the copy and shrinks; below 480px it hides entirely so the
+         * hero text can claim the full width. */
         .hero {
-            max-width: 720px;
+            display: flex;
+            align-items: center;
+            gap: 2.5rem;
+            max-width: 960px;
             width: 100%;
+        }
+        .hero-mark {
+            width: clamp(140px, 18vw, 220px);
+            height: clamp(140px, 18vw, 220px);
+            flex-shrink: 0;
+            /* Subtle drift-glow so the mark reads as "intel signal" rather
+             * than a flat decal. Drop-shadow on the cyan stroke alone — the
+             * gold reticle stays sharp. */
+            filter: drop-shadow(0 0 14px rgba(79, 208, 208, 0.18));
+            animation: hero-mark-pulse 5s ease-in-out infinite;
+        }
+        @keyframes hero-mark-pulse {
+            0%, 100% { filter: drop-shadow(0 0 14px rgba(79, 208, 208, 0.18)); }
+            50%      { filter: drop-shadow(0 0 22px rgba(79, 208, 208, 0.32)); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .hero-mark { animation: none; }
+        }
+        .hero-body {
+            flex: 1;
+            min-width: 0;
+        }
+        @media (max-width: 720px) {
+            .hero {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1.5rem;
+            }
+            .hero-mark { width: 120px; height: 120px; }
+        }
+        @media (max-width: 480px) {
+            .hero-mark { display: none; }
         }
         h1 {
             font-size: clamp(2.25rem, 5.5vw, 3.75rem);
@@ -366,6 +408,30 @@
 
     <main>
         <div class="hero">
+            {{--
+                Hero brand mark — large decorative copy of the same shield
+                that lives in the header + favicon. Keep this SVG in lockstep
+                with public/favicon.svg + the header lockup; aria-hidden so
+                AT users aren't told about the logo three times on one page
+                (header lockup is the accessible identity).
+            --}}
+            <svg class="hero-mark" viewBox="0 0 64 64" fill="none" role="presentation" aria-hidden="true">
+                <path d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z"
+                      stroke="#4fd0d0" stroke-width="2" stroke-linejoin="round"
+                      fill="rgba(10, 10, 11, 0.7)"/>
+                <path d="M32 18 L44 25 L44 39 L32 46 L20 39 L20 25 Z"
+                      stroke="#e5a900" stroke-width="1" stroke-linejoin="round"
+                      opacity="0.7" fill="none"/>
+                <g stroke="#e5a900" stroke-width="1.5" stroke-linecap="round">
+                    <line x1="32" y1="22" x2="32" y2="27"/>
+                    <line x1="32" y1="37" x2="32" y2="42"/>
+                    <line x1="22" y1="32" x2="27" y2="32"/>
+                    <line x1="37" y1="32" x2="42" y2="32"/>
+                </g>
+                <circle cx="32" cy="32" r="2.75" fill="#4fd0d0"/>
+            </svg>
+
+            <div class="hero-body">
             <h1>Alliance intel.<br><span class="accent">For New Eden.</span></h1>
             <p class="tagline">
                 Spy detection, buyall doctrines, killmail analysis, and battle theaters —
@@ -420,6 +486,7 @@
                 @endif
                 <a href="https://github.com/maferick/AegisCore" class="btn" rel="noopener">GitHub</a>
             </div>
+            </div>{{-- /.hero-body --}}
         </div>
     </main>
 

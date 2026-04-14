@@ -111,6 +111,18 @@ class AdminPanelProvider extends PanelProvider
                         ->url(fn (): string => route('filament.admin.pages.eve-service-character'))
                         ->icon('heroicon-o-key')
                     : null,
+                // "Authorise donations character" — only when both SSO is
+                // configured and a donations character ID is locked into
+                // env. The page itself short-circuits with a "not
+                // configured" panel without that env var, so showing the
+                // menu entry would be a dead-end click. ADR-0002 §
+                // phase-2 amendment.
+                EveSsoClient::isConfigured() && is_int(config('eve.sso.donations.character_id'))
+                    ? MenuItem::make()
+                        ->label('Authorise donations character')
+                        ->url(fn (): string => route('filament.admin.pages.eve-donations'))
+                        ->icon('heroicon-o-banknotes')
+                    : null,
             ])))
             // "Log in with EVE" button rendered under the default Filament
             // login form — only when the three required EVE_SSO_* env vars
