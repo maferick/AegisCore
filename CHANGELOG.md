@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Donations → ad-free time, with expiry.** Each donation now
+  grants the donor `amount / EVE_DONATIONS_ISK_PER_DAY` days of
+  ad-free access. Default rate 100_000 ISK = 1 day, operator-tunable
+  per deployment. Accumulation is streaming, not a bulk sum:
+  donations that arrive *inside* an active window extend it from
+  the current expiry; donations that arrive *after* the window
+  elapsed start a fresh one from the new arrival time (past unused
+  time is not credited backward — operators get the predictable
+  "donating while covered extends you, donating while lapsed resets
+  you" behaviour).
+  - New materialised table `eve_donor_benefits` stores one row per
+    distinct donor with the accumulated `ad_free_until`, total
+    ISK, donation count, and the rate the row was computed at.
+    The poll job recomputes touched donors after each wallet upsert
+    via `App\Domains\UsersCharacters\Services\DonorBenefitCalculator`.
+  - `User::isDonor()` now checks "is `ad_free_until` still in the
+    future?" instead of "did this user ever donate?". Once a donor's
+    accumulated window passes, they silently lose ad-free status
+    with no cron or cleanup job — it's a query-time comparison
+    against `now()`.
+  - `php artisan eve:donations:recompute` rebuilds every
+    `eve_donor_benefits` row from the raw `eve_donations` ledger
+    at the current rate. Run after this feature lands to backfill
+    rows for pre-existing donations, and after any
+    `EVE_DONATIONS_ISK_PER_DAY` change (the new rate is retroactive
+    by design — past donors shouldn't be punished by a rate cut).
+  - Filament `/admin/eve-donations` redesigned around donor cards
+    with CCP-CDN portraits: "Active donors" grid showing name,
+    character ID, donated ISK, transfer count, and days/hours of
+    ad-free time remaining per card; "Expired donors" section that
+    fades past-window donors; raw donations ledger below with
+    portraits on each row and proper column alignment
+    (fixed-width cells, tabular-nums for amounts). Portraits load
+    from `images.evetech.net` (public CDN, CORS-friendly, no auth).
+
 ### Fixed
 - **`PollDonationsWallet` crashed on every Horizon tick with
   `BindingResolutionException: Unresolvable dependency resolving

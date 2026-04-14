@@ -252,6 +252,11 @@ services:
       EVE_SSO_DONATIONS_CHARACTER_NAME: "${EVE_SSO_DONATIONS_CHARACTER_NAME:-}"
       EVE_SSO_DONATIONS_SCOPES: "${EVE_SSO_DONATIONS_SCOPES:-publicData esi-wallet.read_character_wallet.v1}"
       EVE_DONATIONS_POLL_CRON: "${EVE_DONATIONS_POLL_CRON:-*/5 * * * *}"
+      # ISK-per-ad-free-day rate (DonorBenefitCalculator). Default
+      # 100_000 ISK = 1 day. Change requires a one-off
+      # `php artisan eve:donations:recompute` run — the poller itself
+      # only recomputes for donors whose new donations it processes.
+      EVE_DONATIONS_ISK_PER_DAY: "${EVE_DONATIONS_ISK_PER_DAY:-100000}"
 
       # ---------------------------------------------------------------
       # ESI — esi.evetech.net (light synchronous calls only on this plane)

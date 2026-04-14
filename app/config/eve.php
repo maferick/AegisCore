@@ -106,6 +106,30 @@ return [
             // CCP, so a 5-min poll is mostly 304-cheap; the 1-hour
             // window is the floor on donor-feedback latency.
             'poll_cron' => env('EVE_DONATIONS_POLL_CRON', '*/5 * * * *'),
+
+            // ISK-to-ad-free-days conversion rate.
+            //
+            // Each donation grants `amount / isk_per_day` days of
+            // ad-free time. Default 100_000 ISK = 1 day. Operator-
+            // tunable per deployment so a small community can run
+            // generous (e.g. 10_000) and a large one can require more.
+            //
+            // Donations stack forward: a second donation arriving inside
+            // an active window extends it from the current expiry, not
+            // from "now". A donation after the window expired resets it
+            // from its own arrival timestamp. See
+            // App\Domains\UsersCharacters\Services\DonorBenefitCalculator
+            // for the streaming accumulator.
+            //
+            // After changing this value, run `php artisan
+            // eve:donations:recompute` to rebuild every donor's stored
+            // `ad_free_until` against the new rate. (The change is
+            // retroactive by design — changing the rate shouldn't
+            // punish past donors by leaving them on the old curve.)
+            //
+            // Zero / negative values fall back to the default — we never
+            // divide by zero and never send expiry backwards.
+            'isk_per_day' => (int) env('EVE_DONATIONS_ISK_PER_DAY', 100_000),
         ],
     ],
 

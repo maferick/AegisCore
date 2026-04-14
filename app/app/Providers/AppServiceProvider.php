@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
 use App\Services\Eve\Esi\EsiClient;
 use App\Services\Eve\Esi\EsiRateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -24,6 +25,13 @@ class AppServiceProvider extends ServiceProvider
         // Laravel singletons. Tests can override with `->instance()`.
         $this->app->singleton(EsiRateLimiter::class, fn () => EsiRateLimiter::fromConfig());
         $this->app->singleton(EsiClient::class, fn () => EsiClient::fromConfig());
+
+        // Same pattern for the donor-benefits calculator: its rate comes
+        // from config('eve.donations.isk_per_day'), which the container
+        // can't autowire into a primitive `int $iskPerDay` parameter.
+        // Not a singleton because the config value may change between
+        // requests in tests (singleton would cache the first value).
+        $this->app->bind(DonorBenefitCalculator::class, fn () => DonorBenefitCalculator::fromConfig());
     }
 
     /**

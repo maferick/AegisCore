@@ -4,7 +4,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Domains\UsersCharacters\Models\Character;
-use App\Domains\UsersCharacters\Models\EveDonation;
+use App\Domains\UsersCharacters\Models\EveDonorBenefit;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -90,23 +90,33 @@ class User extends Authenticatable implements FilamentUser
     }
 
     /**
-     * Has any of this user's linked characters ever donated ISK in-game
-     * to the AegisCore donations character?
+     * Does this user currently have an active ad-free window from
+     * donations?
      *
-     * The single side-effect of donating: the future ad-removal logic
-     * gates on this predicate. There's no ad system yet, but recording
-     * the linkage now means when ads land it's a one-line gate
-     * (`if (! $user->isDonor()) { renderAds(); }`) instead of a
-     * cross-cutting refactor.
+     * Returns true only while the donor's accumulated `ad_free_until`
+     * (materialised in `eve_donor_benefits`) is still in the future.
+     * Once that timestamp passes, the method flips back to false with
+     * no cron or cleanup job — expiry is purely a query-time comparison
+     * against `now()`.
+     *
+     * The donation → ad-free-days conversion rate lives in
+     * `config('eve.donations.isk_per_day')` (env
+     * `EVE_DONATIONS_ISK_PER_DAY`, default 100_000 ISK = 1 day).
+     * `DonorBenefitCalculator` is the source of truth for the stacking
+     * math; this method is only the read predicate.
      *
      * Implementation note: joins through `characters.character_id` →
-     * `eve_donations.donor_character_id` rather than storing a
+     * `eve_donor_benefits.donor_character_id` rather than storing a
      * denormalised flag on `users`. Donors don't need an account to
      * donate — when they later log in via SSO the existing
      * upsertCharacterAndUser flow keys on the same character_id we
-     * already stored in eve_donations, and this query starts returning
-     * true automatically with no migration. Donor counts are small
-     * (dozens), so the join is cheap.
+     * already stored in the benefit row, and this query starts
+     * returning true automatically with no migration. Donor counts are
+     * small (dozens), so the join is cheap.
+     *
+     * Ad-removal gate pattern (callers):
+     *
+     *     if (! $user->isDonor()) { renderAds(); }
      */
     public function isDonor(): bool
     {
@@ -115,8 +125,9 @@ class User extends Authenticatable implements FilamentUser
             return false;
         }
 
-        return EveDonation::query()
+        return EveDonorBenefit::query()
             ->whereIn('donor_character_id', $characterIds)
+            ->where('ad_free_until', '>', now())
             ->exists();
     }
 }

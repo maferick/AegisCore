@@ -6,6 +6,7 @@ namespace App\Domains\UsersCharacters\Jobs;
 
 use App\Domains\UsersCharacters\Models\EveDonation;
 use App\Domains\UsersCharacters\Models\EveDonationsToken;
+use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
 use App\Services\Eve\Esi\EsiClient;
 use App\Services\Eve\Esi\EsiException;
 use App\Services\Eve\Esi\EsiRateLimitException;
@@ -88,7 +89,7 @@ class PollDonationsWallet implements ShouldQueue
      */
     public int $timeout = 60;
 
-    public function handle(EsiClient $esi): void
+    public function handle(EsiClient $esi, DonorBenefitCalculator $benefits): void
     {
         $token = EveDonationsToken::query()->first();
         if ($token === null) {
@@ -168,6 +169,28 @@ class PollDonationsWallet implements ShouldQueue
 
         $insertedCharacterIds = $this->upsertDonations($donations);
         $this->resolveDonorNames($insertedCharacterIds);
+
+        // Recompute ad-free expiry for every donor touched this tick.
+        // `upsertDonations()` returns only *newly-inserted* donor IDs; an
+        // existing donation whose row was refreshed without amount change
+        // produces the same expiry so we'd be doing redundant work.
+        // Donor bases are dozens of characters — individual recomputes
+        // are microseconds — so this is cheap even in the degenerate
+        // "every donor donated this tick" case.
+        foreach ($insertedCharacterIds as $donorId) {
+            try {
+                $benefits->recomputeForCharacter((int) $donorId);
+            } catch (Throwable $e) {
+                // A single donor's benefit recompute failing shouldn't
+                // take out the whole tick — the raw donation row already
+                // landed above, so `eve:donations:recompute` can patch
+                // it up later. Log + continue.
+                Log::warning('eve:poll-donations benefit recompute failed', [
+                    'donor_character_id' => $donorId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     /**
