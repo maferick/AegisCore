@@ -40,6 +40,8 @@ help:
 	@echo "  make market-poll            pull order-book snapshots into market_orders (one-shot)"
 	@echo "  make market-import          import EVE Ref daily market-history CSVs (one-shot)"
 	@echo "  make outbox-relay           drain MariaDB outbox into InfluxDB (one-shot)"
+	@echo "  make market-status          show MariaDB + InfluxDB market-data coverage"
+	@echo "  make outbox-status          show outbox backlog + dead letters"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -115,7 +117,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
 build:
 	$(COMPOSE) build
 
@@ -272,6 +274,71 @@ market-import:
 #   OUTBOX_RELAY_ARGS="--max-attempts=10"
 outbox-relay:
 	$(COMPOSE) --profile tools run --rm --build outbox_relay_oneshot $(OUTBOX_RELAY_ARGS)
+
+# Quick read-only check that market data is landing in BOTH planes.
+# Hits MariaDB for raw row counts + date ranges of market_history /
+# market_orders, then InfluxDB for point counts + latest timestamps
+# of the corresponding measurements (market_history, market_orderbook).
+#
+# Use after `make update` to verify the schedulers + outbox_relay
+# are end-to-end happy. Should NOT be run hot — it's a snapshot,
+# not a watcher.
+market-status:
+	@echo "== MariaDB =="
+	@$(COMPOSE) exec -T mariadb mariadb \
+	    -u"$${MARIADB_USER:-aegiscore}" \
+	    -p"$${MARIADB_PASSWORD}" \
+	    "$${MARIADB_DATABASE:-aegiscore}" \
+	    -e "SELECT 'market_history' AS source, COUNT(*) AS rows, MIN(trade_date) AS earliest, MAX(trade_date) AS latest FROM market_history; \
+	        SELECT 'market_orders' AS source, COUNT(*) AS rows, MIN(observed_at) AS earliest, MAX(observed_at) AS latest FROM market_orders;"
+	@echo ""
+	@echo "== InfluxDB (point counts) =="
+	@$(COMPOSE) exec -T influxdb2 influx query \
+	    --token "$${INFLUXDB_ADMIN_TOKEN}" \
+	    --org "$${INFLUXDB_ORG:-aegiscore}" \
+	    'from(bucket: "primary") |> range(start: 2000-01-01T00:00:00Z) |> filter(fn: (r) => r._measurement == "market_history" or r._measurement == "market_orderbook") |> filter(fn: (r) => r._field == "average" or r._field == "best_price") |> group(columns: ["_measurement"]) |> count() |> keep(columns: ["_measurement", "_value"]) |> rename(columns: {_value: "points"})'
+	@echo ""
+	@echo "== InfluxDB (latest timestamps) =="
+	@$(COMPOSE) exec -T influxdb2 influx query \
+	    --token "$${INFLUXDB_ADMIN_TOKEN}" \
+	    --org "$${INFLUXDB_ORG:-aegiscore}" \
+	    'from(bucket: "primary") |> range(start: 2000-01-01T00:00:00Z) |> filter(fn: (r) => r._measurement == "market_history" or r._measurement == "market_orderbook") |> filter(fn: (r) => r._field == "average" or r._field == "best_price") |> group(columns: ["_measurement"]) |> last() |> keep(columns: ["_measurement", "_time"])'
+
+# Outbox health snapshot. Three blocks:
+#
+#   1. Backlog summary: unprocessed (claimable) vs dead-lettered
+#      (attempts >= 5, won't claim) vs processed.
+#   2. Per-event-type unprocessed counts — answers "what's piling
+#      up?" without grepping logs.
+#   3. Dead-letter detail (up to 10): id, event_type, attempts,
+#      and a 200-char excerpt of last_error so the operator can
+#      decide whether to fix-and-reset or investigate further.
+#
+# Pairs with the dead-letter recovery snippet documented in
+# python/outbox_relay/README.md.
+outbox-status:
+	@echo "== Backlog summary =="
+	@$(COMPOSE) exec -T mariadb mariadb \
+	    -u"$${MARIADB_USER:-aegiscore}" \
+	    -p"$${MARIADB_PASSWORD}" \
+	    "$${MARIADB_DATABASE:-aegiscore}" \
+	    -e "SELECT 'unprocessed (claimable)' AS status, COUNT(*) AS rows FROM outbox WHERE processed_at IS NULL AND attempts < 5; \
+	        SELECT 'dead_letters (attempts >= 5)' AS status, COUNT(*) AS rows FROM outbox WHERE processed_at IS NULL AND attempts >= 5; \
+	        SELECT 'processed' AS status, COUNT(*) AS rows FROM outbox WHERE processed_at IS NOT NULL;"
+	@echo ""
+	@echo "== Unprocessed by event_type =="
+	@$(COMPOSE) exec -T mariadb mariadb \
+	    -u"$${MARIADB_USER:-aegiscore}" \
+	    -p"$${MARIADB_PASSWORD}" \
+	    "$${MARIADB_DATABASE:-aegiscore}" \
+	    -e "SELECT event_type, COUNT(*) AS rows, MIN(created_at) AS oldest FROM outbox WHERE processed_at IS NULL GROUP BY event_type ORDER BY rows DESC;"
+	@echo ""
+	@echo "== Dead letters (up to 10) =="
+	@$(COMPOSE) exec -T mariadb mariadb \
+	    -u"$${MARIADB_USER:-aegiscore}" \
+	    -p"$${MARIADB_PASSWORD}" \
+	    "$${MARIADB_DATABASE:-aegiscore}" \
+	    -e "SELECT id, event_type, attempts, LEFT(COALESCE(last_error, ''), 200) AS error_excerpt FROM outbox WHERE processed_at IS NULL AND attempts >= 5 ORDER BY id DESC LIMIT 10;"
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
