@@ -88,15 +88,18 @@ return [
                 ['options' => ['default' => null]],
             ),
             'character_name' => env('EVE_SSO_DONATIONS_CHARACTER_NAME'),
-            // Wallet read is the only scope this token needs. Default
-            // explicitly excludes publicData — donor name resolution
-            // uses the unauth'd /universe/names/ endpoint. Override
-            // via env if a deployment somehow needs more, but the
-            // smaller scope set keeps the blast radius small if the
-            // bearer token leaks.
+            // Wallet read is the core scope this token needs; `publicData`
+            // is requested alongside it because CCP's own consent screen
+            // and some SSO-v2 edge cases expect it as the "base" scope of
+            // any authorised session — without it some deployments see
+            // the authorise flow drop the wallet scope silently. Override
+            // via env if a deployment needs a different mix, but keep the
+            // set as narrow as possible to limit the blast radius if the
+            // bearer token ever leaks. Donor name resolution still uses
+            // the unauth'd /universe/names/ endpoint regardless.
             'scopes' => env(
                 'EVE_SSO_DONATIONS_SCOPES',
-                'esi-wallet.read_character_wallet.v1',
+                'publicData esi-wallet.read_character_wallet.v1',
             ),
             // Cron expression for the donations poller. Default every
             // 5 minutes. Wallet journal is cached 1h server-side per

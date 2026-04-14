@@ -250,7 +250,7 @@ services:
       # poller. See ADR-0002 § phase-2 amendment + .env.example.
       EVE_SSO_DONATIONS_CHARACTER_ID: "${EVE_SSO_DONATIONS_CHARACTER_ID:-}"
       EVE_SSO_DONATIONS_CHARACTER_NAME: "${EVE_SSO_DONATIONS_CHARACTER_NAME:-}"
-      EVE_SSO_DONATIONS_SCOPES: "${EVE_SSO_DONATIONS_SCOPES:-esi-wallet.read_character_wallet.v1}"
+      EVE_SSO_DONATIONS_SCOPES: "${EVE_SSO_DONATIONS_SCOPES:-publicData esi-wallet.read_character_wallet.v1}"
       EVE_DONATIONS_POLL_CRON: "${EVE_DONATIONS_POLL_CRON:-*/5 * * * *}"
 
       # ---------------------------------------------------------------

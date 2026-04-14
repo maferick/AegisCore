@@ -271,10 +271,13 @@ Phase 2 (separate ADR amendment):
     - **Hard character lock.** `EVE_SSO_DONATIONS_CHARACTER_ID` env
       var pins the flow to one EVE character. The SSO callback rejects
       mismatched authorisations with an error — never upserts a
-      wrong-character token. Donations-flow scope set is a single
-      `esi-wallet.read_character_wallet.v1`; deliberately excludes
-      `publicData` since donor name resolution uses the unauth'd
-      `/universe/names/` endpoint.
+      wrong-character token. Donations-flow scope set is
+      `publicData esi-wallet.read_character_wallet.v1` — wallet-read
+      is the functional scope, `publicData` rides alongside as the
+      base-identity scope CCP's SSO consent surface expects on every
+      authorised session. Donor name resolution itself is independent
+      of the token's scope set (uses the unauth'd `/universe/names/`
+      endpoint).
     - **Reactive Laravel-side refresh.** Conditions in the original
       "Phase 2 #12" entry above (single-character, single-instance
       scheduler) are met: no distributed lock needed yet. The

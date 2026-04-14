@@ -55,9 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     EVE character ID. The callback rejects mismatched authorisations
     with a clear "log out of EVE SSO and re-authorise as the correct
     character" error rather than upserting the wrong-character token.
-    Single scope: `esi-wallet.read_character_wallet.v1`. Deliberately
-    excludes `publicData` since donor names resolve via the unauth'd
-    `/universe/names/` endpoint. New admin-only route
+    Scope set: `publicData esi-wallet.read_character_wallet.v1` —
+    wallet-read is the functional scope, `publicData` rides alongside
+    as the base-identity scope CCP's SSO consent surface expects on
+    every authorised session. Donor name resolution itself uses the
+    unauth'd `/universe/names/` endpoint regardless of what the token
+    grants. New admin-only route
     `/auth/eve/donations-redirect` kicks off the round-trip; same
     `/auth/eve/callback` dispatches by session-stashed `flow` marker
     (`'login'` / `'service'` / `'donations'`).
