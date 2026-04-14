@@ -206,11 +206,13 @@ class EveSsoController extends Controller
             abort(403, 'Login required to authorise market data access.');
         }
 
-        // Donor gate. Non-donors clicking the button would hit CCP,
-        // authorise, come back, and be bounced from the finisher —
-        // wasted round-trip. Refuse up-front and surface a friendly
-        // "become a donor" CTA instead.
-        if (! $user->isDonor()) {
+        // Donor / admin gate. Non-donor non-admins clicking the button
+        // would hit CCP, authorise, come back, and be bounced from the
+        // finisher — wasted round-trip. Refuse up-front and surface a
+        // friendly "become a donor" CTA instead. Admins bypass as
+        // operators (matches the /account/settings UI gate and ADR-0005's
+        // intersection rule applied to feature access).
+        if (! ($user->isDonor() || $user->isAdmin())) {
             return redirect()->route('account.settings')
                 ->with('error', 'Market data access is a donor benefit. Become a donor to enable it.');
         }
@@ -490,11 +492,13 @@ class EveSsoController extends Controller
                 ->with('error', 'Market authorisation failed — authorising user not found.');
         }
 
-        if (! $user->isDonor()) {
-            // Donor status lapsed between redirect and callback. Refuse
-            // to store the token rather than silently granting access
-            // the donor no longer pays for.
-            Log::info('EVE market callback: authorising user is not a donor', [
+        if (! ($user->isDonor() || $user->isAdmin())) {
+            // Donor status lapsed between redirect and callback (and the
+            // user is not an admin). Refuse to store the token rather
+            // than silently granting access the donor no longer pays
+            // for. Admins bypass as operators — see redirectAsMarket()
+            // for the same gate logic.
+            Log::info('EVE market callback: authorising user is neither donor nor admin', [
                 'user_id' => $user->id,
                 'character_id' => $token->characterId,
             ]);
