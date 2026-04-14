@@ -45,3 +45,6 @@ planning work the roadmap should do.
   per-store ownership across the four pillars
 - [ADR-0004](0004-market-data-ingest.md) — Market data: dump import,
   live polling, and per-donor structure auth
+- [ADR-0005](0005-private-market-hub-overlay.md) — Private Market Hub
+  overlay: canonical hubs, collector / viewer split, donor-gated
+  intersection rule

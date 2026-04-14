@@ -69,19 +69,39 @@ class User extends Authenticatable implements FilamentUser
      */
     public function canAccessPanel(Panel $panel): bool
     {
+        return $this->isAdmin();
+    }
+
+    /**
+     * Pure-PHP admin predicate, shared by the Filament panel gate
+     * (canAccessPanel) and feature-level policy services (e.g.
+     * MarketHubAccessPolicy § ADR-0005).
+     *
+     * Two ways in, matching canAccessPanel's original logic:
+     *
+     *   1. Any linked character is listed in
+     *      `EVE_SSO_ADMIN_CHARACTER_IDS`
+     *      (config('eve.sso.admin_character_ids')).
+     *   2. No linked characters at all — operator-seeded email+password
+     *      escape hatch (phase-1). Allowed until we swap in DB roles.
+     *
+     * A character-linked SSO user MUST pass the allow-list check; the
+     * "no characters" branch is reserved for bootstrap / break-glass
+     * accounts, so a normal logged-in non-admin SSO user can never
+     * inherit it.
+     *
+     * See docs/adr/0002-eve-sso-and-esi-client.md § Admin gate.
+     */
+    public function isAdmin(): bool
+    {
         /** @var array<int, string> $adminIds */
         $adminIds = config('eve.sso.admin_character_ids', []);
         $characters = $this->characters()->pluck('character_id');
 
         if ($characters->isEmpty()) {
-            // No linked character → operator-seeded account (phase-1
-            // escape hatch). Allowed until we swap in DB roles.
             return true;
         }
 
-        // At least one linked character must be on the allow-list.
-        // `character_id` is bigint in the DB, env values arrive as
-        // strings — compare both sides as strings to be safe.
         $normalized = array_map('strval', $adminIds);
 
         return $characters->map(fn ($id) => (string) $id)
