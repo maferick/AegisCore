@@ -39,5 +39,9 @@ planning work the roadmap should do.
 
 - [ADR-0001](0001-static-reference-data.md) — SDE static data: MariaDB
   canonical, Neo4j + OpenSearch as derived projections
+- [ADR-0002](0002-eve-sso-and-esi-client.md) — EVE SSO for admin access,
+  ESI client split across planes
 - [ADR-0003](0003-data-placement-freeze.md) — Data placement freeze:
   per-store ownership across the four pillars
+- [ADR-0004](0004-market-data-ingest.md) — Market data: dump import,
+  live polling, and per-donor structure auth

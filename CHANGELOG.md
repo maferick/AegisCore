@@ -8,6 +8,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ADR-0004 + schema foundation for market-data ingest.** Architecture
+  decision record and the four MariaDB migrations the market pillar
+  needs before any poller / importer / UI code lands.
+  - **`docs/adr/0004-market-data-ingest.md`** freezes: (1) two raw
+    canonical tables (`market_orders` vs `market_history`), not one —
+    genuinely different shapes, uniqueness contracts, and retention
+    curves; (2) historical backfill via EVE Ref's daily CSV dumps at
+    `data.everef.net/market-history/`, imported by a new Python worker
+    (`python/market_importer/`) porting EVE Ref's Java logic to MariaDB
+    since their PostgreSQL-only importer doesn't support our stack;
+    (3) live polling on the Python execution plane from day one — no
+    Laravel-side market poller stepping stone, per the ADR-0002 plane
+    boundary; (4) Jita always-on as a platform baseline, seeded in
+    `market_watched_locations`; (5) per-donor structure authorisation
+    as an architectural invariant — Upwell structure market reads
+    are alliance/corp ACL-gated, so no shared admin token can poll
+    arbitrary donor outposts. Each donor authorises their own
+    character via a fourth SSO flow; the token lands in a dedicated
+    `eve_market_tokens` table bound to their user; the poller
+    enforces `token.user_id == watched_location.owner_user_id` on
+    every call. Structure *discovery* is also ACL-gated: the
+    `/account/settings` picker is a thin wrapper around the donor's
+    own `/characters/{id}/search/?categories=structure`, never
+    free-form ID entry.
+  - **`market_history`** (PK `(trade_date, region_id, type_id)`,
+    monthly `RANGE` partitioned on `trade_date`) — mirrors EVE Ref's
+    shape so dumps import with minimal normalisation. Columns
+    `trade_date` (not `date`, reserved-word hygiene), `average`,
+    `highest`, `lowest`, `volume`, `order_count`,
+    `http_last_modified`, plus `source` + `observation_kind` ENUM
+    (`historical_dump | incremental_poll`) for provenance.
+  - **`market_orders`** (composite PK
+    `(observed_at, source, location_id, order_id)`, monthly `RANGE`
+    partitioned on `observed_at`) — one row per order observation,
+    live ESI snapshots or future order-book dumps. `TIMESTAMP(6)`
+    microsecond precision on `observed_at` so poller batches cluster
+    contiguously per snapshot; `location_id` is `BIGINT UNSIGNED`
+    because Upwell structure IDs crossed `INT` max long ago.
+    `observation_kind` ENUM (`snapshot | incremental_poll |
+    historical_dump`).
+  - **`market_watched_locations`** — the poller's driver table.
+    `location_type` (`npc_station | player_structure`) + explicit
+    `region_id` keeps the record model clean; poller derives "region
+    endpoint + filter" vs "structure endpoint" from `location_type`.
+    `owner_user_id` nullable: `NULL` = admin-managed platform default
+    (Jita and siblings), non-null = donor-owned. Failure discipline
+    built in: `consecutive_failure_count`, `last_error`,
+    `last_error_at`, `disabled_reason`; auto-disable after 3
+    consecutive 403s or 5 consecutive 5xx/timeouts, single success
+    resets the counter. Security-boundary failures (ownership
+    mismatch, missing scope) disable immediately with no grace.
+  - **`eve_market_tokens`** — fourth flavour of EVE token storage
+    (login / service / donations / market). `user_id` FK with
+    `CASCADE ON DELETE` so the "every token traces to a live user"
+    invariant is enforced at the DB level. `character_id` UNIQUE so
+    re-auth upserts. Access/refresh tokens ride Laravel's
+    `'encrypted'` cast, consistent with `eve_service_tokens` and
+    `eve_donations_tokens`.
+  - ADR-0003 § Follow-ups updated to point at ADR-0004; ADR index
+    extended to list 0002 + 0004. No poller, no importer, no UI
+    code in this drop — schema + architectural record only, so the
+    data contract gets reviewed in isolation before runtime code
+    lands on top of it.
 - **EVE map renderer module — drop-in `<x-map.renderer>` Blade
   component + Filament demo page at `/admin/universe-map`.** Reusable
   SVG/D3 renderer for systems, stargates and roads, fed by a public
