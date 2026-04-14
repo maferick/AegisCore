@@ -23,7 +23,7 @@ short version:
 ┌─ Laravel (Control Plane) ──────┐       ┌─ Python (Execution Plane) ─────┐
 │ UI / API / auth / settings     │       │ Killmail ingest + enrichment   │
 │ Horizon: notifications, audit, │       │ Graph building (Neo4j writes)  │
-│   webhooks, UI glue (< 2s)     │       │ OpenSearch indexing            │
+│   webhooks, UI glue (p95 <2s)  │       │ OpenSearch indexing            │
 │ Writes: MariaDB only           │       │ InfluxDB metrics writes        │
 │        + `outbox` table        │       │ Reads: outbox (relay) + ext.   │
 └────────────────┬───────────────┘       └───────────────▲────────────────┘
