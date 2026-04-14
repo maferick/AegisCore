@@ -289,8 +289,8 @@ market-status:
 	    -u"$${MARIADB_USER:-aegiscore}" \
 	    -p"$${MARIADB_PASSWORD}" \
 	    "$${MARIADB_DATABASE:-aegiscore}" \
-	    -e "SELECT 'market_history' AS source, COUNT(*) AS rows, MIN(trade_date) AS earliest, MAX(trade_date) AS latest FROM market_history; \
-	        SELECT 'market_orders' AS source, COUNT(*) AS rows, MIN(observed_at) AS earliest, MAX(observed_at) AS latest FROM market_orders;"
+	    -e "SELECT 'market_history' AS source, COUNT(*) AS row_count, MIN(trade_date) AS earliest, MAX(trade_date) AS latest FROM market_history; \
+	        SELECT 'market_orders' AS source, COUNT(*) AS row_count, MIN(observed_at) AS earliest, MAX(observed_at) AS latest FROM market_orders;"
 	@echo ""
 	@echo "== InfluxDB (point counts) =="
 	@$(COMPOSE) exec -T influxdb2 influx query \
@@ -322,16 +322,16 @@ outbox-status:
 	    -u"$${MARIADB_USER:-aegiscore}" \
 	    -p"$${MARIADB_PASSWORD}" \
 	    "$${MARIADB_DATABASE:-aegiscore}" \
-	    -e "SELECT 'unprocessed (claimable)' AS status, COUNT(*) AS rows FROM outbox WHERE processed_at IS NULL AND attempts < 5; \
-	        SELECT 'dead_letters (attempts >= 5)' AS status, COUNT(*) AS rows FROM outbox WHERE processed_at IS NULL AND attempts >= 5; \
-	        SELECT 'processed' AS status, COUNT(*) AS rows FROM outbox WHERE processed_at IS NOT NULL;"
+	    -e "SELECT 'unprocessed (claimable)' AS status, COUNT(*) AS row_count FROM outbox WHERE processed_at IS NULL AND attempts < 5; \
+	        SELECT 'dead_letters (attempts >= 5)' AS status, COUNT(*) AS row_count FROM outbox WHERE processed_at IS NULL AND attempts >= 5; \
+	        SELECT 'processed' AS status, COUNT(*) AS row_count FROM outbox WHERE processed_at IS NOT NULL;"
 	@echo ""
 	@echo "== Unprocessed by event_type =="
 	@$(COMPOSE) exec -T mariadb mariadb \
 	    -u"$${MARIADB_USER:-aegiscore}" \
 	    -p"$${MARIADB_PASSWORD}" \
 	    "$${MARIADB_DATABASE:-aegiscore}" \
-	    -e "SELECT event_type, COUNT(*) AS rows, MIN(created_at) AS oldest FROM outbox WHERE processed_at IS NULL GROUP BY event_type ORDER BY rows DESC;"
+	    -e "SELECT event_type, COUNT(*) AS row_count, MIN(created_at) AS oldest FROM outbox WHERE processed_at IS NULL GROUP BY event_type ORDER BY row_count DESC;"
 	@echo ""
 	@echo "== Dead letters (up to 10) =="
 	@$(COMPOSE) exec -T mariadb mariadb \
