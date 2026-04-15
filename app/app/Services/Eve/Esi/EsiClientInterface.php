@@ -41,6 +41,15 @@ interface EsiClientInterface
      * Headers are factored into the payload cache key so a compat-date bump
      * doesn't replay a stale body.
      *
+     * `$forceRefresh` disables the conditional-GET for this one call. Used by
+     * {@see CachedEsiClient} to recover from cache drift — when the payload
+     * cache has been evicted but the upstream validator cache still has an
+     * ETag, a normal call would send `If-None-Match`, get a 304, and leave
+     * the caller with `body: null` (no payload to replay). The decorator
+     * detects that drift, retries with `forceRefresh: true`, and the inner
+     * transport omits conditional headers so CCP sends a full body that can
+     * be cached again. Individual callers normally don't set this flag.
+     *
      * @param  array<string, scalar|array<int, scalar>>  $query
      * @param  array<string, string>  $headers
      *
@@ -54,5 +63,6 @@ interface EsiClientInterface
         array $query = [],
         ?string $bearerToken = null,
         array $headers = [],
+        bool $forceRefresh = false,
     ): EsiResponse;
 }

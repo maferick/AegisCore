@@ -88,10 +88,19 @@ final class CachedEsiClient implements EsiClientInterface
         array $query = [],
         ?string $bearerToken = null,
         array $headers = [],
+        bool $forceRefresh = false,
     ): EsiResponse {
         $key = $this->payloadKey($path, $query, $bearerToken, $headers);
         $entry = $this->loadEntry($key);
         $now = time();
+
+        // On an explicit forced refresh, skip the fresh-hit shortcut
+        // so we always go to the wire. The inner transport honours the
+        // same flag to omit conditional-GET headers, guaranteeing a
+        // full body that we can cache.
+        if ($forceRefresh) {
+            $entry = null;
+        }
 
         // Fresh hit: never touch the network.
         if ($entry !== null && $now < $entry['expires_at']) {
@@ -131,7 +140,7 @@ final class CachedEsiClient implements EsiClientInterface
         }
 
         try {
-            $response = $this->inner->get($path, $query, $bearerToken, $headers);
+            $response = $this->inner->get($path, $query, $bearerToken, $headers, $forceRefresh);
         } catch (EsiRateLimitException $e) {
             // Rate-limit throttles are the rate-limiter's job, not the
             // cache's. Never serve stale through a 429/420.
@@ -174,13 +183,31 @@ final class CachedEsiClient implements EsiClientInterface
 
         if ($response->notModified) {
             if ($entry === null) {
-                // Rare drift: the inner transport has validators cached
-                // from a previous process but our payload is gone (either
-                // evicted, retention lapsed, or the decorator was added
-                // after validators were learned). We can't fabricate a
-                // body, so surface the naked 304 and let it self-heal on
-                // the next non-304 upstream response.
-                Log::warning('esi cache got 304 with no stored payload', ['key' => $key]);
+                // Drift: the inner transport has validators cached from
+                // a previous call but our payload entry is gone (evicted,
+                // retention lapsed, decorator added after validators
+                // were learned, container restart with split cache
+                // persistence, etc.). The naked 304 would leak `body:
+                // null` to the caller — which the standings fetcher
+                // (and probably other paginated callers) reads as
+                // "empty page, stop iterating". Recover by retrying
+                // once with `forceRefresh: true`: the inner will skip
+                // conditional headers, CCP returns a full body, and we
+                // repopulate both caches. Never recurses — the retry
+                // sets `$forceRefresh` at the top of this method which
+                // forces $entry = null, so the second call can't land
+                // back in this branch with a cached entry to replay.
+                Log::warning('esi cache got 304 with no stored payload, retrying with forced refresh', ['key' => $key]);
+
+                if (! $forceRefresh) {
+                    return $this->get($path, $query, $bearerToken, $headers, forceRefresh: true);
+                }
+
+                // $forceRefresh was already true AND we still got a 304.
+                // CCP shouldn't produce a 304 without a client-supplied
+                // validator; log + surface the naked 304 so the drift
+                // doesn't loop forever.
+                Log::error('esi cache: upstream returned 304 even on forced refresh', ['key' => $key]);
 
                 return $response;
             }

@@ -318,6 +318,7 @@ final class RecordingInnerClient implements EsiClientInterface
         array $query = [],
         ?string $bearerToken = null,
         array $headers = [],
+        bool $forceRefresh = false,
     ): EsiResponse {
         $this->calls++;
 
