@@ -215,12 +215,20 @@ Some scopes grant the right to *ask* but the endpoint still returns
 `Contact_Manager`. Handle 403 as a skip with a human-readable reason,
 not an error.
 
-**7. 404 is sometimes "no such resource", sometimes "no data"**.
-CCP uses 404 for both "the entity doesn't exist" and "this entity
-exists but has nothing configured" (e.g. an NPC corp with no player
-contact list). Match on status code + endpoint context to produce the
-right human message; don't treat 404 as a fatal error for paginated
-endpoints where empty-but-valid is plausible.
+**7. 404 is overloaded — three meanings depending on context.**
+CCP uses 404 for:
+  a. "The entity doesn't exist."
+  b. "This entity exists but has nothing configured" (e.g. an NPC corp
+     with no player contact list).
+  c. "You asked for a page beyond the last page of this paginated
+     endpoint." The new unversioned ESI favours 404 over an empty
+     array for out-of-range pages — so a caller that fetched page 1
+     successfully and then sees 404 on page 2 has **reached the end**,
+     not hit an error. Distinguish (c) by the page index: if
+     `$page > 1`, treat as end-of-pagination and process the rows
+     already gathered; if `$page === 1`, surface as skip (cases a / b).
+The standings fetcher does this explicitly; every other paginated
+caller should too.
 
 ### JWT verification
 
