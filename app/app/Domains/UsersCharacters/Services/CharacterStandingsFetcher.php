@@ -349,15 +349,31 @@ final class CharacterStandingsFetcher
 
                 return;
             } catch (EsiException $e) {
-                // Map common statuses to human-readable skip reasons.
+                // CCP's new unversioned ESI uses 404 (not an empty
+                // array) to signal "page out of range" on paginated
+                // endpoints. If we've already fetched at least one
+                // page successfully, treat this as end-of-pagination
+                // and fall out of the loop so the rows we gathered
+                // get upserted normally. Only a 404 on page 1 means
+                // "no contact list at all for this owner".
+                if ($e->status === 404 && $page > 1) {
+                    Log::debug('standings sync reached end of pagination', [
+                        'owner_type' => $ownerType,
+                        'owner_id' => $ownerId,
+                        'page' => $page,
+                    ]);
+                    break;
+                }
+
+                // Map common statuses on page 1 (or any non-pagination
+                // failure) to human-readable skip reasons.
                 $reason = match (true) {
                     $e->status === 403 && $ownerType === CharacterStanding::OWNER_CORPORATION
                         => 'Character lacks Personnel_Manager or Contact_Manager role on this corp.',
                     $e->status === 403
                         => "Character is not permitted to read this {$ownerType}'s contacts.",
-                    // 404 is CCP's way of saying "this owner has no
-                    // contacts list" for some donors / NPC corps. Not
-                    // an error; mark an empty skip.
+                    // 404 on page 1 means CCP has no contact list for
+                    // this entity (NPC corp, etc.) — surface as skip.
                     $e->status === 404
                         => "No {$ownerType} contact list published by CCP for this entity.",
                     default
