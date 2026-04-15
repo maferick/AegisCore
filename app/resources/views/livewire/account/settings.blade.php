@@ -136,6 +136,14 @@
                 contacts are not shown here by design — only group-level
                 standings feed the automatic battle-report tagging.
             </p>
+            <p class="subtitle" style="margin-bottom: 1rem;">
+                <strong>Heads-up:</strong> corp contacts need an in-game
+                <span class="mono">Personnel_Manager</span> or
+                <span class="mono">Contact_Manager</span> role on your
+                character. If you don't have it, the corp section just
+                stays empty and the alliance section fills in normally —
+                no action needed on your end.
+            </p>
 
             @if ($market_token === null)
                 <div class="empty">
