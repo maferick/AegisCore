@@ -40,6 +40,15 @@ class CharacterStanding extends Model
 
     public const OWNER_ALLIANCE = 'alliance';
 
+    /**
+     * Fallback owner-type used when the donor has neither a readable
+     * corp contact list nor an alliance contact list. Rows written
+     * under this owner carry the donor's personal contact list, which
+     * is less authoritative for a battle-report blue/red tag but
+     * better than nothing for a solo NPC-corp donor.
+     */
+    public const OWNER_CHARACTER = 'character';
+
     public const CONTACT_CHARACTER = 'character';
 
     public const CONTACT_CORPORATION = 'corporation';

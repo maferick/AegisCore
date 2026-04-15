@@ -154,13 +154,22 @@ return [
         // tagging downstream):
         //
         //   esi-corporations.read_contacts.v1
-        //     — corp official contact list. Character needs
+        //     — corp official contact list + labels. Only exists on
+        //       CCP's new unversioned ESI (esi.evetech.net, no
+        //       /latest/), called with X-Compatibility-Date. Requires
         //       Personnel_Manager or Contact_Manager in-game role, so
-        //       this will 403 for line-member donors. We tolerate that
-        //       at sync time and just skip the corp half.
+        //       this will 403 for line-member donors; we tolerate and
+        //       skip.
         //   esi-alliances.read_contacts.v1
-        //     — alliance official contact list. Any alliance member
-        //       can read it — no role gate.
+        //     — alliance official contact list + labels (new ESI).
+        //       Any alliance member can read — no role gate.
+        //   esi-characters.read_contacts.v1
+        //     — donor's *personal* contact list. Used only as a
+        //       fallback when both corp and alliance calls come back
+        //       empty / skipped (e.g. solo NPC-corp donor). Same
+        //       display filter applies — only corp/alliance/faction
+        //       contact types reach the UI, character contacts stay
+        //       hidden.
         //
         // Override via env if a deployment wants a different mix
         // (e.g. dropping `esi-search` once a donor's structure picks
@@ -175,7 +184,8 @@ return [
             'EVE_SSO_MARKET_SCOPES',
             'publicData esi-search.search_structures.v1 '
             .'esi-universe.read_structures.v1 esi-markets.structure_markets.v1 '
-            .'esi-corporations.read_contacts.v1 esi-alliances.read_contacts.v1',
+            .'esi-corporations.read_contacts.v1 esi-alliances.read_contacts.v1 '
+            .'esi-characters.read_contacts.v1',
         ),
     ],
 
@@ -193,6 +203,25 @@ return [
     */
     'esi' => [
         'base_url' => env('ESI_BASE_URL', 'https://esi.evetech.net/latest'),
+
+        // New unversioned ESI (esi.evetech.net, no /latest/) — CCP's
+        // compatibility-date-based successor to the versioned API.
+        // The legacy versioned paths still resolve for now but some
+        // endpoints (notably the corp / alliance contacts endpoints
+        // we call for the standings surface) are only present here.
+        // Callers opt in per-URL; the default `base_url` stays on
+        // `/latest` until every caller has been audited for compat-date
+        // behaviour under ADR-TBD.
+        //
+        // `compat_date` is the `X-Compatibility-Date` header value
+        // CCP requires on every new-ESI request. CCP publishes
+        // dated contracts and pins older-date callers to the shape
+        // as of that date, giving us a stable API even as the
+        // contract evolves. Bump this explicitly when we've audited
+        // the shape change for every endpoint we call; never let
+        // the client send "today" implicitly.
+        'new_base_url' => env('ESI_NEW_BASE_URL', 'https://esi.evetech.net'),
+        'compat_date' => env('ESI_COMPAT_DATE', '2025-12-16'),
 
         // CCP require a User-Agent identifying app + contact. Docs:
         // https://developers.eveonline.com/docs/services/esi/best-practices/

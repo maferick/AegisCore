@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Standings sync 404s on both corp and alliance contacts.** The
+  original corp endpoint path (`/latest/corporations/{id}/contacts/`)
+  was wrong — CCP never exposed that under the legacy versioned ESI.
+  The alliance endpoint is present at `/latest/` but being phased
+  out, and 404s for some donors. Rewired the fetcher to hit the new
+  unversioned ESI (`esi.evetech.net`, no `/latest/`) with the required
+  `X-Compatibility-Date` header; both endpoints resolve there.
+- **Existing market tokens lacked the new scopes.** Re-authorising on
+  `/account/settings` now re-requests the correct scope set; the UI
+  surfaces `esi-characters.read_contacts.v1` in the missing-scopes
+  nudge so the character-fallback path also gets consented.
+
 ### Added
+- **`X-Compatibility-Date` support in the shared ESI client.**
+  `EsiClientInterface::get()` now takes an optional `$headers` param,
+  threaded through `EsiClient` (with reserved-header protection) and
+  `CachedEsiClient` (headers folded into the payload cache key so a
+  compat-date bump can't replay a stale body from the old shape).
+  Unlocks per-URL migration to the new unversioned ESI without
+  flipping `ESI_BASE_URL` for every caller at once.
+- **Character-contacts fallback for standings sync.** Solo NPC-corp
+  donors and characters without an alliance used to land with an
+  empty standings table. The fetcher now falls back to
+  `GET /characters/{id}/contacts` (scope
+  `esi-characters.read_contacts.v1`) when both corp and alliance
+  lists come back empty or unreachable. The display filter on
+  `/account/settings` still hides `contact_type = 'character'` rows
+  regardless of owner bucket — personal grudges never render.
+- **Contact labels per standings row.** Sibling `*/contacts/labels`
+  endpoint is now pulled for each owner into a new
+  `character_standing_labels` table (keyed by
+  `owner_type, owner_id, label_id`). The settings UI renders label
+  chips next to each contact — useful visual grouping when an
+  alliance tags certain blues with labels like "Staging" or "SRP-ok",
+  and ready to feed the battle-report friendly/enemy fine-tune later.
+
 - **Corp / alliance standings display on `/account/settings`.** A new
   read-only section under the market-data card lists the standings
   the donor's corporation and alliance hold toward other corps,

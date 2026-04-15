@@ -7,6 +7,7 @@ namespace App\Livewire;
 use App\Domains\Markets\Models\MarketWatchedLocation;
 use App\Domains\Markets\Services\StructurePickerService;
 use App\Domains\UsersCharacters\Models\CharacterStanding;
+use App\Domains\UsersCharacters\Models\CharacterStandingLabel;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Domains\UsersCharacters\Services\CharacterStandingsFetcher;
 use App\Services\Eve\MarketTokenAuthorizer;
@@ -177,28 +178,35 @@ class AccountSettings extends Component
 
     /**
      * Standings visible to this user, grouped for the /account/settings
-     * table. Scope is "standings owned by corp/alliance of any of the
-     * user's linked characters" — so an officer who sync'd them,
-     * and every other donor in the same corp/alliance, sees the same
-     * list. Individual-character contacts are filtered out by the
-     * enum at the DB layer and again here (belt-and-braces per the
-     * donor-UX rule: no personal grudges on the shared surface).
+     * table. Scope is:
+     *
+     *   - 'corporation' bucket: standings owned by corps of any of the
+     *     user's linked characters.
+     *   - 'alliance' bucket: standings owned by alliances of any of
+     *     the user's linked characters.
+     *   - 'character' bucket: fallback — the donor's personal contact
+     *     list, only surfaced when the fetcher had to fall back to it
+     *     (i.e. no corp or alliance rows exist for this user's orgs).
+     *
+     * contact_type = 'character' is filtered OUT of display regardless
+     * of owner bucket — personal grudges never render (donor-UX rule).
+     * This is a filter over WHICH contacts show, not WHERE they come
+     * from.
+     *
+     * Each row also carries a `labels` sub-collection — the label
+     * names matching `label_ids`, looked up once per (owner_type,
+     * owner_id) and mapped in memory so we don't N+1 per row.
      *
      * Returned shape:
      *
      *   [
      *     'corporation' => [
      *       'owner_id' => 98765432,
-     *       'rows' => Collection<CharacterStanding>,
+     *       'rows' => Collection<CharacterStanding + $row->labels list>,
      *     ],
-     *     'alliance' => [
-     *       'owner_id' => 99001234,
-     *       'rows' => Collection<CharacterStanding>,
-     *     ],
+     *     'alliance' => [ ... ],
+     *     'character' => [ ... ],   // fallback only
      *   ]
-     *
-     * Keys missing when the user has no character in that owner type
-     * (e.g. corp without alliance → alliance key absent).
      *
      * @return array<string, array{owner_id: int, rows: Collection<int, CharacterStanding>}>
      */
@@ -209,12 +217,6 @@ class AccountSettings extends Component
             return [];
         }
 
-        // Character affiliation IDs are mirrored into `characters` by
-        // the standings fetcher on each sync (the affiliation poller
-        // for the donor-self path). Collect distinct corp + alliance
-        // IDs across all linked characters — the display surface can
-        // aggregate multiple if the user has characters in different
-        // orgs.
         $corpIds = $user->characters
             ->pluck('corporation_id')
             ->filter()
@@ -227,46 +229,106 @@ class AccountSettings extends Component
             ->unique()
             ->values()
             ->all();
+        $characterIds = $user->characters
+            ->pluck('character_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
         $result = [];
 
         if ($corpIds !== []) {
-            $rows = CharacterStanding::query()
-                ->where('owner_type', CharacterStanding::OWNER_CORPORATION)
-                ->whereIn('owner_id', $corpIds)
-                ->whereIn('contact_type', [
-                    CharacterStanding::CONTACT_CORPORATION,
-                    CharacterStanding::CONTACT_ALLIANCE,
-                    CharacterStanding::CONTACT_FACTION,
-                ])
-                ->orderByDesc('standing')
-                ->orderBy('contact_name')
-                ->get();
-            $result[CharacterStanding::OWNER_CORPORATION] = [
-                'owner_id' => (int) ($corpIds[0] ?? 0),
-                'rows' => $rows,
-            ];
+            $result[CharacterStanding::OWNER_CORPORATION] = $this->loadStandingsBucket(
+                CharacterStanding::OWNER_CORPORATION,
+                $corpIds,
+            );
         }
 
         if ($allianceIds !== []) {
-            $rows = CharacterStanding::query()
-                ->where('owner_type', CharacterStanding::OWNER_ALLIANCE)
-                ->whereIn('owner_id', $allianceIds)
-                ->whereIn('contact_type', [
-                    CharacterStanding::CONTACT_CORPORATION,
-                    CharacterStanding::CONTACT_ALLIANCE,
-                    CharacterStanding::CONTACT_FACTION,
-                ])
-                ->orderByDesc('standing')
-                ->orderBy('contact_name')
-                ->get();
-            $result[CharacterStanding::OWNER_ALLIANCE] = [
-                'owner_id' => (int) ($allianceIds[0] ?? 0),
-                'rows' => $rows,
-            ];
+            $result[CharacterStanding::OWNER_ALLIANCE] = $this->loadStandingsBucket(
+                CharacterStanding::OWNER_ALLIANCE,
+                $allianceIds,
+            );
+        }
+
+        // Only surface the character bucket when it actually has rows
+        // (fetcher fell back to it). Donors who got corp/alliance data
+        // shouldn't see their personal contacts card on this page.
+        if ($characterIds !== []) {
+            $characterBucket = $this->loadStandingsBucket(
+                CharacterStanding::OWNER_CHARACTER,
+                $characterIds,
+            );
+            if ($characterBucket['rows']->isNotEmpty()) {
+                $result[CharacterStanding::OWNER_CHARACTER] = $characterBucket;
+            }
         }
 
         return $result;
+    }
+
+    /**
+     * Load one owner-bucket's standings + attach a `labels` property
+     * to each row (list of ['label_id' => int, 'label_name' => string]).
+     *
+     * The label lookup is one query per owner-bucket, not per row —
+     * `label_ids` in `character_standings` is a JSON array, and we
+     * hydrate the matching names from `character_standing_labels`
+     * keyed by (owner_type, owner_id, label_id).
+     *
+     * @param  list<int>  $ownerIds
+     * @return array{owner_id: int, rows: Collection<int, CharacterStanding>}
+     */
+    private function loadStandingsBucket(string $ownerType, array $ownerIds): array
+    {
+        $rows = CharacterStanding::query()
+            ->where('owner_type', $ownerType)
+            ->whereIn('owner_id', $ownerIds)
+            ->whereIn('contact_type', [
+                CharacterStanding::CONTACT_CORPORATION,
+                CharacterStanding::CONTACT_ALLIANCE,
+                CharacterStanding::CONTACT_FACTION,
+            ])
+            ->orderByDesc('standing')
+            ->orderBy('contact_name')
+            ->get();
+
+        // Build an owner_id → (label_id → label_name) lookup in one
+        // query so row hydration below is O(1) per row instead of a
+        // per-row join.
+        $labelMap = [];
+        if ($rows->isNotEmpty()) {
+            $presentOwnerIds = $rows->pluck('owner_id')->unique()->values()->all();
+            CharacterStandingLabel::query()
+                ->where('owner_type', $ownerType)
+                ->whereIn('owner_id', $presentOwnerIds)
+                ->get(['owner_id', 'label_id', 'label_name'])
+                ->each(function (CharacterStandingLabel $label) use (&$labelMap): void {
+                    $labelMap[$label->owner_id][$label->label_id] = $label->label_name;
+                });
+        }
+
+        $rows->each(function (CharacterStanding $row) use ($labelMap): void {
+            $ownerLabels = $labelMap[$row->owner_id] ?? [];
+            $ids = is_array($row->label_ids) ? $row->label_ids : [];
+            $hydrated = [];
+            foreach ($ids as $id) {
+                $idInt = (int) $id;
+                $hydrated[] = [
+                    'label_id' => $idInt,
+                    'label_name' => $ownerLabels[$idInt] ?? null,
+                ];
+            }
+            // Attach a dynamic attribute so the Blade view can render
+            // the label chips without a separate lookup call.
+            $row->setAttribute('hydrated_labels', $hydrated);
+        });
+
+        return [
+            'owner_id' => (int) ($ownerIds[0] ?? 0),
+            'rows' => $rows,
+        ];
     }
 
     /**
@@ -288,6 +350,7 @@ class AccountSettings extends Component
         foreach ([
             CharacterStandingsFetcher::SCOPE_CORP_CONTACTS,
             CharacterStandingsFetcher::SCOPE_ALLIANCE_CONTACTS,
+            CharacterStandingsFetcher::SCOPE_CHARACTER_CONTACTS,
         ] as $scope) {
             if (! $token->hasScope($scope)) {
                 $missing[] = $scope;

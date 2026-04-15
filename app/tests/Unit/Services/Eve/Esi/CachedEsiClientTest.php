@@ -313,8 +313,12 @@ final class RecordingInnerClient implements EsiClientInterface
         $this->queue[] = $e;
     }
 
-    public function get(string $path, array $query = [], ?string $bearerToken = null): EsiResponse
-    {
+    public function get(
+        string $path,
+        array $query = [],
+        ?string $bearerToken = null,
+        array $headers = [],
+    ): EsiResponse {
         $this->calls++;
 
         if ($this->queue === []) {
