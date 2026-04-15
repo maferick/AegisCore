@@ -177,61 +177,82 @@
                 @endif
 
                 @forelse ($standings_by_owner as $owner_type => $bucket)
-                    <h3 style="margin-top: 1.5rem; text-transform: capitalize;">
-                        {{ $owner_type }}
-                        <span class="badge muted">#{{ $bucket['owner_id'] }}</span>
-                    </h3>
-                    @if ($bucket['rows']->isEmpty())
-                        <div class="empty">
-                            No {{ $owner_type }} standings stored yet. Click
-                            "Sync standings now" above to populate.
+                    @php
+                        $rows = $bucket['rows'];
+                        // Group rows by their classification so the grid
+                        // renders friendly → neutral → enemy in that order,
+                        // which is what a fleet commander scans for first.
+                        $groupOrder = ['friendly', 'neutral', 'enemy'];
+                        $groups = $rows->groupBy(fn ($r) => $r->classification());
+                        // Sync timestamps within a single owner are
+                        // effectively identical (single fetch) — surface
+                        // one per-owner "last synced" line instead of
+                        // repeating the same value on every row.
+                        $lastSynced = $rows->max('synced_at');
+                    @endphp
+                    <div class="standings-owner">
+                        <div class="standings-owner-head">
+                            <h3>{{ $owner_type }}</h3>
+                            <span class="badge muted">#{{ $bucket['owner_id'] }}</span>
+                            @if ($rows->isNotEmpty())
+                                <span class="standings-owner-meta">
+                                    {{ $rows->count() }} {{ \Illuminate\Support\Str::plural('contact', $rows->count()) }}
+                                    @if ($lastSynced)
+                                        · synced {{ $lastSynced->diffForHumans() }}
+                                    @endif
+                                </span>
+                            @endif
                         </div>
-                    @else
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>Contact</th>
-                                <th>Type</th>
-                                <th>Standing</th>
-                                <th>Class</th>
-                                <th>Labels</th>
-                                <th>Last synced</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            @foreach ($bucket['rows'] as $row)
-                                @php
-                                    $class = $row->classification();
-                                    $badgeClass = match ($class) {
-                                        'friendly' => 'ok',
-                                        'enemy' => 'bad',
-                                        default => 'muted',
-                                    };
-                                    $labels = $row->getAttribute('hydrated_labels') ?? [];
-                                @endphp
-                                <tr>
-                                    <td>
-                                        {{ $row->contact_name ?? '(unresolved)' }}
-                                        <span class="badge muted">#{{ $row->contact_id }}</span>
-                                    </td>
-                                    <td>{{ $row->contact_type }}</td>
-                                    <td class="mono">{{ number_format((float) $row->standing, 1) }}</td>
-                                    <td><span class="badge {{ $badgeClass }}">{{ $class }}</span></td>
-                                    <td>
-                                        @forelse ($labels as $label)
-                                            <span class="badge muted">
-                                                {{ $label['label_name'] ?? '#'.$label['label_id'] }}
-                                            </span>
-                                        @empty
-                                            <span class="subtitle">—</span>
-                                        @endforelse
-                                    </td>
-                                    <td class="mono">{{ $row->synced_at?->diffForHumans() ?? 'never' }}</td>
-                                </tr>
+
+                        @if ($rows->isEmpty())
+                            <div class="empty">
+                                No {{ $owner_type }} standings stored yet. Click
+                                "Sync standings now" above to populate.
+                            </div>
+                        @else
+                            @foreach ($groupOrder as $groupName)
+                                @php $groupRows = $groups[$groupName] ?? collect(); @endphp
+                                @if ($groupRows->isNotEmpty())
+                                    @php
+                                        $badgeClass = match ($groupName) {
+                                            'friendly' => 'ok',
+                                            'enemy' => 'bad',
+                                            default => 'muted',
+                                        };
+                                    @endphp
+                                    <div class="standings-group">
+                                        <div class="standings-group-head">
+                                            <span class="badge {{ $badgeClass }}">{{ $groupName }}</span>
+                                            <span class="count">{{ $groupRows->count() }}</span>
+                                        </div>
+                                        <div class="standings-grid">
+                                            @foreach ($groupRows as $row)
+                                                @php $labels = $row->getAttribute('hydrated_labels') ?? []; @endphp
+                                                <div class="standing-cell {{ $groupName }}"
+                                                     title="{{ $row->contact_type }} #{{ $row->contact_id }}">
+                                                    <div class="standing-cell-head">
+                                                        <div class="standing-cell-name">
+                                                            {{ $row->contact_name ?? '(unresolved)' }}
+                                                        </div>
+                                                        <div class="standing-cell-standing">
+                                                            {{ number_format((float) $row->standing, 1) }}
+                                                        </div>
+                                                    </div>
+                                                    <div class="standing-cell-meta">
+                                                        <span class="type-tag">{{ $row->contact_type }}</span>
+                                                        @foreach ($labels as $label)
+                                                            <span class="badge muted">{{ $label['label_name'] ?? '#'.$label['label_id'] }}</span>
+                                                        @endforeach
+                                                        <span class="id-tag">#{{ $row->contact_id }}</span>
+                                                    </div>
+                                                </div>
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                @endif
                             @endforeach
-                            </tbody>
-                        </table>
-                    @endif
+                        @endif
+                    </div>
                 @empty
                     <div class="empty">
                         No corp/alliance affiliation resolved yet for any of

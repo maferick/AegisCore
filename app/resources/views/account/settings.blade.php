@@ -59,7 +59,7 @@
 
         main {
             flex: 1;
-            max-width: 920px;
+            max-width: 1100px;
             margin: 0 auto;
             padding: 2rem;
             width: 100%;
@@ -164,6 +164,120 @@
             font-style: italic;
             text-align: center;
             padding: 1.5rem;
+        }
+
+        /* ---------- Standings grid ---------- */
+        /* Contacts are ~200+ rows; rendering as a single table produces
+           a wall of scroll. Layout is: owner heading → one group per
+           classification (friendly / neutral / enemy) → responsive
+           grid of compact cells inside each group. */
+        .standings-owner { margin-top: 1.5rem; }
+        .standings-owner-head {
+            display: flex;
+            align-items: baseline;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.75rem;
+        }
+        .standings-owner-head h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            text-transform: capitalize;
+            margin: 0;
+        }
+        .standings-owner-meta {
+            color: var(--muted);
+            font-size: 0.82rem;
+            margin-left: auto;
+        }
+
+        .standings-group { margin-top: 1rem; }
+        .standings-group-head {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.3rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .standings-group-head .count {
+            color: var(--muted);
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+        }
+
+        .standings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 0.5rem;
+        }
+
+        .standing-cell {
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--border-hot);
+            border-radius: 4px;
+            padding: 0.5rem 0.7rem;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            min-width: 0; /* let flex children truncate */
+        }
+        .standing-cell.friendly { border-left-color: var(--success); }
+        .standing-cell.enemy    { border-left-color: var(--danger); }
+        .standing-cell.neutral  { border-left-color: var(--border-hot); }
+
+        .standing-cell-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            min-width: 0;
+        }
+        .standing-cell-name {
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+            flex: 1;
+        }
+        .standing-cell-standing {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+            font-size: 0.85rem;
+            font-weight: 600;
+            flex-shrink: 0;
+            color: var(--muted);
+        }
+        .standing-cell.friendly .standing-cell-standing { color: var(--success); }
+        .standing-cell.enemy    .standing-cell-standing { color: var(--danger); }
+
+        .standing-cell-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.3rem;
+            align-items: center;
+            font-size: 0.72rem;
+            color: var(--muted);
+            min-width: 0;
+        }
+        .standing-cell-meta .type-tag {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+            font-size: 0.7rem;
+            color: var(--muted);
+        }
+        .standing-cell-meta .badge {
+            font-size: 0.7rem;
+            padding: 0.02rem 0.4rem;
+        }
+        .standing-cell-meta .id-tag {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+            font-size: 0.68rem;
+            color: var(--muted);
+            opacity: 0.6;
+            margin-left: auto;
         }
     </style>
 </head>
