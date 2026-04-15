@@ -147,6 +147,81 @@ Still **not** in scope:
 - Token refresh, because login tokens aren't stored.
 - Distributed locks on refresh.
 
+### Known gotchas for ESI callers
+
+Collected from bugs we've hit and expect to hit again. Read this before
+adding a new ESI caller or debugging a mystery `empty response / 0 rows`
+symptom.
+
+**1. Two cache layers, two eviction policies.**
+`EsiClient` stores `ETag` / `Last-Modified` validators in Redis under
+`esi:cond:*`. `CachedEsiClient` (the default-bound decorator) stores
+full response payloads under `esi:payload:*`. They share a store but
+have different retention windows (`cache_ttl_seconds` vs
+`payload_retention_seconds`) and their keys are independent. If they
+drift — e.g. container restart with Redis persistence on, payload TTL
+elapsed, validator still present — a call sends `If-None-Match`, CCP
+returns 304, and the decorator has nothing to replay. Symptom:
+`body: null` on a paginated caller, which typically reads as
+"end of pagination" and silently returns zero rows. **The decorator
+self-heals by retrying once with `forceRefresh: true`**, which the
+inner transport honours by omitting conditional-GET headers. When you
+add a new caller, do **not** treat `notModified && body === null` as
+"empty page" — the decorator guarantees a body when it has (or can
+fetch) one, and any leak-through means something's wrong.
+
+**2. Pagination by walking until empty page.**
+CCP's paginated endpoints expose `X-Pages`, but `EsiResponse` doesn't
+surface response headers. Paginated callers walk pages until they hit
+an empty array. Cap the loop (see `CharacterStandingsFetcher::MAX_PAGES`
+for the pattern) so a malformed `X-Pages` story from CCP never pins
+you. **Never prune-on-empty** for a paginated owner: if the fetch
+skipped midway (rate limit, transient 5xx), pruning would delete rows
+you didn't re-see. Skip the whole owner and wait for the next sync.
+
+**3. Legacy `/latest/` vs the new unversioned ESI.**
+CCP is migrating from versioned `/latest/*` endpoints to the
+unversioned `esi.evetech.net/*` surface, gated by an
+`X-Compatibility-Date` header. Some endpoints only exist on one side
+(`/corporations/{id}/contacts` is unversioned-only as of 2026-04); some
+return different shapes (`/latest/characters/{id}/` has been observed
+returning without `corporation_id` where the new endpoint is stable).
+When adding a caller, **prefer the new unversioned ESI** and pass
+`X-Compatibility-Date` (config key `eve.esi.compat_date`) via the
+shared `EsiClient` — absolute URLs are passed through verbatim, so
+one client instance handles both surfaces. Bump `compat_date`
+explicitly when you've audited every caller for the new shape; never
+let the date drift implicitly.
+
+**4. Reserved headers.**
+`Authorization`, `If-None-Match`, `If-Modified-Since`, `User-Agent`,
+`Accept` are transport-owned. `EsiClient::filterReservedHeaders()`
+strips them from caller input on the way to CCP. A caller passing
+`If-None-Match` manually would break conditional-GET coherence.
+
+**5. Scope presence vs scope grant.**
+A token having the right scope in its JWT `scp` claim doesn't mean
+CCP granted it — the upstream app registration on
+`developers.eveonline.com` must list the scope first. If you add a
+new scope to `market_scopes` (or similar) but forget to tick it on
+the CCP app, re-auth silently returns a token without it. Expected
+surface: `Token missing scope X` skip message in the caller. Fix:
+update the app registration, then re-auth.
+
+**6. Role-gated scopes.**
+Some scopes grant the right to *ask* but the endpoint still returns
+403 when the character lacks a specific in-game role. Common cases:
+`esi-corporations.read_contacts.v1` needs `Personnel_Manager` or
+`Contact_Manager`. Handle 403 as a skip with a human-readable reason,
+not an error.
+
+**7. 404 is sometimes "no such resource", sometimes "no data"**.
+CCP uses 404 for both "the entity doesn't exist" and "this entity
+exists but has nothing configured" (e.g. an NPC corp with no player
+contact list). Match on status code + endpoint context to produce the
+right human message; don't treat 404 as a fatal error for paginated
+endpoints where empty-but-valid is plausible.
+
 ### JWT verification
 
 Phase 1 decodes the SSO callback JWT **without signature verification**.

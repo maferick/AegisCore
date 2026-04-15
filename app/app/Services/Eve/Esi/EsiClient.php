@@ -92,6 +92,7 @@ final class EsiClient implements EsiClientInterface
         array $query = [],
         ?string $bearerToken = null,
         array $headers = [],
+        bool $forceRefresh = false,
     ): EsiResponse {
         $url = $this->resolveUrl($path);
 
@@ -104,7 +105,13 @@ final class EsiClient implements EsiClientInterface
         // the validator-cache key so a compat-date bump doesn't replay
         // a stale 304/ETag from the old-shape response.
         $cacheKey = $this->cacheKeyFor($url, $query, $headers);
-        $validators = $this->loadValidators($cacheKey);
+        // Skip loading validators on a forced refresh — caller is asking
+        // us to guarantee a full body in the response, which means we
+        // must NOT send If-None-Match / If-Modified-Since (either would
+        // risk a 304 with no body).
+        $validators = $forceRefresh
+            ? ['etag' => null, 'last_modified' => null]
+            : $this->loadValidators($cacheKey);
 
         $request = Http::withUserAgent($this->userAgent)
             ->timeout($this->timeoutSeconds)
