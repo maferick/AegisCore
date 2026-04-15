@@ -149,14 +149,33 @@ return [
         //   esi-markets.structure_markets.v1
         //     — the actual market-reads the poller performs.
         //
+        // Extended for the standings surface (feeds /account/settings
+        // corp/alliance standings + the battle-report friendly/enemy
+        // tagging downstream):
+        //
+        //   esi-corporations.read_contacts.v1
+        //     — corp official contact list. Character needs
+        //       Personnel_Manager or Contact_Manager in-game role, so
+        //       this will 403 for line-member donors. We tolerate that
+        //       at sync time and just skip the corp half.
+        //   esi-alliances.read_contacts.v1
+        //     — alliance official contact list. Any alliance member
+        //       can read it — no role gate.
+        //
         // Override via env if a deployment wants a different mix
         // (e.g. dropping `esi-search` once a donor's structure picks
         // are locked in). Space- or comma-separated. Same parsing
         // rules as service_scopes.
+        //
+        // Existing tokens authorised before these scopes were added
+        // will NOT have them in the JWT `scp` claim — the standings
+        // sync logs a warning and skips those donors until they re-
+        // authorise on /account/settings.
         'market_scopes' => env(
             'EVE_SSO_MARKET_SCOPES',
             'publicData esi-search.search_structures.v1 '
-            .'esi-universe.read_structures.v1 esi-markets.structure_markets.v1',
+            .'esi-universe.read_structures.v1 esi-markets.structure_markets.v1 '
+            .'esi-corporations.read_contacts.v1 esi-alliances.read_contacts.v1',
         ),
     ],
 

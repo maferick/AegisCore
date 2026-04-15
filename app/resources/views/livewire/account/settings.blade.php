@@ -19,6 +19,8 @@
     /** @var string|null $market_redirect_url */
     /** @var \App\Domains\UsersCharacters\Models\EveMarketToken|null $market_token */
     /** @var \Illuminate\Support\Collection $watched_structures */
+    /** @var array<string, array{owner_id: int, rows: \Illuminate\Support\Collection}> $standings_by_owner */
+    /** @var list<string> $standings_token_missing_scopes */
 @endphp
 <div>
     {{-- ---------- Status flashes (wire-reactive) ---------- --}}
@@ -112,6 +114,117 @@
                     </tr>
                     </tbody>
                 </table>
+            @endif
+        </section>
+
+        {{-- ---------- Corp / alliance standings ---------- --}}
+        {{--
+            Standings are OWNED by the corp/alliance (not by an individual
+            donor). Any donor in the corp can sync; all donors in the same
+            corp/alliance see the same list. Only corp / alliance / faction
+            contacts are shown — individual-character contacts are deliberately
+            hidden per the donor-UX rule (no personal grudges on a shared
+            surface). Downstream battle reports consume these rows for
+            donor/admin friendly/enemy tagging.
+        --}}
+        <section class="card">
+            <h2>Corp &amp; alliance standings</h2>
+            <p class="subtitle" style="margin-bottom: 1rem;">
+                Official standings your corporation and alliance hold toward
+                other corps, alliances, and factions. Fetched via your
+                authorised character's ESI access. Individual-character
+                contacts are not shown here by design — only group-level
+                standings feed the automatic battle-report tagging.
+            </p>
+            <p class="subtitle" style="margin-bottom: 1rem;">
+                <strong>Heads-up:</strong> corp contacts need an in-game
+                <span class="mono">Personnel_Manager</span> or
+                <span class="mono">Contact_Manager</span> role on your
+                character. If you don't have it, the corp section just
+                stays empty and the alliance section fills in normally —
+                no action needed on your end.
+            </p>
+
+            @if ($market_token === null)
+                <div class="empty">
+                    Authorise market data above first — the same token is used
+                    for standings sync.
+                </div>
+            @else
+                @if (count($standings_token_missing_scopes) > 0)
+                    <div class="flash warn" style="margin-bottom: 1rem;">
+                        Your current authorisation is missing the standings
+                        scopes ({{ implode(', ', $standings_token_missing_scopes) }}).
+                        Re-authorise via the button above to enable standings sync.
+                    </div>
+                @else
+                    <div style="margin-bottom: 1rem;">
+                        <button class="btn"
+                                type="button"
+                                wire:click="syncStandings"
+                                wire:loading.attr="disabled"
+                                wire:target="syncStandings">
+                            <span wire:loading.remove wire:target="syncStandings">Sync standings now</span>
+                            <span wire:loading wire:target="syncStandings">Syncing…</span>
+                        </button>
+                        <span class="subtitle" style="margin-left: 0.75rem;">
+                            Also runs automatically once a day.
+                        </span>
+                    </div>
+                @endif
+
+                @forelse ($standings_by_owner as $owner_type => $bucket)
+                    <h3 style="margin-top: 1.5rem; text-transform: capitalize;">
+                        {{ $owner_type }}
+                        <span class="badge muted">#{{ $bucket['owner_id'] }}</span>
+                    </h3>
+                    @if ($bucket['rows']->isEmpty())
+                        <div class="empty">
+                            No {{ $owner_type }} standings stored yet. Click
+                            "Sync standings now" above to populate.
+                        </div>
+                    @else
+                        <table>
+                            <thead>
+                            <tr>
+                                <th>Contact</th>
+                                <th>Type</th>
+                                <th>Standing</th>
+                                <th>Class</th>
+                                <th>Last synced</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            @foreach ($bucket['rows'] as $row)
+                                @php
+                                    $class = $row->classification();
+                                    $badgeClass = match ($class) {
+                                        'friendly' => 'ok',
+                                        'enemy' => 'bad',
+                                        default => 'muted',
+                                    };
+                                @endphp
+                                <tr>
+                                    <td>
+                                        {{ $row->contact_name ?? '(unresolved)' }}
+                                        <span class="badge muted">#{{ $row->contact_id }}</span>
+                                    </td>
+                                    <td>{{ $row->contact_type }}</td>
+                                    <td class="mono">{{ number_format((float) $row->standing, 1) }}</td>
+                                    <td><span class="badge {{ $badgeClass }}">{{ $class }}</span></td>
+                                    <td class="mono">{{ $row->synced_at?->diffForHumans() ?? 'never' }}</td>
+                                </tr>
+                            @endforeach
+                            </tbody>
+                        </table>
+                    @endif
+                @empty
+                    <div class="empty">
+                        No corp/alliance affiliation resolved yet for any of
+                        your linked characters. Click "Sync standings now" to
+                        pull current affiliation and contacts from ESI.
+                    </div>
+                @endforelse
             @endif
         </section>
 

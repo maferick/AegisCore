@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         \App\Reference\Console\CheckSdeVersionCommand::class,
         \App\Domains\UsersCharacters\Console\PollDonationsCommand::class,
         \App\Domains\UsersCharacters\Console\RecomputeDonorBenefitsCommand::class,
+        \App\Domains\UsersCharacters\Console\SyncStandingsCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting
