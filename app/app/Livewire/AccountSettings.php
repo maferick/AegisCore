@@ -6,9 +6,13 @@ namespace App\Livewire;
 
 use App\Domains\Markets\Models\MarketWatchedLocation;
 use App\Domains\Markets\Services\StructurePickerService;
+use App\Domains\UsersCharacters\Actions\SyncViewerContextForCharacter;
+use App\Domains\UsersCharacters\Models\Character;
 use App\Domains\UsersCharacters\Models\CharacterStanding;
 use App\Domains\UsersCharacters\Models\CharacterStandingLabel;
+use App\Domains\UsersCharacters\Models\CoalitionBloc;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
+use App\Domains\UsersCharacters\Models\ViewerContext;
 use App\Domains\UsersCharacters\Services\CharacterStandingsFetcher;
 use App\Services\Eve\MarketTokenAuthorizer;
 use App\Services\Eve\Sso\EveSsoClient;
@@ -95,7 +99,7 @@ class AccountSettings extends Component
     // Lifecycle
     // ------------------------------------------------------------------
 
-    public function render(): View
+    public function render(SyncViewerContextForCharacter $sync): View
     {
         return view('livewire.account.settings', [
             'user' => Auth::user(),
@@ -115,6 +119,8 @@ class AccountSettings extends Component
             'watched_structures' => $this->watchedStructures(),
             'standings_by_owner' => $this->standingsByOwner(),
             'standings_token_missing_scopes' => $this->standingsTokenMissingScopes(),
+            'viewer_bloc_state' => $this->viewerBlocState($sync),
+            'coalition_blocs' => $this->coalitionBlocs(),
         ]);
     }
 
@@ -360,6 +366,75 @@ class AccountSettings extends Component
         return $missing;
     }
 
+    /**
+     * State for the coalition-affiliation card. Resolves (or lazy-
+     * creates) the ViewerContext for the user's primary character and
+     * returns a view-friendly shape with everything the Blade needs.
+     *
+     * "Primary character" for Phase 1 = first linked character by id.
+     * Multi-character viewer-context management is a later slice.
+     *
+     * Return shape:
+     *
+     *   null                         — user has no linked characters
+     *   [
+     *     'context'             => ViewerContext,
+     *     'character'           => Character,
+     *     'bloc'                => CoalitionBloc | null,
+     *     'is_confirmed'        => bool,
+     *     'suggestion_bloc'     => CoalitionBloc | null (only when unresolved),
+     *     'confidence_band'     => 'high'|'medium'|'low'|null,
+     *   ]
+     *
+     * @return array<string, mixed>|null
+     */
+    private function viewerBlocState(SyncViewerContextForCharacter $sync): ?array
+    {
+        $user = Auth::user();
+        if ($user === null) {
+            return null;
+        }
+
+        $character = $user->characters()->orderBy('id')->first();
+        if ($character === null) {
+            return null;
+        }
+
+        // Lazy-create / refresh on every render. The action no-ops on
+        // an unchanged confirmed row; only touches DB on new rows or
+        // affiliation drift.
+        $context = $sync->handle($character);
+
+        $bloc = $context->bloc_id !== null
+            ? CoalitionBloc::query()->find($context->bloc_id)
+            : null;
+
+        return [
+            'context' => $context,
+            'character' => $character,
+            'bloc' => $bloc,
+            'is_confirmed' => ! $context->bloc_unresolved,
+            // When unresolved but we have a suggestion, surface the
+            // bloc as the suggestion rather than as confirmed truth.
+            'suggestion_bloc' => $context->bloc_unresolved ? $bloc : null,
+            'confidence_band' => $context->bloc_confidence_band,
+        ];
+    }
+
+    /**
+     * Active coalition blocs for the picker dropdown, ordered for a
+     * stable display. Loaded once per render (tiny table, < 10 rows).
+     *
+     * @return Collection<int, CoalitionBloc>
+     */
+    private function coalitionBlocs(): Collection
+    {
+        return CoalitionBloc::query()
+            ->where('is_active', true)
+            ->orderBy('display_name')
+            ->get();
+    }
+
     // ------------------------------------------------------------------
     // Actions
     // ------------------------------------------------------------------
@@ -538,6 +613,129 @@ class AccountSettings extends Component
         }
 
         $this->status = $result->toFlashMessage();
+    }
+
+    /**
+     * Confirm the currently-suggested bloc (whatever the resolver put
+     * on the row). Flips bloc_unresolved=false. No-op if the row has
+     * no bloc_id (the donor must pick via {@see self::setViewerBloc()}
+     * first).
+     */
+    public function confirmViewerBloc(): void
+    {
+        $this->error = null;
+        $this->status = null;
+
+        $context = $this->primaryViewerContextOrFail();
+        if ($context === null) {
+            return;
+        }
+
+        if ($context->bloc_id === null) {
+            $this->error = 'Pick a bloc from the dropdown first.';
+
+            return;
+        }
+
+        $context->bloc_unresolved = false;
+        $context->save();
+
+        $this->status = 'Coalition affiliation confirmed.';
+    }
+
+    /**
+     * Explicitly pick (or change) the viewer's bloc. Accepts any
+     * active CoalitionBloc id. Sets confidence to 'high' because a
+     * manual pick is a direct donor assertion. Flips bloc_unresolved
+     * false in the same save — manual pick IS the confirmation.
+     */
+    public function setViewerBloc(int $blocId): void
+    {
+        $this->error = null;
+        $this->status = null;
+
+        $context = $this->primaryViewerContextOrFail();
+        if ($context === null) {
+            return;
+        }
+
+        $bloc = CoalitionBloc::query()->where('id', $blocId)->where('is_active', true)->first();
+        if ($bloc === null) {
+            $this->error = 'Unknown coalition bloc.';
+
+            return;
+        }
+
+        $context->bloc_id = $bloc->id;
+        $context->bloc_confidence_band = ViewerContext::CONFIDENCE_HIGH;
+        $context->bloc_unresolved = false;
+        $context->save();
+
+        $this->status = "Coalition affiliation set to {$bloc->display_name}.";
+    }
+
+    /**
+     * Re-open inference on the viewer context: clears confirmation,
+     * re-runs the inference service against current labels on the
+     * character's alliance/corp. Used when admins have added bloc
+     * labels since the donor last looked and the donor wants the
+     * fresh suggestion surfaced again.
+     */
+    public function reinferViewerBloc(SyncViewerContextForCharacter $sync): void
+    {
+        $this->error = null;
+        $this->status = null;
+
+        $context = $this->primaryViewerContextOrFail();
+        if ($context === null) {
+            return;
+        }
+
+        // Flip unresolved so the Action's inference branch runs.
+        $context->bloc_unresolved = true;
+        $context->save();
+
+        $character = $context->character;
+        if ($character === null) {
+            $this->error = 'Linked character is missing.';
+
+            return;
+        }
+
+        $sync->handle($character, forceReinfer: true);
+
+        $this->status = 'Re-ran inference against the latest labels.';
+    }
+
+    /**
+     * Load the primary viewer context for the authed user. Returns
+     * null and sets $this->error if the user has no linked characters
+     * or no viewer context yet (which should not happen after the
+     * first render, since render() lazy-creates).
+     */
+    private function primaryViewerContextOrFail(): ?ViewerContext
+    {
+        $user = Auth::user();
+        if ($user === null) {
+            abort(403);
+        }
+
+        $character = $user->characters()->orderBy('id')->first();
+        if ($character === null) {
+            $this->error = 'Link an EVE character first.';
+
+            return null;
+        }
+
+        $context = ViewerContext::query()->where('character_id', $character->id)->first();
+        if ($context === null) {
+            // Shouldn't happen — render() lazy-creates. Guard anyway.
+            $this->error = 'No viewer context found. Reload the page.';
+
+            return null;
+        }
+
+        return $context;
     }
 
     /**
