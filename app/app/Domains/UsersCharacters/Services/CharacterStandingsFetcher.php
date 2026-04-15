@@ -26,9 +26,12 @@ use Throwable;
  *
  *   1. Refresh the donor's access token (row-locked via authorizer).
  *   2. Resolve the donor character's current affiliation:
- *        GET /latest/characters/{id}/  →  corporation_id, alliance_id
- *      Mirror the result back into `characters` so the rest of the app
- *      stays consistent.
+ *        GET esi.evetech.net/characters/{id}  →  corporation_id, alliance_id
+ *      (new unversioned ESI; see {@see resolveAffiliation()} for why
+ *      the legacy `/latest/` path isn't viable here any more, and for
+ *      the local `characters`-table fallback when ESI returns an
+ *      incomplete shape). Mirror the resolved result back into
+ *      `characters` so the rest of the app stays consistent.
  *   3. If the token grants `esi-corporations.read_contacts.v1`, fetch
  *        GET /corporations/{corp_id}/contacts + contacts/labels
  *      on the new unversioned ESI (`esi.evetech.net`, no `/latest/`,
@@ -49,16 +52,17 @@ use Throwable;
  *   7. Upsert into `character_standing_labels` keyed by
  *      (owner_type, owner_id, label_id); prune stale rows.
  *
- * Why the legacy `/latest/` vs new unversioned split:
+ * Why the new unversioned ESI for every call:
  *
  *   CCP is migrating from /latest/ (versioned endpoints) to
  *   esi.evetech.net (unversioned + X-Compatibility-Date header). The
  *   contacts endpoints are only present on the new path; /latest/
  *   returns 404 for both corp and alliance contacts as of 2026-04.
- *   Affiliation lookup still lives on /latest/ (stable shape, no
- *   reason to migrate yet). When we audit every remaining /latest/
- *   caller we'll flip `ESI_BASE_URL`; until then callers opt in
- *   per-URL by passing a full URL.
+ *   `/latest/characters/{id}/` was also observed returning an
+ *   incomplete shape (no `corporation_id`) for some donors, blocking
+ *   the sync at step 2 even when the contacts calls would have
+ *   succeeded. Every fetcher call now goes to the new ESI; the
+ *   shared EsiClient handles that transparently via absolute URLs.
  *
  * ESI pagination:
  *
@@ -119,11 +123,15 @@ final class CharacterStandingsFetcher
         $allianceId = $affiliation['alliance_id'] ?? null;
 
         if ($corpId === null) {
-            // /characters/{id}/ always returns corporation_id for a
-            // live character. A null here means CCP returned a shape
-            // we don't recognise — refuse rather than plough on.
+            // Both the ESI lookup AND the local `characters`-table
+            // fallback returned null — either this is a brand-new
+            // donor whose affiliation has never been mirrored and CCP
+            // happened to be down on this sync, or the donor's local
+            // row was manually cleared. Either way we can't
+            // usefully proceed; surface a message that points at
+            // retrying rather than at a permanent failure.
             throw new RuntimeException(
-                'Could not resolve donor character corporation — standings sync aborted.',
+                'Could not resolve donor character corporation — ESI degraded and no local affiliation cached. Try again shortly.',
             );
         }
 
@@ -203,36 +211,74 @@ final class CharacterStandingsFetcher
     }
 
     /**
-     * GET /characters/{id}/ → ['corporation_id' => int, 'alliance_id' => ?int].
+     * Resolve the donor character's current affiliation — returning
+     * `corporation_id` and optional `alliance_id`.
+     *
+     * Primary source: the new unversioned ESI's `/characters/{id}`
+     * endpoint (with `X-Compatibility-Date`). `/latest/characters/{id}/`
+     * has been observed returning a shape without `corporation_id`
+     * for some characters, which is what fires the
+     * "Could not resolve donor character corporation" error — moving
+     * to the new ESI keeps the lookup aligned with the contacts
+     * endpoints that already live there.
+     *
+     * Fallback: if the ESI call returns an incomplete shape (CCP
+     * transient, schema drift, partial payload), fall back to the
+     * locally-stored `characters.corporation_id` / `alliance_id`,
+     * which the previous successful sync mirrored in. Better to sync
+     * against slightly-stale affiliation than to abort entirely on
+     * the sole basis of a flaky lookup.
      *
      * @return array{corporation_id: ?int, alliance_id: ?int}
      */
     private function resolveAffiliation(int $characterId, string $accessToken): array
     {
+        $corpId = null;
+        $allianceId = null;
+
         try {
-            // publicData endpoint; the bearer is optional but passing
-            // it is free and avoids any rate-limit group mismatch
-            // between auth'd and unauth'd traffic.
             $response = $this->esi->get(
-                "/characters/{$characterId}/",
+                $this->newEsiUrl("/characters/{$characterId}"),
                 bearerToken: $accessToken,
+                headers: ['X-Compatibility-Date' => $this->compatDate()],
             );
+
+            $body = $response->body ?? [];
+            $corpId = isset($body['corporation_id']) ? (int) $body['corporation_id'] : null;
+            $allianceId = isset($body['alliance_id']) ? (int) $body['alliance_id'] : null;
         } catch (EsiException $e) {
-            Log::warning('character affiliation lookup failed', [
+            // Don't throw here — check the local fallback first. ESI
+            // degraded + stored affiliation valid is a recoverable
+            // state; throwing before checking would block the sync
+            // unnecessarily.
+            Log::info('character affiliation ESI lookup failed, trying local fallback', [
                 'character_id' => $characterId,
                 'status' => $e->status,
                 'error' => $e->getMessage(),
             ]);
-
-            throw new RuntimeException(
-                'Could not look up character affiliation — ESI may be degraded. Try again shortly.',
-                previous: $e,
-            );
         }
 
-        $body = $response->body ?? [];
-        $corpId = isset($body['corporation_id']) ? (int) $body['corporation_id'] : null;
-        $allianceId = isset($body['alliance_id']) ? (int) $body['alliance_id'] : null;
+        // Fallback to the locally-mirrored affiliation when the ESI
+        // call didn't produce a corporation_id. Alliance is always
+        // allowed to be null (solo corp), so we only fall back when
+        // corp is missing.
+        if ($corpId === null) {
+            $local = Character::query()
+                ->where('character_id', $characterId)
+                ->first(['corporation_id', 'alliance_id']);
+
+            if ($local !== null && $local->corporation_id !== null) {
+                Log::info('character affiliation resolved from local fallback', [
+                    'character_id' => $characterId,
+                    'corporation_id' => $local->corporation_id,
+                    'alliance_id' => $local->alliance_id,
+                ]);
+                $corpId = (int) $local->corporation_id;
+                $allianceId = $local->alliance_id !== null
+                    ? (int) $local->alliance_id
+                    : null;
+            }
+        }
 
         return [
             'corporation_id' => $corpId,
