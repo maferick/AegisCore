@@ -83,9 +83,13 @@ final class CachedEsiClient implements EsiClientInterface
         );
     }
 
-    public function get(string $path, array $query = [], ?string $bearerToken = null): EsiResponse
-    {
-        $key = $this->payloadKey($path, $query, $bearerToken);
+    public function get(
+        string $path,
+        array $query = [],
+        ?string $bearerToken = null,
+        array $headers = [],
+    ): EsiResponse {
+        $key = $this->payloadKey($path, $query, $bearerToken, $headers);
         $entry = $this->loadEntry($key);
         $now = time();
 
@@ -98,7 +102,7 @@ final class CachedEsiClient implements EsiClientInterface
 
         // Stale or miss. Try single-flight so a burst of concurrent callers
         // coalesces into one upstream request.
-        $lock = $this->cache->lock(self::LOCK_PREFIX.$this->keyHash($path, $query, $bearerToken), 30);
+        $lock = $this->cache->lock(self::LOCK_PREFIX.$this->keyHash($path, $query, $bearerToken, $headers), 30);
         $acquired = false;
 
         try {
@@ -127,7 +131,7 @@ final class CachedEsiClient implements EsiClientInterface
         }
 
         try {
-            $response = $this->inner->get($path, $query, $bearerToken);
+            $response = $this->inner->get($path, $query, $bearerToken, $headers);
         } catch (EsiRateLimitException $e) {
             // Rate-limit throttles are the rate-limiter's job, not the
             // cache's. Never serve stale through a 429/420.
@@ -338,22 +342,29 @@ final class CachedEsiClient implements EsiClientInterface
 
     /**
      * @param  array<string, scalar|array<int, scalar>>  $query
+     * @param  array<string, string>  $headers
      */
-    private function payloadKey(string $path, array $query, ?string $bearerToken): string
+    private function payloadKey(string $path, array $query, ?string $bearerToken, array $headers = []): string
     {
-        return self::KEY_PREFIX.$this->keyHash($path, $query, $bearerToken);
+        return self::KEY_PREFIX.$this->keyHash($path, $query, $bearerToken, $headers);
     }
 
     /**
      * @param  array<string, scalar|array<int, scalar>>  $query
+     * @param  array<string, string>  $headers  Caller-supplied headers. Folded
+     *                                          into the key so a compat-date
+     *                                          bump doesn't serve a cached
+     *                                          body from the old shape.
      */
-    private function keyHash(string $path, array $query, ?string $bearerToken): string
+    private function keyHash(string $path, array $query, ?string $bearerToken, array $headers = []): string
     {
         ksort($query);
+        ksort($headers);
 
         return hash('sha256', implode('|', [
             $path,
             http_build_query($query),
+            http_build_query($headers),
             $this->authScopeHash($bearerToken),
         ]));
     }

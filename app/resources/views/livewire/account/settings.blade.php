@@ -142,7 +142,10 @@
                 <span class="mono">Contact_Manager</span> role on your
                 character. If you don't have it, the corp section just
                 stays empty and the alliance section fills in normally —
-                no action needed on your end.
+                no action needed on your end. If neither corp nor alliance
+                returns anything (solo NPC-corp, no alliance), we fall
+                back to your personal contacts so the battle report still
+                has something to work with.
             </p>
 
             @if ($market_token === null)
@@ -191,6 +194,7 @@
                                 <th>Type</th>
                                 <th>Standing</th>
                                 <th>Class</th>
+                                <th>Labels</th>
                                 <th>Last synced</th>
                             </tr>
                             </thead>
@@ -203,6 +207,7 @@
                                         'enemy' => 'bad',
                                         default => 'muted',
                                     };
+                                    $labels = $row->getAttribute('hydrated_labels') ?? [];
                                 @endphp
                                 <tr>
                                     <td>
@@ -212,6 +217,15 @@
                                     <td>{{ $row->contact_type }}</td>
                                     <td class="mono">{{ number_format((float) $row->standing, 1) }}</td>
                                     <td><span class="badge {{ $badgeClass }}">{{ $class }}</span></td>
+                                    <td>
+                                        @forelse ($labels as $label)
+                                            <span class="badge muted">
+                                                {{ $label['label_name'] ?? '#'.$label['label_id'] }}
+                                            </span>
+                                        @empty
+                                            <span class="subtitle">—</span>
+                                        @endforelse
+                                    </td>
                                     <td class="mono">{{ $row->synced_at?->diffForHumans() ?? 'never' }}</td>
                                 </tr>
                             @endforeach

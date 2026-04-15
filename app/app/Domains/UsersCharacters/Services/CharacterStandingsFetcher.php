@@ -6,6 +6,7 @@ namespace App\Domains\UsersCharacters\Services;
 
 use App\Domains\UsersCharacters\Models\Character;
 use App\Domains\UsersCharacters\Models\CharacterStanding;
+use App\Domains\UsersCharacters\Models\CharacterStandingLabel;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiException;
@@ -18,46 +19,59 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Sync corp + alliance standings for a donor, via their market token.
+ * Sync corp + alliance standings (with character-contacts fallback)
+ * for a donor, via their market token.
  *
  * Flow per invocation ({@see sync()}):
  *
  *   1. Refresh the donor's access token (row-locked via authorizer).
  *   2. Resolve the donor character's current affiliation:
- *        GET /characters/{id}/  →  corporation_id, alliance_id
+ *        GET /latest/characters/{id}/  →  corporation_id, alliance_id
  *      Mirror the result back into `characters` so the rest of the app
- *      stays consistent (Character::corporation_id / alliance_id are
- *      phase-2 "filled later by the affiliation poller" — this call
- *      is effectively that poller for the donor-self path).
+ *      stays consistent.
  *   3. If the token grants `esi-corporations.read_contacts.v1`, fetch
- *        GET /corporations/{corp_id}/contacts/?page=N
- *      paginated until empty. 403 is expected for line members (CCP
- *      requires Personnel_Manager or Contact_Manager role) — log at
- *      info and skip, not an error.
+ *        GET /corporations/{corp_id}/contacts + contacts/labels
+ *      on the new unversioned ESI (`esi.evetech.net`, no `/latest/`,
+ *      with `X-Compatibility-Date`). 403 is expected for line members
+ *      (CCP requires Personnel_Manager or Contact_Manager role) — log
+ *      at info, mark skipped, keep going.
  *   4. If the token grants `esi-alliances.read_contacts.v1` AND the
  *      character is in an alliance, fetch
- *        GET /alliances/{alliance_id}/contacts/?page=N
- *      similarly paginated. Any alliance member can read; missing
- *      alliance_id is also a skip (corp not in an alliance).
- *   5. Upsert rows into `character_standings` keyed by
- *      (owner_type, owner_id, contact_id). Stale rows that were in the
- *      contact list last sync but aren't now get pruned so the table
- *      never accumulates orphaned "ex-friends".
+ *        GET /alliances/{alliance_id}/contacts + contacts/labels.
+ *      Any alliance member can read.
+ *   5. Fallback: if BOTH corp and alliance came back empty/skipped, and
+ *      the token grants `esi-characters.read_contacts.v1`, fetch
+ *        GET /characters/{id}/contacts + contacts/labels
+ *      so a solo NPC-corp donor still gets *something* for the battle-
+ *      report downstream. Display still hides contact_type='character'.
+ *   6. Upsert into `character_standings` keyed by
+ *      (owner_type, owner_id, contact_id); prune stale rows.
+ *   7. Upsert into `character_standing_labels` keyed by
+ *      (owner_type, owner_id, label_id); prune stale rows.
+ *
+ * Why the legacy `/latest/` vs new unversioned split:
+ *
+ *   CCP is migrating from /latest/ (versioned endpoints) to
+ *   esi.evetech.net (unversioned + X-Compatibility-Date header). The
+ *   contacts endpoints are only present on the new path; /latest/
+ *   returns 404 for both corp and alliance contacts as of 2026-04.
+ *   Affiliation lookup still lives on /latest/ (stable shape, no
+ *   reason to migrate yet). When we audit every remaining /latest/
+ *   caller we'll flip `ESI_BASE_URL`; until then callers opt in
+ *   per-URL by passing a full URL.
  *
  * ESI pagination:
  *
- *   CCP returns `X-Pages` on the contacts endpoints, but EsiResponse
- *   doesn't surface response headers. We just walk pages until an
- *   empty body; capped at {@see self::MAX_PAGES} to prevent runaway.
- *   Typical alliance has ≤1 page (1000 contacts per page is plenty).
+ *   CCP returns `X-Pages`, but EsiResponse doesn't surface response
+ *   headers. We walk pages until an empty body; capped at
+ *   {@see self::MAX_PAGES} to prevent runaway.
  *
  * Idempotence:
  *
  *   Multiple donors in the same corp/alliance all sync the same list.
  *   The unique key ensures a single row per (owner, contact); the
  *   `source_character_id` + `synced_at` columns record the last
- *   writer. Running sync() twice for the same donor is a no-op
- *   (upsert with identical data).
+ *   writer. Running sync() twice for the same donor is a no-op.
  *
  * Return contract: the {@see StandingsSyncResult} DTO surfaces enough
  * detail for /account/settings to give the donor precise feedback —
@@ -67,7 +81,7 @@ use Throwable;
 final class CharacterStandingsFetcher
 {
     /**
-     * Upper bound on pages walked per (corp|alliance) contact list.
+     * Upper bound on pages walked per contact list.
      * 1000 per page × 20 = 20,000 contacts. No real EVE entity has
      * anywhere near that. Guard against a malformed X-Pages story
      * from CCP pinning us in a loop.
@@ -77,6 +91,8 @@ final class CharacterStandingsFetcher
     public const SCOPE_CORP_CONTACTS = 'esi-corporations.read_contacts.v1';
 
     public const SCOPE_ALLIANCE_CONTACTS = 'esi-alliances.read_contacts.v1';
+
+    public const SCOPE_CHARACTER_CONTACTS = 'esi-characters.read_contacts.v1';
 
     public function __construct(
         private readonly EsiClientInterface $esi,
@@ -132,7 +148,8 @@ final class CharacterStandingsFetcher
             accessToken: $accessToken,
             ownerType: CharacterStanding::OWNER_CORPORATION,
             ownerId: $corpId,
-            scopePath: "/corporations/{$corpId}/contacts/",
+            contactsPath: "/corporations/{$corpId}/contacts",
+            labelsPath: "/corporations/{$corpId}/contacts/labels",
             requiredScope: self::SCOPE_CORP_CONTACTS,
             result: $result,
         );
@@ -143,7 +160,8 @@ final class CharacterStandingsFetcher
                 accessToken: $accessToken,
                 ownerType: CharacterStanding::OWNER_ALLIANCE,
                 ownerId: $allianceId,
-                scopePath: "/alliances/{$allianceId}/contacts/",
+                contactsPath: "/alliances/{$allianceId}/contacts",
+                labelsPath: "/alliances/{$allianceId}/contacts/labels",
                 requiredScope: self::SCOPE_ALLIANCE_CONTACTS,
                 result: $result,
             );
@@ -154,10 +172,31 @@ final class CharacterStandingsFetcher
             );
         }
 
+        // Fallback path: if neither group-level source succeeded, try
+        // the donor's personal contact list. Better than a completely
+        // empty table for a solo NPC-corp donor.
+        $corpOk = $result->byOwner()[CharacterStanding::OWNER_CORPORATION]['status'] ?? null;
+        $allianceOk = $result->byOwner()[CharacterStanding::OWNER_ALLIANCE]['status'] ?? null;
+        $corpHasRows = ($result->byOwner()[CharacterStanding::OWNER_CORPORATION]['count'] ?? 0) > 0;
+        $allianceHasRows = ($result->byOwner()[CharacterStanding::OWNER_ALLIANCE]['count'] ?? 0) > 0;
+
+        if (! $corpHasRows && ! $allianceHasRows) {
+            $this->syncOwner(
+                token: $token,
+                accessToken: $accessToken,
+                ownerType: CharacterStanding::OWNER_CHARACTER,
+                ownerId: $token->character_id,
+                contactsPath: "/characters/{$token->character_id}/contacts",
+                labelsPath: "/characters/{$token->character_id}/contacts/labels",
+                requiredScope: self::SCOPE_CHARACTER_CONTACTS,
+                result: $result,
+            );
+        }
+
         // Resolve display names for any rows lacking one. Runs once
-        // per sync across both owners so a donor's corp + alliance
-        // contacts share a single names round-trip (cheaper + keeps
-        // the limiter happy).
+        // per sync across all owners so contacts shared across lists
+        // (same alliance appears in corp AND character contacts) get
+        // a single names round-trip.
         $this->resolveContactNames();
 
         return $result;
@@ -202,16 +241,23 @@ final class CharacterStandingsFetcher
     }
 
     /**
-     * Fetch paginated contacts for one owner (corp OR alliance), upsert
-     * them into `character_standings`, prune stale rows, record outcome
-     * on `$result`.
+     * Fetch contacts + labels for one owner on the new unversioned
+     * ESI, upsert everything into the standings + labels tables,
+     * prune stale rows, record outcome on `$result`.
+     *
+     * `$contactsPath` / `$labelsPath` are relative paths under the
+     * new-ESI base (e.g. `/alliances/123/contacts`). The fetcher
+     * resolves them into absolute URLs so the shared EsiClient's
+     * rate-limit + payload cache still applies, just against a
+     * different host.
      */
     private function syncOwner(
         EveMarketToken $token,
         string $accessToken,
         string $ownerType,
         int $ownerId,
-        string $scopePath,
+        string $contactsPath,
+        string $labelsPath,
         string $requiredScope,
         StandingsSyncResult $result,
     ): void {
@@ -227,13 +273,18 @@ final class CharacterStandingsFetcher
             return;
         }
 
+        $contactsUrl = $this->newEsiUrl($contactsPath);
+        $labelsUrl = $this->newEsiUrl($labelsPath);
+        $compatHeaders = ['X-Compatibility-Date' => $this->compatDate()];
+
         $rows = [];
         for ($page = 1; $page <= self::MAX_PAGES; $page++) {
             try {
                 $response = $this->esi->get(
-                    $scopePath,
+                    $contactsUrl,
                     query: ['page' => $page],
                     bearerToken: $accessToken,
+                    headers: $compatHeaders,
                 );
             } catch (EsiRateLimitException $e) {
                 // Partial sync is worse than no sync for a paginated
@@ -252,15 +303,20 @@ final class CharacterStandingsFetcher
 
                 return;
             } catch (EsiException $e) {
-                // 403 on /corporations/{id}/contacts/ is the common
-                // case — donor is a line member without Personnel_Manager
-                // / Contact_Manager role. Surface as a skip, not an
-                // error; /account/settings explains it.
-                $reason = $e->status === 403
-                    ? ($ownerType === CharacterStanding::OWNER_CORPORATION
-                        ? 'Character lacks Personnel_Manager or Contact_Manager role on this corp.'
-                        : 'Character is not permitted to read this alliance\'s contacts.')
-                    : "ESI returned HTTP {$e->status} fetching {$ownerType} contacts.";
+                // Map common statuses to human-readable skip reasons.
+                $reason = match (true) {
+                    $e->status === 403 && $ownerType === CharacterStanding::OWNER_CORPORATION
+                        => 'Character lacks Personnel_Manager or Contact_Manager role on this corp.',
+                    $e->status === 403
+                        => "Character is not permitted to read this {$ownerType}'s contacts.",
+                    // 404 is CCP's way of saying "this owner has no
+                    // contacts list" for some donors / NPC corps. Not
+                    // an error; mark an empty skip.
+                    $e->status === 404
+                        => "No {$ownerType} contact list published by CCP for this entity.",
+                    default
+                        => "ESI returned HTTP {$e->status} fetching {$ownerType} contacts.",
+                };
 
                 Log::info('standings sync owner fetch failed', [
                     'owner_type' => $ownerType,
@@ -323,7 +379,117 @@ final class CharacterStandingsFetcher
             rows: $rows,
         );
 
+        // Labels are best-effort — a failure here shouldn't unwind the
+        // standings upsert that just succeeded. If the fetch 404s or
+        // errors, we skip label storage for this owner and the UI
+        // falls back to rendering `#<label_id>` badges.
+        $this->syncOwnerLabels(
+            accessToken: $accessToken,
+            ownerType: $ownerType,
+            ownerId: $ownerId,
+            labelsUrl: $labelsUrl,
+            compatHeaders: $compatHeaders,
+        );
+
         $result->markSynced($ownerType, $count);
+    }
+
+    /**
+     * Fetch the `/contacts/labels` sibling endpoint for one owner and
+     * upsert/prune into `character_standing_labels`. Label endpoints
+     * aren't paginated in the CCP spec — one GET returns the full list.
+     *
+     * @param  array<string, string>  $compatHeaders
+     */
+    private function syncOwnerLabels(
+        string $accessToken,
+        string $ownerType,
+        int $ownerId,
+        string $labelsUrl,
+        array $compatHeaders,
+    ): void {
+        try {
+            $response = $this->esi->get(
+                $labelsUrl,
+                bearerToken: $accessToken,
+                headers: $compatHeaders,
+            );
+        } catch (EsiRateLimitException | EsiException $e) {
+            Log::info('standings label fetch failed (non-fatal)', [
+                'owner_type' => $ownerType,
+                'owner_id' => $ownerId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        $body = $response->body ?? [];
+        if (! is_array($body)) {
+            return;
+        }
+
+        $rows = [];
+        foreach ($body as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+            $labelId = isset($entry['label_id']) ? (int) $entry['label_id'] : 0;
+            $labelName = isset($entry['label_name']) ? (string) $entry['label_name'] : '';
+            if ($labelId === 0 || $labelName === '') {
+                continue;
+            }
+
+            $rows[] = [
+                'owner_type' => $ownerType,
+                'owner_id' => $ownerId,
+                'label_id' => $labelId,
+                'label_name' => mb_substr($labelName, 0, 100),
+            ];
+        }
+
+        $now = now();
+        DB::transaction(function () use ($ownerType, $ownerId, $rows, $now): void {
+            if ($rows !== []) {
+                $upsertRows = array_map(static function (array $row) use ($now): array {
+                    return array_merge($row, [
+                        'synced_at' => $now,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }, $rows);
+
+                CharacterStandingLabel::query()->upsert(
+                    values: $upsertRows,
+                    uniqueBy: ['owner_type', 'owner_id', 'label_id'],
+                    update: ['label_name', 'synced_at', 'updated_at'],
+                );
+            }
+
+            CharacterStandingLabel::query()
+                ->where('owner_type', $ownerType)
+                ->where('owner_id', $ownerId)
+                ->where('synced_at', '<', $now)
+                ->delete();
+        });
+    }
+
+    /**
+     * Build a fully-qualified new-ESI URL (esi.evetech.net, no
+     * `/latest/`). The shared EsiClient transparently passes absolute
+     * URLs through, so this is how we mix legacy + new-ESI calls in
+     * the same client instance.
+     */
+    private function newEsiUrl(string $path): string
+    {
+        $base = (string) config('eve.esi.new_base_url', 'https://esi.evetech.net');
+
+        return rtrim($base, '/').'/'.ltrim($path, '/');
+    }
+
+    private function compatDate(): string
+    {
+        return (string) config('eve.esi.compat_date', '2025-12-16');
     }
 
     /**

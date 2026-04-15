@@ -87,8 +87,12 @@ final class EsiClient implements EsiClientInterface
      *                               `rate_limit_max_wait_seconds`).
      * @throws EsiException on any other 4xx / 5xx
      */
-    public function get(string $path, array $query = [], ?string $bearerToken = null): EsiResponse
-    {
+    public function get(
+        string $path,
+        array $query = [],
+        ?string $bearerToken = null,
+        array $headers = [],
+    ): EsiResponse {
         $url = $this->resolveUrl($path);
 
         // Pre-flight: ask the limiter how long we should wait. If it's a
@@ -96,7 +100,10 @@ final class EsiClient implements EsiClientInterface
         // rate-limit exception so Horizon callers can `release($s)`.
         $this->awaitRateLimit($url);
 
-        $cacheKey = $this->cacheKeyFor($url, $query);
+        // Fold caller-supplied headers (e.g. X-Compatibility-Date) into
+        // the validator-cache key so a compat-date bump doesn't replay
+        // a stale 304/ETag from the old-shape response.
+        $cacheKey = $this->cacheKeyFor($url, $query, $headers);
         $validators = $this->loadValidators($cacheKey);
 
         $request = Http::withUserAgent($this->userAgent)
@@ -105,6 +112,14 @@ final class EsiClient implements EsiClientInterface
 
         if ($bearerToken !== null) {
             $request = $request->withToken($bearerToken);
+        }
+
+        // Caller-supplied headers go on first. Transport-reserved
+        // headers below overwrite any caller values — a caller can't
+        // accidentally break auth / conditional-GET / rate-limit
+        // semantics by passing them.
+        if ($headers !== []) {
+            $request = $request->withHeaders($this->filterReservedHeaders($headers));
         }
 
         $conditionalHeaders = [];
@@ -123,6 +138,34 @@ final class EsiClient implements EsiClientInterface
         $this->logRateLimit($url, $response);
 
         return $this->handleResponse($url, $cacheKey, $response);
+    }
+
+    /**
+     * Drop headers the transport owns so a caller can't break
+     * conditional-GET, auth, or rate-limit semantics by passing them.
+     * Case-insensitive match.
+     *
+     * @param  array<string, string>  $headers
+     * @return array<string, string>
+     */
+    private function filterReservedHeaders(array $headers): array
+    {
+        static $reserved = [
+            'authorization',
+            'if-none-match',
+            'if-modified-since',
+            'user-agent',
+            'accept',
+        ];
+
+        $out = [];
+        foreach ($headers as $name => $value) {
+            if (! in_array(strtolower($name), $reserved, true)) {
+                $out[$name] = $value;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -285,13 +328,22 @@ final class EsiClient implements EsiClientInterface
 
     /**
      * @param  array<string, scalar|array<int, scalar>>  $query
+     * @param  array<string, string>  $headers  Caller-supplied headers
+     *                                          (excluding auth/conditional —
+     *                                          those have their own handling)
      */
-    private function cacheKeyFor(string $url, array $query): string
+    private function cacheKeyFor(string $url, array $query, array $headers = []): string
     {
         // Include the query in the key — same path with different query
         // params is a different cacheable resource from ESI's perspective.
+        // Headers too: X-Compatibility-Date changes the response shape, so
+        // a validator learned under date A mustn't short-circuit a fetch
+        // under date B.
         ksort($query);
-        $canonical = $url.'?'.http_build_query($query);
+        $normalisedHeaders = $this->filterReservedHeaders($headers);
+        ksort($normalisedHeaders);
+
+        $canonical = $url.'?'.http_build_query($query).'|h='.http_build_query($normalisedHeaders);
 
         return 'esi:cond:'.hash('sha256', $canonical);
     }
