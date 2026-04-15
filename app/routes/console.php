@@ -102,3 +102,34 @@ Schedule::command('eve:sync-standings')
     ->onOneServer()
     ->withoutOverlapping(30)
     ->name('eve-sync-standings');
+
+// Daily corporation affiliation sweep. Pulls current alliance + full
+// alliance history from ESI for every corp that might show up as a
+// classification target — corps appearing in character_standings,
+// linked characters, coalition_entity_labels, or viewer_contexts.
+//
+// Populates `corporation_affiliation_profiles` so the resolver's step
+// 5 (current-alliance inheritance) and step 6 (previous-alliance
+// history) can actually fire. Without this sweep those steps silently
+// skip and the resolver falls through to fallback on every corporation
+// target that isn't directly tagged with a coalition label.
+//
+// Cadence: daily at 04:30 UTC — 30 minutes after the standings sync
+// so the two don't stack. Corp alliance moves happen on day-scale
+// human timeframes, so daily keeps the table within one business-EVE
+// cycle of live. On-demand refresh: `php artisan
+// classification:sync-corp-affiliations --sync`.
+//
+// Only stale rows actually hit ESI (staleness window is
+// `classification.corp_affiliation_staleness_hours`, default 24h), so
+// a second tick in the same day is a near-no-op: the query planner
+// filters everything out before the ESI client even gets a path.
+//
+// See App\Domains\UsersCharacters\Jobs\SyncCorporationAffiliations for
+// the "which corps to sync" union and the per-corp failure isolation.
+Schedule::command('classification:sync-corp-affiliations')
+    ->dailyAt('04:30')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('classification-sync-corp-affiliations');
