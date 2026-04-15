@@ -341,11 +341,15 @@ final class ViewerEntityClassificationResolverService
         int $step,
         ?string $reasonPrefix = null,
     ): ?array {
+        // Column names here must be fully qualified — `is_active`,
+        // `entity_type`, `entity_id`, and `bloc_id` all exist on more
+        // than one of the joined tables, so an unqualified reference
+        // is ambiguous on every strict-SQL engine (MariaDB, SQLite).
         $labels = CoalitionEntityLabel::query()
-            ->where('entity_type', $targetEntityType)
-            ->where('entity_id', $targetEntityId)
-            ->where('is_active', true)
-            ->whereNotNull('bloc_id')
+            ->where('coalition_entity_labels.entity_type', $targetEntityType)
+            ->where('coalition_entity_labels.entity_id', $targetEntityId)
+            ->where('coalition_entity_labels.is_active', true)
+            ->whereNotNull('coalition_entity_labels.bloc_id')
             ->leftJoin('coalition_relationship_types', 'coalition_entity_labels.relationship_type_id', '=', 'coalition_relationship_types.id')
             ->leftJoin('coalition_blocs', 'coalition_entity_labels.bloc_id', '=', 'coalition_blocs.id')
             ->orderByRaw('CASE WHEN coalition_relationship_types.display_order IS NULL THEN 9999 ELSE coalition_relationship_types.display_order END')
