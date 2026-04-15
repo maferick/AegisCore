@@ -1,10 +1,13 @@
 {{--
     Livewire component view for /account/settings.
 
-    Three sections:
+    Sections:
       1. Identity (read-only).
-      2. Market data authorisation (donor-gated) — CTA + token status.
-      3. Watched structures (donor-gated) — search + add + remove.
+      2. Coalition affiliation (Phase-1 classification onboarding) —
+         inferred bloc with confirm / change / re-infer actions.
+      3. Market data authorisation (donor-gated) — CTA + token status.
+      4. Corp / alliance standings (donor-gated) — sync + grouped view.
+      5. Watched structures (donor-gated) — search + add + remove.
 
     The search form uses wire:submit.prevent; add/remove buttons use
     wire:click. wire:loading.attr=disabled prevents double-click
@@ -21,6 +24,8 @@
     /** @var \Illuminate\Support\Collection $watched_structures */
     /** @var array<string, array{owner_id: int, rows: \Illuminate\Support\Collection}> $standings_by_owner */
     /** @var list<string> $standings_token_missing_scopes */
+    /** @var array<string, mixed>|null $viewer_bloc_state */
+    /** @var \Illuminate\Support\Collection $coalition_blocs */
 @endphp
 <div>
     {{-- ---------- Status flashes (wire-reactive) ---------- --}}
@@ -55,6 +60,110 @@
             </div>
         </div>
     </section>
+
+    {{-- ---------- Coalition affiliation ---------- --}}
+    {{--
+        Phase 1 of the donor-facing classification system. Surfaces the
+        ViewerContext row's bloc state — inferred, confirmed, or needing
+        manual pick — with three actions: confirm, pick, re-infer.
+
+        Visible to anyone with a linked character; not donor-gated
+        because bloc affiliation is the universal lens the classifier
+        uses, and donors-to-be should be able to sanity-check it before
+        subscribing. Downstream classification surfaces *are* donor-
+        gated (elsewhere).
+    --}}
+    @if ($viewer_bloc_state !== null)
+        <section class="card">
+            <h2>Coalition affiliation</h2>
+            <p class="subtitle" style="margin-bottom: 1rem;">
+                Which coalition your character is looking at the universe
+                from. Drives the friendly / hostile / neutral tagging
+                across the rest of the platform — when we say "friendly
+                to you", we mean friendly <em>to this bloc</em>.
+                Individual overrides come later; this is the starting
+                lens.
+            </p>
+
+            @php
+                $vbs = $viewer_bloc_state;
+                $vbsBloc = $vbs['bloc'];
+                $isConfirmed = (bool) $vbs['is_confirmed'];
+                $confidence = $vbs['confidence_band'];
+            @endphp
+
+            <div class="kv" style="margin-bottom: 1rem;">
+                <div class="kv-label">Character</div>
+                <div class="mono">
+                    {{ $vbs['character']->name }}
+                    <span class="badge muted">#{{ $vbs['character']->character_id }}</span>
+                </div>
+
+                <div class="kv-label">Current bloc</div>
+                <div>
+                    @if ($vbsBloc !== null && $isConfirmed)
+                        <span class="badge ok">{{ $vbsBloc->display_name }}</span>
+                        <span class="subtitle" style="margin-left: 0.5rem;">confirmed</span>
+                    @elseif ($vbsBloc !== null && ! $isConfirmed)
+                        <span class="badge warn">suggested: {{ $vbsBloc->display_name }}</span>
+                        @if ($confidence)
+                            <span class="subtitle" style="margin-left: 0.5rem;">
+                                confidence: {{ $confidence }}
+                            </span>
+                        @endif
+                    @else
+                        <span class="badge muted">not set</span>
+                        <span class="subtitle" style="margin-left: 0.5rem;">
+                            no coalition labels found for your alliance or corporation — pick one below
+                        </span>
+                    @endif
+                </div>
+            </div>
+
+            @if ($vbsBloc !== null && ! $isConfirmed)
+                <div style="margin-bottom: 1rem;">
+                    <button class="btn"
+                            type="button"
+                            wire:click="confirmViewerBloc"
+                            wire:loading.attr="disabled"
+                            wire:target="confirmViewerBloc">
+                        Confirm {{ $vbsBloc->display_name }}
+                    </button>
+                </div>
+            @endif
+
+            <div class="kv" style="margin-bottom: 1rem;">
+                <div class="kv-label">Change bloc</div>
+                <div>
+                    @foreach ($coalition_blocs as $b)
+                        <button class="btn secondary"
+                                type="button"
+                                style="margin: 0 0.25rem 0.25rem 0;"
+                                wire:click="setViewerBloc({{ $b->id }})"
+                                wire:loading.attr="disabled"
+                                wire:target="setViewerBloc">
+                            {{ $b->display_name }}
+                        </button>
+                    @endforeach
+                </div>
+
+                <div class="kv-label">Re-run inference</div>
+                <div>
+                    <button class="btn secondary"
+                            type="button"
+                            wire:click="reinferViewerBloc"
+                            wire:loading.attr="disabled"
+                            wire:target="reinferViewerBloc">
+                        <span wire:loading.remove wire:target="reinferViewerBloc">Re-infer from labels</span>
+                        <span wire:loading wire:target="reinferViewerBloc">Re-inferring…</span>
+                    </button>
+                    <span class="subtitle" style="margin-left: 0.5rem;">
+                        Use if coalition labels were updated recently.
+                    </span>
+                </div>
+            </div>
+        </section>
+    @endif
 
     @if ($has_market_access)
         {{-- ---------- Market data access ---------- --}}
