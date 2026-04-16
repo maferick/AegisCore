@@ -48,13 +48,35 @@ class EsiNameResolver
     ) {}
 
     /**
+     * Sentinel category for IDs CCP refuses to resolve (deleted
+     * characters, disbanded corps, etc). Tombstoning them in the
+     * cache table prevents repeated bisection work — once we
+     * confirm an ID is unresolvable, we mark it and skip forever.
+     * Consumers that display names already tolerate missing names;
+     * this sentinel is specifically for the resolver's own
+     * "is it cached?" check.
+     */
+    public const CATEGORY_UNRESOLVED = 'unresolved';
+
+    /**
      * Resolve one or more CCP entity IDs to names.
      *
      * @param  array<int, int>  $ids  CCP entity IDs to resolve.
      * @param  bool  $forceRefresh  Bypass the cache and always call ESI.
+     * @param  array<int, int>|null  $characterIds  Optional subset of
+     *     $ids that the caller knows are character IDs. When
+     *     provided, we pre-filter them through POST
+     *     /characters/affiliation/ — that endpoint silently drops
+     *     invalid character IDs instead of 404'ing the whole batch
+     *     (unlike /universe/names/). Characters removed by the
+     *     affiliation filter get tombstoned so we never retry them.
+     *     The surviving character IDs + the remaining non-character
+     *     IDs go to /universe/names/ for actual name resolution.
+     *     Dramatically reduces 404 cascades when backfilling against
+     *     killmails full of biomassed or deleted characters.
      * @return array<int, array{name: string, category: string}>  Keyed by entity ID.
      */
-    public function resolve(array $ids, bool $forceRefresh = false): array
+    public function resolve(array $ids, bool $forceRefresh = false, ?array $characterIds = null): array
     {
         $ids = array_values(array_unique(array_filter($ids, fn ($id) => $id > 0)));
 
@@ -67,27 +89,51 @@ class EsiNameResolver
 
         // 1. Check DB cache (unless force refresh). No TTL filter —
         // entity names are immutable for enrichment purposes.
+        // Tombstoned (category='unresolved') rows count as cached: we
+        // remove them from $result before returning (callers don't
+        // want to render "unresolved" strings) but we keep them out
+        // of $missing so we don't repeat the ESI round-trip.
         if (! $forceRefresh) {
             $cached = EsiEntityName::query()
                 ->whereIn('entity_id', $ids)
                 ->get();
 
             foreach ($cached as $row) {
-                $result[$row->entity_id] = [
-                    'name' => $row->name,
-                    'category' => $row->category,
-                ];
+                if ($row->category !== self::CATEGORY_UNRESOLVED) {
+                    $result[$row->entity_id] = [
+                        'name' => $row->name,
+                        'category' => $row->category,
+                    ];
+                }
             }
 
-            $cachedIds = array_keys($result);
+            $cachedIds = $cached->pluck('entity_id')->all();
             $missing = array_values(array_diff($ids, $cachedIds));
         }
 
-        // 2. Batch-resolve missing IDs via ESI.
+        // 2. Pre-filter character IDs through /characters/affiliation/
+        //    so /universe/names/ never sees a deleted character and
+        //    404s the whole batch. IDs the caller labelled as
+        //    characters but aren't in the affiliation response are
+        //    tombstoned — they're deleted and will never resolve.
+        if ($missing !== [] && $characterIds !== null) {
+            $pendingChars = array_values(array_intersect($missing, $characterIds));
+            if ($pendingChars !== []) {
+                $valid = $this->filterValidCharacters($pendingChars);
+                $invalid = array_values(array_diff($pendingChars, $valid));
+
+                if ($invalid !== []) {
+                    $this->tombstoneIds($invalid);
+                    $missing = array_values(array_diff($missing, $invalid));
+                }
+            }
+        }
+
+        // 3. Batch-resolve remaining missing IDs via ESI.
         if ($missing !== []) {
             $fresh = $this->fetchFromEsi($missing);
 
-            // 3. Upsert into cache table.
+            // 4. Upsert into cache table.
             if ($fresh !== []) {
                 $this->upsertCache($fresh);
             }
@@ -107,6 +153,103 @@ class EsiNameResolver
         }
 
         return $result;
+    }
+
+    /**
+     * Call POST /characters/affiliation/ and return the subset of
+     * input IDs that CCP still recognises as live characters.
+     *
+     * The endpoint tolerates non-character and invalid IDs silently —
+     * it just omits them from the response, never 404s. That's the
+     * property we need. Max 1000 IDs per call per CCP docs; we chunk
+     * to be safe.
+     *
+     * @param  array<int, int>  $ids
+     * @return list<int>
+     */
+    private function filterValidCharacters(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $valid = [];
+        foreach (array_chunk($ids, self::ESI_BATCH_LIMIT) as $chunk) {
+            try {
+                $response = $this->esiClient->post(
+                    '/characters/affiliation/',
+                    array_values($chunk),
+                );
+
+                $body = $response->body;
+                if (is_array($body)) {
+                    foreach ($body as $row) {
+                        $id = (int) ($row['character_id'] ?? 0);
+                        if ($id > 0) {
+                            $valid[] = $id;
+                        }
+                    }
+                }
+            } catch (EsiRateLimitException $e) {
+                Log::warning('ESI /characters/affiliation/ rate limited', [
+                    'chunk_size' => count($chunk),
+                    'retry_after' => $e->retryAfter,
+                ]);
+                // Conservative: on rate-limit, assume every input is
+                // still valid so we don't tombstone real characters.
+                // They'll be validated on the next run.
+                $valid = array_merge($valid, array_values($chunk));
+                break;
+            } catch (\Throwable $e) {
+                Log::warning('ESI /characters/affiliation/ failed', [
+                    'chunk_size' => count($chunk),
+                    'error' => $e->getMessage(),
+                ]);
+                // Same conservative behaviour on any other failure:
+                // keep the chunk live rather than mass-tombstoning.
+                $valid = array_merge($valid, array_values($chunk));
+            }
+        }
+
+        return array_values(array_unique($valid));
+    }
+
+    /**
+     * Write tombstone rows for IDs CCP refuses to resolve. Tombstone
+     * consumers see them as cached and skip them forever, which
+     * eliminates the worst-case bisection loop where the same dead
+     * IDs re-enter the resolver on every pass.
+     *
+     * @param  array<int, int>  $ids
+     */
+    private function tombstoneIds(array $ids): void
+    {
+        if ($ids === []) {
+            return;
+        }
+
+        $now = Carbon::now();
+        $rows = [];
+        foreach (array_unique($ids) as $id) {
+            if ($id > 0) {
+                $rows[] = [
+                    'entity_id' => (int) $id,
+                    'name' => '',
+                    'category' => self::CATEGORY_UNRESOLVED,
+                    'cached_at' => $now,
+                ];
+            }
+        }
+
+        if ($rows === []) {
+            return;
+        }
+
+        DB::table('esi_entity_names')->upsert(
+            $rows,
+            ['entity_id'],
+            ['name', 'category', 'cached_at'],
+        );
     }
 
     /**
@@ -188,6 +331,14 @@ class EsiNameResolver
                     continue;
                 }
 
+                // Single-ID 404 at the outer loop (caller passed a
+                // tiny batch) — tombstone so we never try it again.
+                if ($is404 && count($chunk) === 1) {
+                    $this->tombstoneIds(array_values($chunk));
+
+                    continue;
+                }
+
                 Log::warning('ESI /universe/names/ failed', [
                     'chunk_size' => count($chunk),
                     'error' => $message,
@@ -217,6 +368,10 @@ class EsiNameResolver
                 return is_array($body) ? $body : [];
             } catch (\Throwable) {
                 // Single unresolvable ID — CCP has no record of it.
+                // Tombstone so we don't bisect into this ID again on
+                // the next pass.
+                $this->tombstoneIds($chunk);
+
                 return [];
             }
         }
@@ -234,11 +389,17 @@ class EsiNameResolver
                     array_push($out, ...$body);
                 }
             } catch (\Throwable $e) {
-                if (count($part) > 1 && str_contains($e->getMessage(), 'HTTP 404')) {
+                $is404 = str_contains($e->getMessage(), 'HTTP 404');
+                if ($is404 && count($part) > 1) {
                     $out = array_merge($out, $this->bisectRetry($part));
+                } elseif ($is404 && count($part) === 1) {
+                    // Isolated bad ID inside a bisecting branch —
+                    // tombstone so the next pass doesn't re-bisect
+                    // into it.
+                    $this->tombstoneIds($part);
                 }
-                // Non-404 or single-ID failure: drop silently, bad IDs
-                // should not poison the rest of the batch.
+                // Non-404 failure: drop silently; transient ESI
+                // issues should not poison the rest of the batch.
             }
         }
 

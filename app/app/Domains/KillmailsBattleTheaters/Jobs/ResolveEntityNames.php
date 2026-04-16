@@ -108,12 +108,20 @@ final class ResolveEntityNames implements ShouldQueue
             $lastId = (int) $killmails->last()->killmail_id;
             $killmailIds = $killmails->pluck('killmail_id')->all();
 
-            // Collect participant IDs (victims + attackers).
-            $entityIds = [];
+            // Collect participant IDs bucketed by category. We keep
+            // the character bucket separate so the resolver can
+            // pre-filter it through /characters/affiliation/ (which
+            // tolerates deleted characters) instead of 404'ing the
+            // whole /universe/names/ batch on a single biomassed pilot.
+            $characterIds = [];
+            $otherIds = [];
             foreach ($killmails as $km) {
-                foreach (['victim_character_id', 'victim_corporation_id', 'victim_alliance_id'] as $col) {
+                if ($km->victim_character_id) {
+                    $characterIds[] = (int) $km->victim_character_id;
+                }
+                foreach (['victim_corporation_id', 'victim_alliance_id'] as $col) {
                     if ($km->$col) {
-                        $entityIds[] = (int) $km->$col;
+                        $otherIds[] = (int) $km->$col;
                     }
                 }
             }
@@ -124,14 +132,19 @@ final class ResolveEntityNames implements ShouldQueue
                 ->get();
 
             foreach ($attackers as $att) {
-                foreach (['character_id', 'corporation_id', 'alliance_id', 'faction_id'] as $col) {
+                if ($att->character_id) {
+                    $characterIds[] = (int) $att->character_id;
+                }
+                foreach (['corporation_id', 'alliance_id', 'faction_id'] as $col) {
                     if ($att->$col) {
-                        $entityIds[] = (int) $att->$col;
+                        $otherIds[] = (int) $att->$col;
                     }
                 }
             }
 
-            $uniqueIds = array_values(array_unique(array_filter($entityIds, fn (int $id) => $id > 0)));
+            $characterIds = array_values(array_unique(array_filter($characterIds, fn (int $id) => $id > 0)));
+            $otherIds = array_values(array_unique(array_filter($otherIds, fn (int $id) => $id > 0)));
+            $uniqueIds = array_values(array_unique(array_merge($characterIds, $otherIds)));
 
             if ($uniqueIds !== []) {
                 $cached = DB::table('esi_entity_names')
@@ -149,7 +162,11 @@ final class ResolveEntityNames implements ShouldQueue
                 $totalAlreadyCached += $cached->count();
 
                 if ($uncached !== []) {
-                    $resolved = $resolver->resolve($uncached);
+                    // Re-derive the character subset of the uncached
+                    // IDs so the resolver can route them through
+                    // /characters/affiliation/ for pre-validation.
+                    $uncachedChars = array_values(array_intersect($uncached, $characterIds));
+                    $resolved = $resolver->resolve($uncached, characterIds: $uncachedChars);
                     $totalResolved += count($resolved);
                 }
             }
