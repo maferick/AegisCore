@@ -39,7 +39,7 @@
     @endif
 
     {{-- ---------- Identity ---------- --}}
-    <section class="card">
+    <section class="card" id="identity">
         <h2>Identity</h2>
         <div class="kv">
             <div class="kv-label">Account email</div>
@@ -64,6 +64,7 @@
     </section>
 
     {{-- ---------- Coalition affiliation ---------- --}}
+    <div id="coalition"></div>
     {{--
         Phase 1 of the donor-facing classification system. Surfaces the
         ViewerContext row's bloc state — inferred, confirmed, or needing
@@ -334,6 +335,7 @@
         @endif
     @endif
 
+    <div id="market"></div>
     @if ($has_market_access)
         {{-- ---------- Market data access ---------- --}}
         {{-- Visible to both donors (paid access) and admins (operator
@@ -395,6 +397,7 @@
             @endif
         </section>
 
+        <div id="standings"></div>
         {{-- ---------- Corp / alliance standings ---------- --}}
         {{--
             Standings are OWNED by the corp/alliance (not by an individual
@@ -542,7 +545,7 @@
         </section>
 
         {{-- ---------- Watched structures ---------- --}}
-        <section class="card">
+        <section class="card" id="structures">
             <h2>Watched structures</h2>
             <p class="subtitle" style="margin-bottom: 1rem;">
                 Structures your authorised character is currently polling for

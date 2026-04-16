@@ -82,6 +82,62 @@
             letter-spacing: 0.08em;
         }
 
+        /* ---------- Side navigation ---------- */
+        .page-layout {
+            display: flex;
+            gap: 0;
+            flex: 1;
+        }
+        .side-nav {
+            width: 220px;
+            flex-shrink: 0;
+            padding: 1.5rem 1rem;
+            border-right: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .side-nav-label {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--muted);
+            margin-bottom: 0.5rem;
+            padding-left: 0.75rem;
+        }
+        .side-nav a {
+            display: block;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.78rem;
+            color: var(--text);
+            text-decoration: none;
+            transition: background 0.15s, color 0.15s;
+        }
+        .side-nav a:hover {
+            background: rgba(79, 208, 208, 0.08);
+            color: var(--accent);
+        }
+        .side-nav a.nav-active {
+            background: rgba(79, 208, 208, 0.12);
+            color: var(--accent);
+        }
+        .side-nav-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 0.75rem 0;
+        }
+        .page-content {
+            flex: 1;
+            min-width: 0;
+        }
+        @media (max-width: 768px) {
+            .side-nav { display: none; }
+        }
+
         main {
             flex: 1;
             max-width: 1100px;
@@ -326,9 +382,23 @@
     </form>
 </header>
 
-<main>
-    <h1>Account settings</h1>
-    <p class="subtitle">Signed in as <strong>{{ auth()->user()->name ?? '(unknown)' }}</strong></p>
+<div class="page-layout">
+    <nav class="side-nav" aria-label="Account navigation">
+        <div class="side-nav-label">Navigate</div>
+        <a href="/">Home</a>
+        <a href="/portal">My Character</a>
+        <div class="side-nav-divider"></div>
+        <div class="side-nav-label">Account</div>
+        <a href="#identity">Identity</a>
+        <a href="#coalition">Coalition</a>
+        <a href="#market">Market Data</a>
+        <a href="#standings">Standings</a>
+        <a href="#structures">Structures</a>
+    </nav>
+
+    <main class="page-content">
+        <h1>Account settings</h1>
+        <p class="subtitle">Signed in as <strong>{{ auth()->user()->name ?? '(unknown)' }}</strong></p>
 
     {{-- Flash messages from server-side redirects (SSO callback etc.)
          come in via `session()->flash(...)`. Livewire-local statuses
@@ -341,7 +411,8 @@
     @endif
 
     @livewire('account.settings')
-</main>
+    </main>
+</div>{{-- /.page-layout --}}
 @livewireScripts
 </body>
 </html>
