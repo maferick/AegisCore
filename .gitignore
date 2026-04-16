@@ -19,3 +19,6 @@ vendor/
 # never commit container state or TLS material
 docker/
 nginx/certs/
+
+# caveman compress backups
+*.original.md
