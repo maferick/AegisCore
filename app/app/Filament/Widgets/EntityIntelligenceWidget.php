@@ -6,6 +6,7 @@ namespace App\Filament\Widgets;
 
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -14,6 +15,10 @@ use Illuminate\Support\Facades\DB;
  * Shows how many unique characters, corporations, and alliances have
  * been observed through killmail ingestion, and how many have been
  * name-resolved in the shared entity cache.
+ *
+ * The unique entity counts are expensive (COUNT DISTINCT across millions
+ * of rows), so they're cached for 5 minutes. The name cache counts are
+ * cheap and run live.
  */
 class EntityIntelligenceWidget extends StatsOverviewWidget
 {
@@ -22,6 +27,9 @@ class EntityIntelligenceWidget extends StatsOverviewWidget
     protected ?string $description = 'Characters, corps, and alliances observed from killmails.';
 
     protected static ?int $sort = 6;
+
+    /** Cache TTL in seconds for the expensive unique-entity counts. */
+    private const CACHE_TTL = 300;
 
     protected function getStats(): array
     {
@@ -36,42 +44,47 @@ class EntityIntelligenceWidget extends StatsOverviewWidget
             ];
         }
 
-        // Unique entities from killmails (victims + attackers combined).
-        // Using UNION to deduplicate across victim and attacker roles.
-        $uniqueCharacters = (int) DB::selectOne("
-            SELECT COUNT(DISTINCT cid) as cnt FROM (
-                SELECT victim_character_id as cid FROM killmails WHERE victim_character_id IS NOT NULL
-                UNION ALL
-                SELECT character_id FROM killmail_attackers WHERE character_id IS NOT NULL
-            ) t
-        ")->cnt;
+        // Expensive counts — cached for 5 minutes.
+        $entityCounts = Cache::remember('widget:entity_intelligence:counts', self::CACHE_TTL, function () {
+            return [
+                'characters' => (int) DB::selectOne("
+                    SELECT COUNT(DISTINCT cid) as cnt FROM (
+                        SELECT victim_character_id as cid FROM killmails WHERE victim_character_id IS NOT NULL
+                        UNION ALL
+                        SELECT character_id FROM killmail_attackers WHERE character_id IS NOT NULL
+                    ) t
+                ")->cnt,
+                'corporations' => (int) DB::selectOne("
+                    SELECT COUNT(DISTINCT cid) as cnt FROM (
+                        SELECT victim_corporation_id as cid FROM killmails WHERE victim_corporation_id IS NOT NULL
+                        UNION ALL
+                        SELECT corporation_id FROM killmail_attackers WHERE corporation_id IS NOT NULL
+                    ) t
+                ")->cnt,
+                'alliances' => (int) DB::selectOne("
+                    SELECT COUNT(DISTINCT cid) as cnt FROM (
+                        SELECT victim_alliance_id as cid FROM killmails WHERE victim_alliance_id IS NOT NULL
+                        UNION ALL
+                        SELECT alliance_id FROM killmail_attackers WHERE alliance_id IS NOT NULL
+                    ) t
+                ")->cnt,
+            ];
+        });
 
-        $uniqueCorps = (int) DB::selectOne("
-            SELECT COUNT(DISTINCT cid) as cnt FROM (
-                SELECT victim_corporation_id as cid FROM killmails WHERE victim_corporation_id IS NOT NULL
-                UNION ALL
-                SELECT corporation_id FROM killmail_attackers WHERE corporation_id IS NOT NULL
-            ) t
-        ")->cnt;
+        $uniqueCharacters = $entityCounts['characters'];
+        $uniqueCorps = $entityCounts['corporations'];
+        $uniqueAlliances = $entityCounts['alliances'];
 
-        $uniqueAlliances = (int) DB::selectOne("
-            SELECT COUNT(DISTINCT cid) as cnt FROM (
-                SELECT victim_alliance_id as cid FROM killmails WHERE victim_alliance_id IS NOT NULL
-                UNION ALL
-                SELECT alliance_id FROM killmail_attackers WHERE alliance_id IS NOT NULL
-            ) t
-        ")->cnt;
-
-        // Name resolution coverage from the shared cache.
+        // Name cache counts — cheap, run live.
         $namesByCategory = DB::table('esi_entity_names')
-            ->selectRaw("category, COUNT(*) as cnt")
+            ->selectRaw('category, COUNT(*) as cnt')
             ->groupBy('category')
             ->pluck('cnt', 'category');
 
         $namedChars = (int) ($namesByCategory['character'] ?? 0);
         $namedCorps = (int) ($namesByCategory['corporation'] ?? 0);
         $namedAlliances = (int) ($namesByCategory['alliance'] ?? 0);
-        $totalNamed = (int) DB::table('esi_entity_names')->count();
+        $totalNamed = (int) array_sum($namesByCategory->all());
 
         $charPct = $uniqueCharacters > 0 ? round(($namedChars / $uniqueCharacters) * 100, 1) : 0;
         $corpPct = $uniqueCorps > 0 ? round(($namedCorps / $uniqueCorps) * 100, 1) : 0;
