@@ -4,53 +4,45 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Widgets;
 
-use Filament\Widgets\StatsOverviewWidget;
-use Filament\Widgets\StatsOverviewWidget\Stat;
+use Filament\Widgets\Widget;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Portal dashboard widget: the logged-in user's character at a glance.
+ * Portal dashboard widget: character card with portrait, corp/alliance
+ * logos, and combat stats.
  */
-class MyCharacterWidget extends StatsOverviewWidget
+class MyCharacterWidget extends Widget
 {
-    protected ?string $heading = 'My Character';
+    protected static string $view = 'filament.portal.widgets.my-character';
 
     protected static ?int $sort = 1;
 
-    protected function getStats(): array
+    protected int|string|array $columnSpan = 'full';
+
+    protected function getViewData(): array
     {
         $user = auth()->user();
         $character = $user?->characters()->first();
 
         if (! $character) {
-            return [
-                Stat::make('Character', 'Not linked')
-                    ->description('Link an EVE character via SSO')
-                    ->color('gray')
-                    ->icon('heroicon-o-user'),
-            ];
+            return ['character' => null];
         }
 
         $charId = $character->character_id;
-        $charName = $character->name;
 
-        // Count killmails where this character was the victim.
-        $deaths = (int) DB::table('killmails')
-            ->where('victim_character_id', $charId)
-            ->count();
-
-        // Count killmails where this character was an attacker.
         $kills = (int) DB::table('killmail_attackers')
             ->where('character_id', $charId)
             ->count();
 
-        // Total ISK lost (as victim).
+        $deaths = (int) DB::table('killmails')
+            ->where('victim_character_id', $charId)
+            ->count();
+
         $iskLost = (float) DB::table('killmails')
             ->where('victim_character_id', $charId)
             ->whereNotNull('enriched_at')
             ->sum('total_value');
 
-        // Corp + alliance from the character record.
         $corpName = null;
         $allianceName = null;
 
@@ -65,41 +57,13 @@ class MyCharacterWidget extends StatsOverviewWidget
                 ->value('name');
         }
 
-        $affiliation = $corpName ?? 'Unknown corp';
-        if ($allianceName) {
-            $affiliation .= " / {$allianceName}";
-        }
-
         return [
-            Stat::make($charName, $affiliation)
-                ->description('Character #'.$charId)
-                ->color('primary')
-                ->icon('heroicon-o-user'),
-
-            Stat::make('Kills', number_format($kills))
-                ->description('As attacker')
-                ->color($kills > 0 ? 'success' : 'gray')
-                ->icon('heroicon-o-bolt'),
-
-            Stat::make('Deaths', number_format($deaths))
-                ->description(self::formatIsk($iskLost).' ISK lost')
-                ->color($deaths > 0 ? 'danger' : 'gray')
-                ->icon('heroicon-o-x-circle'),
+            'character' => $character,
+            'corpName' => $corpName,
+            'allianceName' => $allianceName,
+            'kills' => $kills,
+            'deaths' => $deaths,
+            'iskLost' => $iskLost,
         ];
-    }
-
-    private static function formatIsk(float $isk): string
-    {
-        if ($isk >= 1_000_000_000_000) {
-            return number_format($isk / 1_000_000_000_000, 1).'T';
-        }
-        if ($isk >= 1_000_000_000) {
-            return number_format($isk / 1_000_000_000, 1).'B';
-        }
-        if ($isk >= 1_000_000) {
-            return number_format($isk / 1_000_000, 1).'M';
-        }
-
-        return number_format($isk, 0);
     }
 }

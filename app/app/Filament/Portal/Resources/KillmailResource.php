@@ -9,6 +9,9 @@ use App\Filament\Portal\Resources\KillmailResource\Pages;
 use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
+use Filament\Tables\Columns\ImageColumn;
+use Filament\Tables\Columns\Layout\Split;
+use Filament\Tables\Columns\Layout\Stack;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -17,7 +20,8 @@ use UnitEnum;
 
 /**
  * Killmails involving the logged-in user's character — as victim or
- * attacker. Browse-only (no create/edit/delete).
+ * attacker. Browse-only (no create/edit/delete). Shows ship renders,
+ * victim portraits, and corp/alliance logos.
  */
 class KillmailResource extends Resource
 {
@@ -49,7 +53,6 @@ class KillmailResource extends Resource
                 }
                 $charId = $character->character_id;
 
-                // Killmails where the user is either victim or attacker.
                 return $query->where(function (Builder $q) use ($charId) {
                     $q->where('victim_character_id', $charId)
                       ->orWhereIn('killmail_id', function ($sub) use ($charId) {
@@ -60,20 +63,18 @@ class KillmailResource extends Resource
                 });
             })
             ->columns([
-                TextColumn::make('killed_at')
-                    ->label('Date')
-                    ->dateTime('Y-m-d H:i')
-                    ->sortable(),
+                // Ship render (victim hull).
+                ImageColumn::make('ship_render')
+                    ->label('')
+                    ->state(fn (Killmail $record): string => "https://images.evetech.net/types/{$record->victim_ship_type_id}/render?size=64")
+                    ->size(40)
+                    ->circular(false),
 
                 TextColumn::make('victim_ship_type_name')
                     ->label('Ship')
                     ->placeholder('—')
-                    ->searchable(),
-
-                TextColumn::make('victim_ship_group_name')
-                    ->label('Class')
-                    ->placeholder('—')
-                    ->toggleable(),
+                    ->searchable()
+                    ->description(fn (Killmail $record): string => $record->victim_ship_group_name ?? ''),
 
                 TextColumn::make('role')
                     ->label('Role')
@@ -89,24 +90,69 @@ class KillmailResource extends Resource
                     })
                     ->color(fn (string $state): string => $state === 'Victim' ? 'danger' : 'success'),
 
+                // Victim portrait + name.
+                ImageColumn::make('victim_portrait')
+                    ->label('')
+                    ->state(fn (Killmail $record): ?string => $record->victim_character_id
+                        ? "https://images.evetech.net/characters/{$record->victim_character_id}/portrait?size=64"
+                        : null)
+                    ->size(32)
+                    ->circular()
+                    ->defaultImageUrl('https://images.evetech.net/types/670/icon?size=64'),
+
+                TextColumn::make('victim_name')
+                    ->label('Victim')
+                    ->state(function (Killmail $record): string {
+                        if (! $record->victim_character_id) {
+                            return $record->victim_ship_type_name ?? 'Structure';
+                        }
+                        $name = \Illuminate\Support\Facades\DB::table('esi_entity_names')
+                            ->where('entity_id', $record->victim_character_id)
+                            ->value('name');
+
+                        return $name ?? 'Character #'.$record->victim_character_id;
+                    })
+                    ->description(function (Killmail $record): string {
+                        if (! $record->victim_corporation_id) {
+                            return '';
+                        }
+                        $corpName = \Illuminate\Support\Facades\DB::table('esi_entity_names')
+                            ->where('entity_id', $record->victim_corporation_id)
+                            ->value('name');
+
+                        return $corpName ?? '';
+                    }),
+
                 TextColumn::make('total_value')
                     ->label('Value')
-                    ->numeric(decimalPlaces: 0)
-                    ->suffix(' ISK')
-                    ->sortable(),
+                    ->formatStateUsing(function ($state): string {
+                        $v = (float) $state;
+                        if ($v >= 1_000_000_000) {
+                            return number_format($v / 1_000_000_000, 1).'B';
+                        }
+                        if ($v >= 1_000_000) {
+                            return number_format($v / 1_000_000, 1).'M';
+                        }
+                        if ($v >= 1_000) {
+                            return number_format($v / 1_000, 1).'K';
+                        }
+
+                        return number_format($v, 0);
+                    })
+                    ->sortable()
+                    ->color('warning'),
 
                 TextColumn::make('attacker_count')
-                    ->label('Attackers')
+                    ->label('Pilots')
                     ->numeric()
                     ->sortable()
                     ->toggleable(),
 
-                TextColumn::make('region_id')
-                    ->label('Region')
-                    ->state(function (Killmail $record): string {
-                        return $record->region?->name ?? (string) $record->region_id;
-                    })
-                    ->toggleable(),
+                TextColumn::make('killed_at')
+                    ->label('Date')
+                    ->dateTime('M d, Y H:i')
+                    ->sortable()
+                    ->color('gray'),
             ])
             ->filters([
                 SelectFilter::make('role')
@@ -141,7 +187,6 @@ class KillmailResource extends Resource
 
     public static function form(Schema $schema): Schema
     {
-        // Browse-only — no form needed.
         return $schema->components([]);
     }
 

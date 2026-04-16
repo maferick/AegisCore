@@ -9,6 +9,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\MenuItem;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -49,6 +50,16 @@ class PortalPanelProvider extends PanelProvider
             ->discoverResources(in: app_path('Filament/Portal/Resources'), for: 'App\\Filament\\Portal\\Resources')
             ->discoverPages(in: app_path('Filament/Portal/Pages'), for: 'App\\Filament\\Portal\\Pages')
             ->discoverWidgets(in: app_path('Filament/Portal/Widgets'), for: 'App\\Filament\\Portal\\Widgets')
+            ->userMenuItems([
+                MenuItem::make()
+                    ->label('Back to home')
+                    ->url(fn (): string => url('/'))
+                    ->icon('heroicon-o-arrow-left-on-rectangle'),
+                MenuItem::make()
+                    ->label('Account settings')
+                    ->url(fn (): string => route('account.settings'))
+                    ->icon('heroicon-o-cog-6-tooth'),
+            ])
             ->renderHook(
                 PanelsRenderHook::HEAD_END,
                 fn (): string => view('filament.theme.backdrop')->render(),
