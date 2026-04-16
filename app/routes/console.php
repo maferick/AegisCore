@@ -158,19 +158,17 @@ Schedule::command('classification:sweep-stale --dispatch')
     ->withoutOverlapping(30)
     ->name('classification-sweep-stale');
 
-// Killmail enrichment — drain the unenriched backlog.
+// Killmail enrichment — drain the unenriched backlog in parallel.
 //
-// Dispatches EnrichPendingKillmails to Horizon every minute. The job
-// processes up to 200 killmails per dispatch and self-dispatches with
-// a 1s delay when more remain, so a single kick drains the full queue.
-// The minute cadence is a safety net: if the self-dispatch chain ever
-// breaks (OOM, deploy, queue flush), the scheduler restarts it within
-// 60 seconds.
+// Dispatches one enrichment job per unenriched month every 5 minutes.
+// Each month runs as its own ShouldBeUnique chain across Horizon's
+// worker pool (5 workers in prod), so up to 5 months process in
+// parallel. Each job self-dispatches until its month is done.
 //
-// withoutOverlapping prevents double-dispatching while the previous
-// chain is still running. The 10-minute lock matches the job's timeout.
+// The 5-minute cadence restarts any broken self-dispatch chains and
+// picks up newly ingested months.
 Schedule::command('killmails:enrich')
-    ->everyMinute()
+    ->everyFiveMinutes()
     ->onOneServer()
     ->withoutOverlapping(10)
     ->name('killmails-enrich');

@@ -12,15 +12,19 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Horizon job that drains the unenriched killmail backlog.
+ * Horizon job that enriches killmails for a specific month.
  *
- * Eager-loads items + attackers for the whole batch in 2 queries (not
- * per-killmail), then enriches each killmail. The actual enrichment
- * work is ~2ms/kill (classify + value from cached queries), so the
- * batch size can be large.
+ * Partitioned by month so multiple workers process different date
+ * ranges in parallel. Each month is ShouldBeUnique so the same month
+ * doesn't run twice, but different months run concurrently across
+ * Horizon's worker pool.
+ *
+ * The scheduler dispatches one job per unenriched month. Each job
+ * self-dispatches until its month is fully enriched.
  */
 final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
 {
@@ -29,27 +33,46 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    /** Killmails per dispatch. Profiled at ~2ms/kill after eager load. */
     private const CHUNK_SIZE = 500;
 
     public int $tries = 3;
 
     public int $timeout = 300;
 
-    public int $uniqueFor = 600;
+    public int $uniqueFor = 300;
 
     private const NAME_RESOLVE_BACKLOG_THRESHOLD = 1000;
 
+    /**
+     * @param  string|null  $month  YYYY-MM to process, or null for oldest unenriched.
+     */
+    public function __construct(
+        public readonly ?string $month = null,
+    ) {}
+
+    /**
+     * Unique ID = the month, so different months run in parallel
+     * but the same month doesn't overlap.
+     */
+    public function uniqueId(): string
+    {
+        return 'enrich:'.($this->month ?? 'auto');
+    }
+
     public function handle(EnrichKillmail $action): void
     {
-        // Eager-load items + attackers for the whole batch in 2 queries
-        // instead of 2 queries per killmail (the N+1 that was causing
-        // 200 kills to take 60 seconds).
-        $killmails = Killmail::unenriched()
+        $query = Killmail::unenriched()
             ->with(['items', 'attackers'])
             ->orderBy('killed_at')
-            ->limit(self::CHUNK_SIZE)
-            ->get();
+            ->limit(self::CHUNK_SIZE);
+
+        if ($this->month) {
+            $start = $this->month.'-01';
+            $end = date('Y-m-t', strtotime($start));
+            $query->whereBetween('killed_at', [$start.' 00:00:00', $end.' 23:59:59']);
+        }
+
+        $killmails = $query->get();
 
         if ($killmails->isEmpty()) {
             return;
@@ -80,14 +103,36 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
         }
 
         Log::info('enrich-killmails: batch complete', [
+            'month' => $this->month ?? 'auto',
             'enriched' => $enriched,
             'skipped' => $skipped,
             'failed' => $failed,
             'batch_size' => $killmails->count(),
         ]);
 
+        // Self-dispatch if more remain in this month.
         if ($killmails->count() === self::CHUNK_SIZE) {
-            static::dispatch()->delay(now()->addSeconds(1));
+            static::dispatch($this->month)->delay(now()->addSeconds(1));
         }
+    }
+
+    /**
+     * Dispatch one job per unenriched month. Called from the scheduler
+     * or artisan command. Each month runs as its own unique job chain.
+     */
+    public static function dispatchAllMonths(): int
+    {
+        $months = DB::table('killmails')
+            ->whereNull('enriched_at')
+            ->selectRaw("DATE_FORMAT(killed_at, '%Y-%m') as month")
+            ->groupBy('month')
+            ->orderBy('month')
+            ->pluck('month');
+
+        foreach ($months as $month) {
+            static::dispatch($month);
+        }
+
+        return $months->count();
     }
 }
