@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Resources\KillmailResource\Pages;
 
+use App\Domains\KillmailsBattleTheaters\Models\Killmail;
+use App\Domains\KillmailsBattleTheaters\Services\JitaValuationService;
 use App\Filament\Portal\Resources\KillmailResource;
 use Filament\Resources\Pages\Page;
 use Illuminate\Support\Facades\DB;
@@ -18,8 +20,7 @@ class ViewKillmail extends Page
 
     public function mount(int|string $record): void
     {
-        $this->record = \App\Domains\KillmailsBattleTheaters\Models\Killmail::with(['attackers', 'items'])
-            ->findOrFail($record);
+        $this->record = Killmail::with(['attackers', 'items'])->findOrFail($record);
     }
 
     public function getTitle(): string
@@ -33,7 +34,7 @@ class ViewKillmail extends Page
     {
         $km = $this->record;
 
-        // Resolve entity names from cache.
+        // -- Entity names from cache ----------------------------------
         $entityIds = collect();
         if ($km->victim_character_id) {
             $entityIds->push($km->victim_character_id);
@@ -57,10 +58,8 @@ class ViewKillmail extends Page
             ->whereIn('entity_id', $entityIds->unique()->filter()->values())
             ->pluck('name', 'entity_id');
 
-        // Resolve ALL type names from SDE ref_item_types in one query.
-        // Covers items, victim ship, attacker ships, and weapons.
-        $allTypeIds = collect();
-        $allTypeIds->push($km->victim_ship_type_id);
+        // -- Type names + categories from SDE -------------------------
+        $allTypeIds = collect([$km->victim_ship_type_id]);
         foreach ($km->items as $item) {
             $allTypeIds->push($item->type_id);
         }
@@ -79,21 +78,64 @@ class ViewKillmail extends Page
             ->whereIn('id', $uniqueTypeIds)
             ->pluck('name', 'id');
 
-        // Build a type_id → category_id map for charge detection.
-        // Category 8 = Charge (ammo, crystals, cap boosters, scripts).
         $typeCategoryMap = DB::table('ref_item_types as t')
             ->join('ref_item_groups as g', 'g.id', '=', 't.group_id')
             ->whereIn('t.id', $uniqueTypeIds)
             ->pluck('g.category_id', 't.id');
 
-        // Tag each item as charge or not (used by the template to nest
-        // charges under their parent module in fitted slots).
         $chargeTypeIds = $typeCategoryMap->filter(fn ($catId) => $catId == 8)->keys()->flip();
 
-        // Group items by slot.
+        // -- On-demand valuation for unenriched killmails -------------
+        // If the killmail hasn't been enriched yet, compute item values
+        // on the fly using the same Jita valuation service. Values are
+        // displayed but NOT persisted — the background enrichment job
+        // will write them permanently when it reaches this killmail.
+        $itemValues = collect();  // type_id → {unitPrice, source}
+        $hullValue = 0.0;
+        $fittedValue = 0.0;
+        $cargoValue = 0.0;
+        $droneValue = 0.0;
+        $totalValue = (float) $km->total_value;
+
+        if (! $km->isEnriched() && $km->items->isNotEmpty()) {
+            $valuationService = app(JitaValuationService::class);
+            $typeIdsToValue = $km->items->pluck('type_id')->push($km->victim_ship_type_id)->unique()->filter()->values()->all();
+            $valuations = $valuationService->resolve($typeIdsToValue, $km->killed_at);
+
+            // Compute per-item values in memory.
+            $fittedSlots = ['high', 'mid', 'low', 'rig', 'subsystem', 'service'];
+            foreach ($km->items as $item) {
+                $v = $valuations[$item->type_id] ?? null;
+                if ($v && $v->source !== 'unavailable') {
+                    $qty = $item->quantity_destroyed + $item->quantity_dropped;
+                    $lineTotal = (float) bcmul($v->unitPrice, (string) $qty, 2);
+                    $itemValues[$item->id] = $lineTotal;
+
+                    if (in_array($item->slot_category, $fittedSlots)) {
+                        $fittedValue += $lineTotal;
+                    } elseif ($item->slot_category === 'cargo') {
+                        $cargoValue += $lineTotal;
+                    } elseif (in_array($item->slot_category, ['drone_bay', 'fighter_bay'])) {
+                        $droneValue += $lineTotal;
+                    }
+                }
+            }
+
+            $hullVal = $valuations[$km->victim_ship_type_id] ?? null;
+            $hullValue = $hullVal && $hullVal->source !== 'unavailable' ? (float) $hullVal->unitPrice : 0.0;
+            $totalValue = $hullValue + $fittedValue + $cargoValue + $droneValue;
+        } else {
+            $hullValue = (float) $km->hull_value;
+            $fittedValue = (float) $km->fitted_value;
+            $cargoValue = (float) $km->cargo_value;
+            $droneValue = (float) $km->drone_value;
+            $totalValue = (float) $km->total_value;
+        }
+
+        // -- Group items by slot --------------------------------------
         $itemsBySlot = $km->items->groupBy('slot_category');
 
-        // System/region names from ref tables.
+        // -- Location -------------------------------------------------
         $systemName = $km->solarSystem?->name ?? 'Unknown';
         $regionName = $km->region?->name ?? 'Unknown';
 
@@ -102,6 +144,12 @@ class ViewKillmail extends Page
             'names' => $names,
             'typeNames' => $typeNames,
             'chargeTypeIds' => $chargeTypeIds,
+            'itemValues' => $itemValues,
+            'hullValue' => $hullValue,
+            'fittedValue' => $fittedValue,
+            'cargoValue' => $cargoValue,
+            'droneValue' => $droneValue,
+            'totalValue' => $totalValue,
             'itemsBySlot' => $itemsBySlot,
             'systemName' => $systemName,
             'regionName' => $regionName,

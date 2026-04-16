@@ -1,9 +1,12 @@
 <x-filament-panels::page>
 @php
+    $victimName = $km->victim_character_id
+        ? ($names[$km->victim_character_id] ?? 'Pilot #'.$km->victim_character_id)
+        : ($km->victim_ship_type_name ?? $typeNames[$km->victim_ship_type_id] ?? 'Unknown');
     $victim = [
-        'name' => $names[$km->victim_character_id] ?? ($km->victim_ship_type_name ?? 'Unknown'),
-        'corp' => $names[$km->victim_corporation_id] ?? null,
-        'alliance' => $names[$km->victim_alliance_id] ?? null,
+        'name' => $victimName,
+        'corp' => $km->victim_corporation_id ? ($names[$km->victim_corporation_id] ?? 'Corp #'.$km->victim_corporation_id) : null,
+        'alliance' => $km->victim_alliance_id ? ($names[$km->victim_alliance_id] ?? 'Alliance #'.$km->victim_alliance_id) : null,
     ];
 
     $formatIsk = function (float $v): string {
@@ -101,26 +104,26 @@
 
         {{-- Value breakdown --}}
         <div class="km-card">
-            <h3>Value Breakdown</h3>
+            <h3>Value Breakdown @if(! $km->isEnriched()) <span class="km-badge km-badge-cyan" style="margin-left: 4px;">live estimate</span> @endif</h3>
             <div class="km-stat">
                 <span class="km-stat-label">Hull</span>
-                <span class="km-stat-value isk">{{ $formatIsk((float) $km->hull_value) }}</span>
+                <span class="km-stat-value isk">{{ $formatIsk($hullValue) }}</span>
             </div>
             <div class="km-stat">
                 <span class="km-stat-label">Fitted</span>
-                <span class="km-stat-value isk">{{ $formatIsk((float) $km->fitted_value) }}</span>
+                <span class="km-stat-value isk">{{ $formatIsk($fittedValue) }}</span>
             </div>
             <div class="km-stat">
                 <span class="km-stat-label">Cargo</span>
-                <span class="km-stat-value isk">{{ $formatIsk((float) $km->cargo_value) }}</span>
+                <span class="km-stat-value isk">{{ $formatIsk($cargoValue) }}</span>
             </div>
             <div class="km-stat">
                 <span class="km-stat-label">Drones</span>
-                <span class="km-stat-value isk">{{ $formatIsk((float) $km->drone_value) }}</span>
+                <span class="km-stat-value isk">{{ $formatIsk($droneValue) }}</span>
             </div>
             <div class="km-stat" style="margin-top: 0.25rem; border-top: 1px solid #26262b; padding-top: 0.5rem;">
                 <span class="km-stat-label" style="font-weight: 700;">Total</span>
-                <span class="km-stat-value total">{{ $formatIsk((float) $km->total_value) }} ISK</span>
+                <span class="km-stat-value total">{{ $formatIsk($totalValue) }} ISK</span>
             </div>
         </div>
 
@@ -163,7 +166,15 @@
                     @endif
                     <div class="km-attacker-info">
                         <div class="km-attacker-name">
-                            {{ $names[$att->character_id] ?? ($names[$att->faction_id] ?? 'NPC') }}
+                            @if($att->character_id)
+                                {{-- Player character — show name or ID --}}
+                                {{ $names[$att->character_id] ?? 'Pilot #'.$att->character_id }}
+                            @elseif($att->faction_id)
+                                {{-- NPC faction (CONCORD, pirates, etc.) --}}
+                                {{ $names[$att->faction_id] ?? 'Faction #'.$att->faction_id }}
+                            @else
+                                NPC
+                            @endif
                             @if($att->is_final_blow)
                                 <span class="km-badge km-badge-red" style="margin-left: 4px;">Final blow</span>
                             @endif
@@ -235,8 +246,11 @@
                                 @endif
                             </div>
                             <div class="km-item-value">
-                                @if($item->total_value)
-                                    {{ $formatIsk((float) $item->total_value) }}
+                                @php
+                                    $displayValue = $item->total_value ? (float) $item->total_value : ($itemValues[$item->id] ?? null);
+                                @endphp
+                                @if($displayValue)
+                                    {{ $formatIsk((float) $displayValue) }}
                                 @else
                                     —
                                 @endif
