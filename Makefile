@@ -43,6 +43,8 @@ help:
 	@echo "                              overrides: KILLMAIL_BACKFILL_ARGS=\"--dry-run\" | --only-date=YYYY-MM-DD | --from=… --to=…"
 	@echo "  make killmail-stream        ad-hoc R2Z2 live stream (runs until Ctrl-C)"
 	@echo "  make killmail-search        backfill OpenSearch killmail index from MariaDB (one-shot)"
+	@echo "  make theater-cluster        one-shot battle-theater clustering pass (see ADR-0006)"
+	@echo "                              overrides: THEATER_WINDOW_HOURS=720 | THEATER_MIN_PARTICIPANTS=5"
 	@echo "  make outbox-relay           drain MariaDB outbox into InfluxDB (one-shot)"
 	@echo "  make market-status          show MariaDB + InfluxDB market-data coverage"
 	@echo "  make outbox-status          show outbox backlog + dead letters"
@@ -148,7 +150,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test test-db-setup seed-classification lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test test-db-setup seed-classification theater-cluster lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
 build:
 	$(COMPOSE) build
 
@@ -315,6 +317,18 @@ outbox-relay:
 #   KILLMAIL_BACKFILL_ARGS="--from=2025-01-01 --to=2025-12-31"
 killmail-backfill:
 	$(COMPOSE) --profile tools run --rm --build killmail_backfill $(KILLMAIL_BACKFILL_ARGS)
+
+# One-shot battle-theater clustering pass. Walks the last
+# THEATER_WINDOW_HOURS of enriched killmails, rebuilds every unlocked
+# theater, and locks any that aged past THEATER_LOCK_AFTER_HOURS. Safe
+# to run at any time; the long-lived theater_clustering_scheduler
+# service runs the same code on a 5-minute loop.
+#
+# Overrides (per-invocation):
+#   THEATER_WINDOW_HOURS=720 make theater-cluster   # 30-day backfill
+#   THEATER_MIN_PARTICIPANTS=5 make theater-cluster # looser threshold
+theater-cluster:
+	$(COMPOSE) --profile tools run --rm --build theater_cluster
 
 # One-shot R2Z2 live stream (runs until Ctrl-C). For ad-hoc testing.
 # The long-lived `killmail_stream` compose service handles production.

@@ -1,0 +1,6 @@
+# theater_clustering deps.
+#
+# Reads killmail + attacker rows from MariaDB, runs in-memory union-find
+# clustering, writes battle_theater* tables. Pure stdlib algorithm — no
+# scientific libraries needed.
+pymysql~=1.1

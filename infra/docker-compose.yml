@@ -1034,6 +1034,71 @@ services:
       aegiscore:
         ipv4_address: 172.16.238.44
 
+  # theater_clustering — ADR-0006 Phase 1 scheduler.
+  # Reads killmails + killmail_attackers; writes battle_theaters + child
+  # tables. Each pass rebuilds every unlocked theater from scratch (the
+  # algorithm is pure) and locks any theater whose end_time has aged past
+  # THEATER_LOCK_AFTER_HOURS. Single tenant: runs one pass every
+  # THEATER_SCHEDULER_INTERVAL_SECONDS (default 300 = 5 min).
+  theater_clustering_scheduler:
+    build:
+      context: ../python
+      dockerfile: theater_clustering.Dockerfile
+    image: aegiscore/theater-clustering:0.1.0
+    container_name: theater_clustering_scheduler
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      THEATER_PROXIMITY_SECONDS: "${THEATER_PROXIMITY_SECONDS:-2700}"
+      THEATER_MIN_PARTICIPANTS: "${THEATER_MIN_PARTICIPANTS:-10}"
+      THEATER_LOCK_AFTER_HOURS: "${THEATER_LOCK_AFTER_HOURS:-48}"
+      THEATER_WINDOW_HOURS: "${THEATER_WINDOW_HOURS:-48}"
+      THEATER_SCHEDULER_INTERVAL_SECONDS: "${THEATER_SCHEDULER_INTERVAL_SECONDS:-300}"
+    command: ["loop"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.45
+
+  # theater_cluster — one-shot variant for operator-driven runs and
+  # backfills over the full killmail corpus. Profile-gated under
+  # `tools` so docker compose up doesn't start it; invoke via
+  # `make theater-cluster`.
+  theater_cluster:
+    build:
+      context: ../python
+      dockerfile: theater_clustering.Dockerfile
+    image: aegiscore/theater-clustering:0.1.0
+    container_name: theater_cluster
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      THEATER_PROXIMITY_SECONDS: "${THEATER_PROXIMITY_SECONDS:-2700}"
+      THEATER_MIN_PARTICIPANTS: "${THEATER_MIN_PARTICIPANTS:-10}"
+      THEATER_LOCK_AFTER_HOURS: "${THEATER_LOCK_AFTER_HOURS:-48}"
+      # One-shot mode typically wants a larger window for the initial
+      # backfill; operators override per-invocation via the make target.
+      THEATER_WINDOW_HOURS: "${THEATER_WINDOW_HOURS:-168}"
+    command: ["run"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.46
+
 volumes:
   # Named volume for MariaDB data. Named volumes survive container
   # recreation (docker compose up -d --build) — unlike bind mounts,
