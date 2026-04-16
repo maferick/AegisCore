@@ -48,6 +48,7 @@ help:
 	@echo "  make outbox-status          show outbox backlog + dead letters"
 	@echo ""
 	@echo "  make test-db-setup          one-time: create aegiscore_test schema + grants for phpunit"
+	@echo "  make seed-classification    idempotent: re-seed coalition blocs + relationship types + labels"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -108,6 +109,11 @@ update:
 	$(COMPOSE) exec php-fpm composer install --optimize-autoloader --no-interaction
 	$(COMPOSE) exec php-fpm php artisan migrate --force
 	@echo ""
+	@echo "Seeding classification reference data (idempotent)..."
+	$(COMPOSE) exec php-fpm php artisan db:seed --class=CoalitionBlocSeeder --force
+	$(COMPOSE) exec php-fpm php artisan db:seed --class=CoalitionRelationshipTypeSeeder --force
+	$(COMPOSE) exec php-fpm php artisan db:seed --class=CoalitionEntityLabelSeeder --force
+	@echo ""
 	@echo "Stack updated. Data stores were NOT touched."
 	@echo "If you need to restart MariaDB (config change), use:"
 	@echo "    make safe-restart-mariadb"
@@ -142,7 +148,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test test-db-setup lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test test-db-setup seed-classification lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
 build:
 	$(COMPOSE) build
 
@@ -396,6 +402,18 @@ test:
 # mode that caused the 2026-04-16 wipe.
 test-db-setup:
 	./scripts/setup-test-db.sh
+
+# Idempotent seed of the classification reference data: coalition
+# blocs, relationship types, and the seeded corp/alliance →
+# bloc labels. Ships with `make update` too; this target is the
+# manual lever for a post-restore / post-data-loss environment
+# where you need the reference data back without running the full
+# update cycle. Each seeder uses updateOrCreate on its unique key,
+# so re-running is safe.
+seed-classification:
+	$(COMPOSE) exec php-fpm php artisan db:seed --class=CoalitionBlocSeeder --force
+	$(COMPOSE) exec php-fpm php artisan db:seed --class=CoalitionRelationshipTypeSeeder --force
+	$(COMPOSE) exec php-fpm php artisan db:seed --class=CoalitionEntityLabelSeeder --force
 
 lint:
 	$(COMPOSE) exec php-fpm ./vendor/bin/pint --test
