@@ -31,12 +31,12 @@ final class EnrichPendingKillmails implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    /** Killmails per dispatch. */
-    private const CHUNK_SIZE = 50;
+    /** Killmails per dispatch. Each killmail touches ~70 rows. */
+    private const CHUNK_SIZE = 200;
 
     public int $tries = 3;
 
-    public int $timeout = 120;
+    public int $timeout = 300;
 
     public function handle(EnrichKillmail $action): void
     {
