@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Resources\KillmailResource\Pages;
 
+use App\Domains\KillmailsBattleTheaters\Models\CharacterCorporationHistory;
 use App\Domains\KillmailsBattleTheaters\Models\Killmail;
 use App\Domains\KillmailsBattleTheaters\Services\JitaValuationService;
 use App\Filament\Portal\Resources\KillmailResource;
@@ -139,6 +140,37 @@ class ViewKillmail extends Page
         // -- Group items by slot --------------------------------------
         $itemsBySlot = $km->items->groupBy('slot_category');
 
+        // -- Event-time affiliations ----------------------------------
+        // Look up "what corp was this character in at the time of this
+        // kill" from the character_corporation_history table.
+        $eventTimeCorps = [];
+        $allCharIds = collect([$km->victim_character_id])
+            ->merge($km->attackers->pluck('character_id'))
+            ->filter()
+            ->unique();
+
+        foreach ($allCharIds as $charId) {
+            $hist = CharacterCorporationHistory::corporationAt((int) $charId, $km->killed_at);
+            if ($hist) {
+                $eventTimeCorps[(int) $charId] = [
+                    'corporation_id' => $hist->corporation_id,
+                    'start_date' => $hist->start_date->format('M Y'),
+                ];
+            }
+        }
+
+        // Resolve event-time corp names.
+        $eventCorpIds = collect($eventTimeCorps)->pluck('corporation_id')->unique()->filter()->values()->all();
+        if ($eventCorpIds) {
+            $corpNames = DB::table('esi_entity_names')
+                ->whereIn('entity_id', $eventCorpIds)
+                ->pluck('name', 'entity_id');
+            foreach ($eventTimeCorps as $charId => &$data) {
+                $data['corporation_name'] = $corpNames[$data['corporation_id']] ?? null;
+            }
+            unset($data);
+        }
+
         // -- Location -------------------------------------------------
         $systemName = $km->solarSystem?->name ?? 'Unknown';
         $regionName = $km->region?->name ?? 'Unknown';
@@ -147,6 +179,7 @@ class ViewKillmail extends Page
             'km' => $km,
             'names' => $names,
             'typeNames' => $typeNames,
+            'eventTimeCorps' => $eventTimeCorps,
             'chargeTypeIds' => $chargeTypeIds,
             'itemValues' => $itemValues,
             'hullValue' => $hullValue,

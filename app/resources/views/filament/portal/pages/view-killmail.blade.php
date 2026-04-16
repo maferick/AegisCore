@@ -79,7 +79,15 @@
             {{ $km->victim_ship_group_name ?? '' }}
         </div>
         <div class="km-victim-meta" style="margin-top: 0.35rem;">
-            @if($km->victim_corporation_id)
+            @php
+                $victimEtCorp = $km->victim_character_id ? ($eventTimeCorps[$km->victim_character_id] ?? null) : null;
+            @endphp
+            @if($victimEtCorp && $victimEtCorp['corporation_id'] != $km->victim_corporation_id && $victimEtCorp['corporation_name'])
+                <img src="https://images.evetech.net/corporations/{{ $victimEtCorp['corporation_id'] }}/logo?size=32"
+                     alt="" referrerpolicy="no-referrer">
+                <span style="color: #e5a900;">{{ $victimEtCorp['corporation_name'] }}</span>
+                <span style="font-size: 0.6rem; color: #3a3a42;">(now: {{ $victim['corp'] }})</span>
+            @elseif($km->victim_corporation_id)
                 <img src="https://images.evetech.net/corporations/{{ $km->victim_corporation_id }}/logo?size=32"
                      alt="" referrerpolicy="no-referrer">
                 {{ $victim['corp'] ?? 'Corp #'.$km->victim_corporation_id }}
@@ -180,7 +188,16 @@
                             @endif
                         </div>
                         <div class="km-attacker-corp">
-                            {{ $names[$att->corporation_id] ?? '' }}
+                            @php
+                                $etCorp = $eventTimeCorps[$att->character_id] ?? null;
+                                $currentCorp = $names[$att->corporation_id] ?? '';
+                            @endphp
+                            @if($etCorp && $etCorp['corporation_id'] != $att->corporation_id && $etCorp['corporation_name'])
+                                <span style="color: #e5a900;" title="Corporation at time of kill">{{ $etCorp['corporation_name'] }}</span>
+                                <span style="font-size: 0.6rem; color: #3a3a42;"> (now: {{ $currentCorp }})</span>
+                            @else
+                                {{ $currentCorp }}
+                            @endif
                             @if($att->alliance_id && isset($names[$att->alliance_id]))
                                 / {{ $names[$att->alliance_id] }}
                             @endif
