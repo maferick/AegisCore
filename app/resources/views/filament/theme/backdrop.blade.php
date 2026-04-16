@@ -49,4 +49,22 @@
     html.dark body.fi-simple-body .fi-simple-main {
         border: 1px solid rgba(79, 208, 208, 0.18);
     }
+
+    /* Wider stat widget grids on large screens. Filament defaults to
+     * 3 columns; on 4K / ultrawide monitors we have room for more. */
+    @media (min-width: 1600px) {
+        .fi-wi-stats-overview-stats-ctn {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        }
+    }
+    @media (min-width: 2000px) {
+        .fi-wi-stats-overview-stats-ctn {
+            grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+        }
+    }
+    @media (min-width: 2500px) {
+        .fi-wi-stats-overview-stats-ctn {
+            grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+        }
+    }
 </style>
