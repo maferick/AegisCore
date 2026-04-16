@@ -5,14 +5,23 @@ services:
     image: mariadb:lts
     container_name: mariadb
     restart: unless-stopped
+    # CRITICAL: MariaDB's entrypoint uses MARIADB_DATABASE / _USER /
+    # _PASSWORD to create the DB + user on FIRST START ONLY (when
+    # /var/lib/mysql/mysql/ doesn't exist). On subsequent starts these
+    # env vars are ignored. But if the container is recreated and the
+    # bind mount appears empty momentarily, the entrypoint would
+    # reinitialize — wiping all data. MARIADB_AUTO_UPGRADE handles
+    # version upgrades gracefully without reinit.
     environment:
       MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
       MARIADB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
       MARIADB_USER: "${MARIADB_USER:-aegiscore}"
       MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
+      MARIADB_AUTO_UPGRADE: "1"
     volumes:
-      - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/data:/var/lib/mysql
+      - aegiscore-mariadb:/var/lib/mysql
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/mariadb/conf.d:/etc/mysql/conf.d:ro
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/mariadb/initdb.d:/docker-entrypoint-initdb.d:ro
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/logs:/var/log/mysql
     ports:
       - "127.0.0.1:3306:3306"
@@ -1024,6 +1033,24 @@ services:
     networks:
       aegiscore:
         ipv4_address: 172.16.238.44
+
+volumes:
+  # Named volume for MariaDB data. Named volumes survive container
+  # recreation (docker compose up -d --build) — unlike bind mounts,
+  # Docker never clears them during recreate. This prevents the data
+  # loss that occurred on 2026-04-16 when a container recreate caused
+  # MariaDB to reinitialize into what appeared to be an empty data dir.
+  #
+  # The bind mount (${AEGISCORE_ROOT}/docker/mariadb/data:/var/lib/mysql)
+  # was vulnerable because Docker Compose can briefly see the mount
+  # point as empty during container recreation if the overlay FS
+  # teardown races with the new container start.
+  aegiscore-mariadb:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/data
 
 networks:
   aegiscore:
