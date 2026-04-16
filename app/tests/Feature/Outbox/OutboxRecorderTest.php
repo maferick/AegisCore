@@ -13,13 +13,21 @@ use Tests\TestCase;
 
 final class OutboxRecorderTest extends TestCase
 {
-    // DatabaseMigrations (not RefreshDatabase) on purpose: RefreshDatabase
-    // wraps every test in an ambient DB transaction, which would make
-    // DB::transactionLevel() always >= 1 and hide the "no ambient tx" guard
-    // we verify in test_rejects_recording_outside_a_transaction.
-    // DatabaseMigrations runs migrate:fresh between tests instead — slower,
-    // but each test starts with transactionLevel() == 0, which is the real
-    // state OutboxRecorder::record() expects.
+    // DatabaseMigrations (not DatabaseTransactions) on purpose:
+    // DatabaseTransactions wraps every test in an ambient DB
+    // transaction, which would make DB::transactionLevel() always >=
+    // 1 and hide the "no ambient tx" guard we verify in
+    // test_rejects_recording_outside_a_transaction. DatabaseMigrations
+    // runs migrate:fresh between tests instead — slower, but each test
+    // starts with transactionLevel() == 0, which is the real state
+    // OutboxRecorder::record() expects.
+    //
+    // Safety: migrate:fresh runs against the default DB connection,
+    // which TestCase::setUp() pins to `testing_sqlite` (a hardcoded,
+    // env-less sqlite connection in config/database.php). This trait
+    // cannot reach MariaDB from a test run — the L2/L3/L4 defences in
+    // TestCase ensure the CLI migrator's default-connection target is
+    // always the local sqlite file.
     use DatabaseMigrations;
 
     public function test_records_event_inside_a_transaction(): void

@@ -24,9 +24,12 @@ use Tests\TestCase;
  */
 final class MarketWatchedLocationTest extends TestCase
 {
-    // DatabaseMigrations (not RefreshDatabase) so the seeded Jita row
-    // + hub from the migration chain land in the DB exactly the way
-    // they would in production.
+    // DatabaseMigrations so the Jita seeder migration runs fresh per
+    // test and the seeded watched row + canonical hub land in the
+    // test DB exactly the way they do in production. The migrate:fresh
+    // this trait issues is pinned to the `testing_mariadb` connection
+    // (aegiscore_test schema) by L1/L2/L3 defences in TestCase.php —
+    // it cannot target the production aegiscore schema.
     use DatabaseMigrations;
 
     public function test_jita_baseline_row_is_seeded_by_migration(): void

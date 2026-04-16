@@ -39,9 +39,15 @@ help:
 	@echo "  make neo4j-sync-universe    project ref_* universe topology into Neo4j (one-shot)"
 	@echo "  make market-poll            pull order-book snapshots into market_orders (one-shot)"
 	@echo "  make market-import          import EVE Ref daily market-history CSVs (one-shot)"
+	@echo "  make killmail-backfill      reconcile local killmails against EVE Ref totals.json (one-shot)"
+	@echo "                              overrides: KILLMAIL_BACKFILL_ARGS=\"--dry-run\" | --only-date=YYYY-MM-DD | --from=… --to=…"
+	@echo "  make killmail-stream        ad-hoc R2Z2 live stream (runs until Ctrl-C)"
+	@echo "  make killmail-search        backfill OpenSearch killmail index from MariaDB (one-shot)"
 	@echo "  make outbox-relay           drain MariaDB outbox into InfluxDB (one-shot)"
 	@echo "  make market-status          show MariaDB + InfluxDB market-data coverage"
 	@echo "  make outbox-status          show outbox backlog + dead letters"
+	@echo ""
+	@echo "  make test-db-setup          one-time: create aegiscore_test schema + grants for phpunit"
 	@echo ""
 	@echo "  make clean-logs   truncate nginx access/error logs"
 
@@ -136,7 +142,7 @@ bootstrap:
 	sudo chown -R 1000:1000 $(AEGISCORE_ROOT)/infra/sde
 	@echo "bootstrap complete at $(AEGISCORE_ROOT)"
 
-.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
+.PHONY: build php-shell redis-cli composer artisan laravel-install laravel-migrate horizon-install horizon-publish laravel-key filament-user test test-db-setup lint sde-check sde-import neo4j-sync-universe market-poll market-import outbox-relay market-status outbox-status
 build:
 	$(COMPOSE) build
 
@@ -381,6 +387,15 @@ outbox-status:
 
 test:
 	$(COMPOSE) exec php-fpm php artisan test
+
+# One-time (or post-DB-init) bootstrap for the phpunit test schema.
+# Creates aegiscore_test + grants the aegiscore user access. See
+# scripts/setup-test-db.sh for the full rationale — in short, the
+# test suite runs against a physically separate MariaDB schema so
+# migrate:fresh can never target production, closing the failure
+# mode that caused the 2026-04-16 wipe.
+test-db-setup:
+	./scripts/setup-test-db.sh
 
 lint:
 	$(COMPOSE) exec php-fpm ./vendor/bin/pint --test

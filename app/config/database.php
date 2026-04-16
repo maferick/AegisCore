@@ -32,6 +32,51 @@ return [
 
     'connections' => [
 
+        /*
+        | -----------------------------------------------------------------
+        |  testing_mariadb — tests-only, tamper-proof connection
+        | -----------------------------------------------------------------
+        |
+        | HARDCODED. NO `env()` calls in this block — an env leak
+        | (container DB_CONNECTION=mariadb / DB_DATABASE=aegiscore)
+        | cannot redirect it. The `database` name is a literal:
+        | `aegiscore_test`, which is a physically separate schema from
+        | production `aegiscore` on the same MariaDB server.
+        |
+        | Sqlite was tried first (2026-04-16) but at least one migration
+        | (`market_history` partitioning) uses MariaDB-specific PARTITION
+        | syntax that sqlite can't parse. Tests need MariaDB semantics
+        | to match production; a separate schema is the cheapest isolation
+        | that keeps the test suite honest.
+        |
+        | Credentials: hardcoded to the infra defaults used by docker
+        | compose (aegiscore / aegiscore). The MariaDB container grants
+        | that user full privileges on the `%` host, which includes the
+        | aegiscore_test database the test bootstrap creates. This
+        | credential pair is already in `.env.example`; inlining it in
+        | the test-only block is not a new secret.
+        |
+        | The 2026-04-16 production wipe happened because the generic
+        | `mariadb` connection below reads database from env(), and
+        | phpunit.xml didn't force those env vars. `migrate:fresh`
+        | inherited DB_DATABASE=aegiscore and wiped production. Never
+        | add env() to this block.
+        */
+        'testing_mariadb' => [
+            'driver' => 'mariadb',
+            'host' => 'mariadb',
+            'port' => 3306,
+            'database' => 'aegiscore_test',
+            'username' => 'aegiscore',
+            'password' => 'aegiscore',
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+        ],
+
         'sqlite' => [
             'driver' => 'sqlite',
             'url' => env('DB_URL'),
