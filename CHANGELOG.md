@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Market poller picks tokens via `market_hub_collectors` instead of
+  `market_watched_locations.owner_user_id` (ADR-0005 § Follow-up 3).**
+  Closes the shared-trust gap ADR-0005 opened the canonical-hub model
+  to solve: private hubs are now polled by walking the hub's collector
+  list, not by "whoever seeded the row". Functional wins visible at
+  day one:
+  - **Donor churn is survivable.** If Donor A registered Keepstar X
+    and later leaves, the hub stays live as long as any other
+    collector is active — the viewers never see the seam. A fresh
+    donor re-auth attaches a new collector; no viewer entitlement
+    changes.
+  - **Within-tick failover.** On transient/permanent ESI failure or
+    scope/refresh/ownership errors, the poller records the failure
+    against that specific collector and falls over to the next
+    active collector in the same pass. Collectors are ordered
+    `is_primary DESC, last_failure_at IS NULL DESC, last_failure_at
+    ASC` so a rested backup beats a just-burned one. Previously a
+    single-token failure meant a five-minute wait for the next
+    scheduler tick.
+  - **Per-collector failure bookkeeping.** `consecutive_failure_count`,
+    `last_failure_at`, `failure_reason`, and `is_active` move from
+    `market_watched_locations` onto each `market_hub_collectors`
+    row. Same 3×403 / 5×5xx auto-deactivate thresholds. A hub-wide
+    counter would lie when the poller alternated between a dead
+    primary and a live backup; per-collector state is the honest
+    representation.
+  - **Hub freeze semantics per ADR-0005.** When every active
+    collector for a hub has been exhausted and none remain active,
+    `market_hubs.disabled_reason` is set to `'no_active_collector'`
+    WITHOUT flipping `is_active` — an admin or donor re-auth can
+    rescue the hub. The SELECT filters out frozen hubs at the driver
+    level so a stuck hub doesn't burn round-trips per tick. A
+    successful poll clears the freeze, denormalises the serving
+    collector's `character_id` onto
+    `market_hubs.active_collector_character_id`, and bumps
+    `last_sync_at`.
+  - **Trust-boundary check at use, not just at SELECT.** The old
+    user-keyed token loader filtered `eve_market_tokens WHERE
+    user_id = ? ORDER BY updated_at DESC LIMIT 1`. The new loader
+    (`load_and_refresh_market_token_by_id`) keys directly on the
+    collector's `token_id`, and the runner asserts
+    `token.user_id == collector.user_id` before every ESI call.
+    Mismatch → immediate `disable_collector_immediately` with
+    reason `ownership_mismatch` (security violation, no grace).
+  - **`_MarketTokenCache` rekeyed from user_id to token_id.** A
+    donor collecting on multiple hubs with one token still pays the
+    refresh round-trip once per pass; errors memoise per token so
+    a broken token doesn't re-attempt across collector rows.
+
+  Untouched by this change:
+  - NPC station path (region endpoint, no auth, Jita baseline).
+  - Admin-managed public-reference structure path (service-token,
+    still in `market_watched_locations` bookkeeping — these hubs
+    have no collectors by design).
+  - `market_watched_locations.owner_user_id` column itself. The
+    poller no longer reads it, but the column stays until a
+    follow-up ADR retires it. A CHANGELOG entry for that drop will
+    land alongside the migration.
+
+  Verified end-to-end: live scheduler pass after rebuild polls Jita
+  (public-reference NPC hub, 415 ESI pages → 335k orders inserted)
+  AND WinterCo 4-HWWF Central Station (private hub, donor collector,
+  36,499 orders inserted via `source=esi_structure_...`). Both paths
+  emit `market.orders_snapshot_ingested` outbox events. Unit-test
+  surface unchanged (19 tests green).
+
+- **Related: `AccountSettings::addStructure()` now creates the
+  canonical hub + attaches the donor as a collector + grants a
+  self-entitlement, atomically alongside the `market_watched_locations`
+  upsert.** Pre-existing gap surfaced by the poller migration: the
+  original Livewire picker only inserted into
+  `market_watched_locations`, so every post-ADR-0005 donor add
+  landed with `hub_id = NULL`. The old poller (reading
+  `owner_user_id`) coped; the new poller's `JOIN market_hubs`
+  would silently drop those rows. `addStructure()` now mirrors the
+  backfill migration's logic — `firstOrCreate` the hub by
+  `(location_type, location_id)`, `updateOrCreate` the watched row
+  with `hub_id`, `updateOrCreate` the collector (promoted to
+  primary if the hub has no primary yet), and `updateOrCreate` the
+  self-entitlement. All four writes wrapped in one transaction so
+  a half-landed add doesn't leak a hub without a watched row or
+  vice versa. Idempotent on re-add, so a donor toggling Watch /
+  Remove / Watch on the same structure doesn't duplicate anything.
+
+- **Post-deploy fix: `market_hubs.last_sync_at` now populates for
+  public-reference hubs too.** The initial cut of
+  `record_hub_sync_success` only ran for private hubs (the code
+  path owned `active_collector_character_id` denormalisation and
+  wasn't called for service-token / NPC polls). The migration
+  header is explicit that `last_sync_at` tracks "the most recent
+  successful poll against this hub, regardless of which collector
+  did it" — so Jita and other public-reference hubs need it bumped
+  on every pass. Function now branches: `character_id = None` →
+  bump `last_sync_at` + clear `disabled_reason`;
+  `character_id = int` → additionally denormalise
+  `active_collector_character_id`. Verified against live DB after
+  rebuild.
+
+- **Post-deploy diagnostic: poller warns on `hub_id IS NULL`
+  watched rows at the start of every pass.** After the
+  `addStructure()` fix above + the existing row backfill, every
+  watched row points at a hub. Any future regression that breaks
+  the invariant would previously have been silent (the JOIN'd
+  SELECT drops the row); it's now loud (one WARN per pass with
+  count + remediation hint). Cheap — one `SELECT COUNT(*)` per
+  tick, indexed on `enabled`.
+
 ### Fixed
 - **Standings sync 404s on both corp and alliance contacts.** The
   original corp endpoint path (`/latest/corporations/{id}/contacts/`)

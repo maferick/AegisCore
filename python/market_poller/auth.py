@@ -238,26 +238,28 @@ def load_and_refresh_service_token(
     )
 
 
-def load_and_refresh_market_token(
+def load_and_refresh_market_token_by_id(
     conn: pymysql.connections.Connection,
     cfg: Config,
-    user_id: int,
+    token_id: int,
     *,
     required_scopes: tuple[str, ...] = (REQUIRED_STRUCTURE_SCOPE,),
 ) -> MarketToken:
-    """Load + refresh-if-stale the market token for `user_id`.
+    """Load + refresh-if-stale the market token at `eve_market_tokens.id = token_id`.
 
-    Phase 5 assumption: one market token per donor (at most one
-    authorised character per donor). A donor with multiple linked
-    EVE characters who has authorised more than one is an edge case
-    we don't fully support — we pick the most-recently-updated row
-    and log the fact that others were ignored. Proper multi-alt
-    support is a future migration that adds `owner_character_id` to
-    `market_watched_locations`.
+    Keyed on primary key: the caller is the hub-collector picker,
+    which already resolved `token_id` from `market_hub_collectors`
+    under its own hub-scoped selection. Keying here by PK drops the
+    "ORDER BY updated_at DESC LIMIT 1 among the user's rows" tiebreak
+    that `load_and_refresh_market_token` had to run — the collector
+    row is the definitive answer about which token underwrites this
+    poll.
 
     Error surface mirrors the service-token path:
       - ServiceTokenNotConfigured — APP_KEY / SSO creds empty.
-      - ServiceTokenMissing        — no row for this user_id.
+      - ServiceTokenMissing        — no row at this token_id (e.g.
+                                     token deleted between collector
+                                     load and this call).
       - ServiceTokenScopeMissing   — row exists but lacks the scope
                                      (security-boundary disable).
       - ServiceTokenError          — decrypt / refresh failed.
@@ -276,28 +278,27 @@ def load_and_refresh_market_token(
     except LaravelEncrypterError as exc:
         raise ServiceTokenError(f"APP_KEY malformed: {exc}") from exc
 
-    # SELECT FOR UPDATE — parallel pollers serialise here. Two rows
-    # for the same user_id would be the "donor authorised multiple
-    # alts" edge case flagged above; we pick the freshest.
+    # SELECT FOR UPDATE by PK — parallel pollers serialise on the same
+    # token row rather than on (user_id) as the old user-keyed variant
+    # did. Two collectors pointing at the same token is an upsert
+    # collision handled at registration time; we trust the PK here.
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, user_id, character_id, character_name, scopes,
                    access_token, refresh_token, expires_at
               FROM eve_market_tokens
-             WHERE user_id = %s
-             ORDER BY updated_at DESC
-             LIMIT 1
+             WHERE id = %s
              FOR UPDATE
             """,
-            (int(user_id),),
+            (int(token_id),),
         )
         row = cur.fetchone()
     if row is None:
         conn.rollback()
         raise ServiceTokenMissing(
-            f"no eve_market_tokens row for user_id={user_id} — donor hasn't "
-            "authorised market access yet"
+            f"no eve_market_tokens row at id={token_id} — token was "
+            "deleted between collector load and refresh"
         )
 
     try:

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Livewire;
 
+use App\Domains\Markets\Models\MarketHub;
+use App\Domains\Markets\Models\MarketHubCollector;
+use App\Domains\Markets\Models\MarketHubEntitlement;
 use App\Domains\Markets\Models\MarketWatchedLocation;
 use App\Domains\Markets\Services\StructurePickerService;
 use App\Domains\UsersCharacters\Actions\SyncViewerContextForCharacter;
@@ -615,6 +618,26 @@ class AccountSettings extends Component
         }
 
         DB::transaction(function () use ($user, $structureId, $candidate): void {
+            // 1. Canonical hub for this physical market. Upsert by
+            //    (location_type, location_id) so a second donor adding
+            //    the same structure finds the existing row and becomes
+            //    an additional collector rather than forking a parallel
+            //    polling lane (ADR-0005 § Registration flow).
+            $hub = MarketHub::query()->firstOrCreate(
+                [
+                    'location_type' => MarketHub::LOCATION_TYPE_PLAYER_STRUCTURE,
+                    'location_id' => $structureId,
+                ],
+                [
+                    'region_id' => (int) $candidate['region_id'],
+                    'structure_name' => (string) $candidate['name'],
+                    'is_public_reference' => false,
+                    'is_active' => true,
+                    'created_by_user_id' => $user->id,
+                ],
+            );
+
+            // 2. Watched-locations driver row, pointed at the hub.
             MarketWatchedLocation::query()->updateOrCreate(
                 [
                     'owner_user_id' => $user->id,
@@ -624,6 +647,7 @@ class AccountSettings extends Component
                     'location_type' => MarketWatchedLocation::LOCATION_TYPE_PLAYER_STRUCTURE,
                     'region_id' => (int) $candidate['region_id'],
                     'name' => (string) $candidate['name'],
+                    'hub_id' => $hub->id,
                     'enabled' => true,
                     // Reset failure bookkeeping if this is a re-add of a
                     // previously auto-disabled row.
@@ -631,6 +655,59 @@ class AccountSettings extends Component
                     'last_error' => null,
                     'last_error_at' => null,
                     'disabled_reason' => null,
+                ],
+            );
+
+            // 3. Attach the donor as a collector if they already have a
+            //    market token (the picker uses it, so the row exists in
+            //    practice; the null-guard is for the rare cross-hub
+            //    re-add case where the token was revoked between flows).
+            //    First collector on a fresh hub becomes primary; subsequent
+            //    attaches from the same donor upsert by (hub_id,
+            //    character_id) and keep whatever is_primary they had.
+            $token = EveMarketToken::query()
+                ->where('user_id', $user->id)
+                ->orderByDesc('id')
+                ->first();
+
+            if ($token !== null) {
+                $hasPrimary = MarketHubCollector::query()
+                    ->where('hub_id', $hub->id)
+                    ->where('is_primary', true)
+                    ->exists();
+
+                MarketHubCollector::query()->updateOrCreate(
+                    [
+                        'hub_id' => $hub->id,
+                        'character_id' => (int) $token->character_id,
+                    ],
+                    [
+                        'user_id' => $user->id,
+                        'token_id' => $token->id,
+                        'is_primary' => ! $hasPrimary,
+                        'is_active' => true,
+                        // Reset failure state — re-add of a previously
+                        // auto-deactivated collector should start clean.
+                        'consecutive_failure_count' => 0,
+                        'failure_reason' => null,
+                        'last_failure_at' => null,
+                    ],
+                );
+            }
+
+            // 4. Self-entitlement. The donor needs an entitlement row to
+            //    see their own hub per ADR-0005's intersection rule;
+            //    this also pre-wires the shape the phase-2 group-sharing
+            //    UI will reuse for corp / alliance subject types.
+            MarketHubEntitlement::query()->updateOrCreate(
+                [
+                    'hub_id' => $hub->id,
+                    'subject_type' => MarketHubEntitlement::SUBJECT_TYPE_USER,
+                    'subject_id' => $user->id,
+                ],
+                [
+                    'granted_by_user_id' => $user->id,
+                    'granted_at' => now(),
                 ],
             );
         });

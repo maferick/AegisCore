@@ -11,23 +11,39 @@ lives outside this package (Laravel scheduler, cron, systemd timer
 
 ## Scope
 
-Polls three kinds of row in `market_watched_locations`:
+Driven by `market_watched_locations` JOIN `market_hubs`. The runner
+dispatches by `(location_type, is_public_reference)`:
 
 1. **NPC stations** (`location_type = 'npc_station'`) — region endpoint
-   + client-side location filter, no auth.
-2. **Admin-owned player structures** (`location_type = 'player_structure'`
-   with `owner_user_id IS NULL`) — structure endpoint using the
-   `eve_service_tokens` singleton the Laravel
+   + client-side location filter, no auth. Always public-reference.
+2. **Admin-managed public-reference structures**
+   (`location_type = 'player_structure'` AND
+   `market_hubs.is_public_reference = true`) — structure endpoint using
+   the `eve_service_tokens` singleton the Laravel
    `/admin/eve-service-character` flow authored. Requires
    `esi-markets.structure_markets.v1` scope.
-3. **Donor-owned player structures** (`location_type = 'player_structure'`
-   with `owner_user_id = <user>`) — structure endpoint using that
-   donor's row in `eve_market_tokens`. Requires the same scope. The
-   poller enforces `token.user_id == watched_location.owner_user_id`
-   as an invariant on every fetch — mismatch triggers immediate
-   `disabled_reason = 'ownership_mismatch'` disable (security-
-   boundary violation, no grace counter). ADR-0004 § Structure
-   access is alliance/corp-gated.
+3. **Private hubs** (`location_type = 'player_structure'` AND
+   `market_hubs.is_public_reference = false`) — structure endpoint using
+   a collector token from `market_hub_collectors`. The poller walks
+   active collectors (primary first, then stalest-failure first),
+   tries each in turn, and stops at the first success. Per ADR-0005:
+   - Per-collector failure bookkeeping lives on
+     `market_hub_collectors` (`consecutive_failure_count`,
+     `last_failure_at`, `failure_reason`). Auto-deactivate on 3×403 or
+     5×5xx, same tiering as the public-reference path.
+   - Token ↔ collector `user_id` mismatch → immediate
+     `disable_collector_immediately` (security-boundary violation).
+   - When every active collector for a hub has been exhausted and none
+     remain active, the hub is frozen with
+     `market_hubs.disabled_reason = 'no_active_collector'` (without
+     flipping `is_active` — admin / donor re-auth can rescue it).
+   - A successful poll clears the hub's `disabled_reason`,
+     denormalises the serving collector's `character_id` onto
+     `market_hubs.active_collector_character_id`, and bumps
+     `last_sync_at`.
+
+Hubs with `is_active = 0` OR `disabled_reason IS NOT NULL` are filtered
+at SELECT time so a stuck hub doesn't burn per-tick round-trips.
 
 **Jita 4-4 is the seeded baseline** (region 10000002, location
 60003760) and runs on every pass.
@@ -129,18 +145,27 @@ skips structure rows cleanly with a log line (see
 
 ## Failure discipline
 
-Per ADR-0004 § Failure handling:
+Per ADR-0004 § Failure handling + ADR-0005 § Failover:
 
-- **Routine failures** (403 no-access, 5xx, timeout):
-  `consecutive_failure_count` increments, `last_error` / `last_error_at`
-  record the most recent. Auto-disable after 3 consecutive 403s or 5
-  consecutive 5xx/timeouts; `disabled_reason` is set (`no_access`,
-  `upstream_failing`, `upstream_unreachable`). A single success resets
-  the counter.
-- **Security-boundary failures** (token ↔ location ownership mismatch,
-  required scope missing): immediate disable, no grace counter. Not
-  reachable in phase 1 (no auth'd polling yet); the path exists in
-  `persist.disable_immediately` for later steps.
+- **NPC / public-reference structure** (`market_watched_locations`
+  counter): routine failures (403, 5xx, timeout) bump
+  `consecutive_failure_count`, populate `last_error` / `last_error_at`.
+  Auto-disable after 3 consecutive 403s or 5 consecutive 5xx/timeouts
+  via `record_failure`; `disabled_reason` ∈
+  {`no_access`, `upstream_failing`, `upstream_unreachable`}. Security
+  violations (service-token scope missing) → `disable_immediately`,
+  no grace.
+- **Private hub collector** (`market_hub_collectors` counter): same
+  3×403 / 5×5xx tiering, but bookkeeping is per-collector via
+  `record_collector_failure`. A collector hitting the threshold flips
+  to `is_active = 0` without touching `market_hubs`. When every active
+  collector for the hub has failed in a pass (either this pass or
+  accumulated over prior passes) the hub is frozen via
+  `freeze_hub_no_collectors`. Security violations
+  (`ownership_mismatch`, `scope_missing`) → immediate
+  `disable_collector_immediately`. A single success via
+  `record_collector_success` + `record_hub_sync_success` clears the
+  counter and un-freezes the hub.
 
 ## Plane boundary
 

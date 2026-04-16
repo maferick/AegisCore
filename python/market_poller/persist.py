@@ -252,3 +252,204 @@ def disable_immediately(
             """,
             (reason, message[:2000], now, now, watched_location_id),
         )
+
+
+# -- market_hub_collectors bookkeeping (ADR-0005) --------------------------
+#
+# ADR-0005 moves per-token failure counters + disable thresholds from
+# market_watched_locations onto market_hub_collectors, because a hub with
+# multiple collectors needs per-collector state to drive failover: a
+# hub-wide counter would lie when the poller alternates between a dead
+# primary and a live backup. The watched-locations row still tracks
+# `last_polled_at` for scheduler ordering; failure / disable lives here.
+
+
+def record_collector_success(
+    conn: pymysql.connections.Connection,
+    collector_id: int,
+    now: datetime,
+) -> None:
+    """Mark a successful poll on this collector. Clears failure state
+    so a transient bad stretch doesn't linger into the next outage."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market_hub_collectors
+               SET last_success_at            = %s,
+                   last_failure_at            = NULL,
+                   failure_reason             = NULL,
+                   consecutive_failure_count  = 0,
+                   updated_at                 = %s
+             WHERE id = %s
+            """,
+            (now, now, collector_id),
+        )
+
+
+def record_collector_failure(
+    conn: pymysql.connections.Connection,
+    collector_id: int,
+    *,
+    cfg: Config,
+    status_code: int | None,
+    message: str,
+    now: datetime,
+) -> bool:
+    """Bump the collector's failure counter and flip `is_active = false`
+    once the tier-appropriate threshold is crossed. Returns True if the
+    threshold tripped so the caller can log the transition.
+
+    Uses the same 3-for-403 / 5-for-5xx tiering as
+    `record_failure()` on watched-locations — only the storage location
+    moves. Operators tuning the threshold via env vars keep a single
+    knob for both surfaces."""
+    short_reason = _collector_failure_reason(status_code)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market_hub_collectors
+               SET consecutive_failure_count = consecutive_failure_count + 1,
+                   last_failure_at           = %s,
+                   failure_reason            = %s,
+                   updated_at                = %s
+             WHERE id = %s
+            """,
+            (now, (short_reason + ": " + message)[:255], now, collector_id),
+        )
+        cur.execute(
+            "SELECT consecutive_failure_count FROM market_hub_collectors WHERE id = %s",
+            (collector_id,),
+        )
+        row = cur.fetchone()
+        count = int(row["consecutive_failure_count"]) if row else 0
+
+    threshold_hit = False
+    if status_code == 403 and count >= cfg.max_consecutive_403s:
+        threshold_hit = True
+    elif status_code is not None and 500 <= status_code < 600 and count >= cfg.max_consecutive_5xx:
+        threshold_hit = True
+    elif status_code is None and count >= cfg.max_consecutive_5xx:
+        # Network / timeout class — budget with the 5xx threshold.
+        threshold_hit = True
+
+    if threshold_hit:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE market_hub_collectors
+                   SET is_active  = 0,
+                       updated_at = %s
+                 WHERE id = %s
+                """,
+                (now, collector_id),
+            )
+    return threshold_hit
+
+
+def disable_collector_immediately(
+    conn: pymysql.connections.Connection,
+    collector_id: int,
+    *,
+    reason: str,
+    message: str,
+    now: datetime,
+) -> None:
+    """Security-boundary disable — scope missing, ownership mismatch.
+    No grace counter. Mirrors `disable_immediately` on watched-locations
+    but writes to the collector row instead."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market_hub_collectors
+               SET is_active      = 0,
+                   last_failure_at = %s,
+                   failure_reason  = %s,
+                   updated_at      = %s
+             WHERE id = %s
+            """,
+            (now, (reason + ": " + message)[:255], now, collector_id),
+        )
+
+
+def record_hub_sync_success(
+    conn: pymysql.connections.Connection,
+    hub_id: int,
+    character_id: int | None,
+    now: datetime,
+) -> None:
+    """Post-success hub-level bookkeeping. Called on every successful
+    poll, public-reference or private:
+
+      - Always bump `last_sync_at` (per the migration header: "most
+        recent successful poll against this hub, regardless of which
+        collector did it").
+      - Always clear `disabled_reason` — if the hub was previously
+        frozen (e.g. `'no_active_collector'`) a success here means
+        it's alive again.
+      - Update `active_collector_character_id` only when a collector
+        is involved (private hub). Public-reference hubs are polled
+        by the service token or unauth'd region endpoint; they
+        legitimately have NULL here and we must not overwrite it with
+        stale state from a previous private-hub reuse of the same
+        hub_id (can't happen today, but the invariant is cheap).
+    """
+    if character_id is None:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE market_hubs
+                   SET last_sync_at    = %s,
+                       disabled_reason = NULL,
+                       updated_at      = %s
+                 WHERE id = %s
+                """,
+                (now, now, hub_id),
+            )
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market_hubs
+               SET active_collector_character_id = %s,
+                   last_sync_at                  = %s,
+                   disabled_reason               = NULL,
+                   updated_at                    = %s
+             WHERE id = %s
+            """,
+            (character_id, now, now, hub_id),
+        )
+
+
+def freeze_hub_no_collectors(
+    conn: pymysql.connections.Connection,
+    hub_id: int,
+    now: datetime,
+) -> None:
+    """All collectors for this hub are inactive. Stamp
+    `disabled_reason = 'no_active_collector'` on the hub so the next
+    tick's SELECT skips it. Per ADR-0005 we deliberately do NOT flip
+    `market_hubs.is_active` — an admin / donor re-auth can rescue the
+    hub without an operator first flipping that bit."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market_hubs
+               SET disabled_reason                = 'no_active_collector',
+                   active_collector_character_id  = NULL,
+                   updated_at                     = %s
+             WHERE id = %s
+            """,
+            (now, hub_id),
+        )
+
+
+def _collector_failure_reason(status_code: int | None) -> str:
+    """Short label stored in market_hub_collectors.failure_reason.
+    Values match the vocabulary ADR-0005's header comment lists."""
+    if status_code == 403:
+        return "revoked_access"
+    if status_code is not None and 500 <= status_code < 600:
+        return "5xx_timeout"
+    if status_code is None:
+        return "5xx_timeout"
+    return f"http_{status_code}"
