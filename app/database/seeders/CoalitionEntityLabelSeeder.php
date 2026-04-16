@@ -42,8 +42,15 @@ class CoalitionEntityLabelSeeder extends Seeder
         // ---------------------------------------------------------------
         $wc = $blocs[CoalitionBloc::CODE_WINTERCO];
 
+        // Alliance IDs verified against esi_entity_names cache /
+        // zkillboard. Historical typos (99005393 labelled "Fraternity."
+        // was actually "Blades of Grass", which is itself a WinterCo
+        // alliance — keep the mapping, fix the display name) preserved
+        // as WinterCo members. Real Fraternity. is 99003581, added
+        // below as a separate row.
         $wintercoAlliances = [
-            99005393 => 'Fraternity.',
+            99003581 => 'Fraternity.',                 // real Fraternity.
+            99005393 => 'Blades of Grass',             // previously mislabelled "Fraternity."
             99010562 => 'Winter Coalition',
             99011406 => 'Dracarys.',
             99012009 => 'Literally Triggered',
@@ -72,13 +79,18 @@ class CoalitionEntityLabelSeeder extends Seeder
         // ---------------------------------------------------------------
         $cfc = $blocs[CoalitionBloc::CODE_CFC];
 
+        // CCP alliance IDs — verified against zkillboard. Previously
+        // had The Initiative. at 99005338; the real CCP id is
+        // 1900696668 (observed in battle 4-HWWF, esi_entity_names
+        // cache). "Get Off My Lawn" / "Bastion, The" sharing
+        // entity_id 99003995 was an old typo collision that silently
+        // clobbered one entry via PHP array dedup — corrected here.
         $cfcAlliances = [
             1354830081 => 'Goonswarm Federation',
-            99005338  => 'The Initiative.',
-            99009163  => 'Tactical Narcotics Team',
-            99003995  => 'Get Off My Lawn',
-            99003995  => 'Bastion, The',
-            99009926  => 'Dracarys',
+            1900696668 => 'The Initiative.',
+            99009163   => 'Tactical Narcotics Team',
+            99003995   => 'Bastion, The',
+            99009926   => 'Dracarys',
             1727758877 => 'Tactical Voltage',
         ];
 

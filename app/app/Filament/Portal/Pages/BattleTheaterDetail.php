@@ -158,6 +158,38 @@ class BattleTheaterDetail extends Page
         // theater-sized row counts; keeps the DB schema minimal).
         $allianceRows = $this->buildAllianceRollup($participants, $names, $sides);
 
+        // Ship rollup per pilot. Two sources feed the map:
+        // (a) killmail_attackers.ship_type_id — the ship each attacker
+        //     was flying when they participated in a kill.
+        // (b) killmails.victim_ship_type_id — what each victim lost.
+        // Both go through one batched query per source, then get
+        // keyed character_id -> [ship_type_id -> count, ...] so the
+        // view can render the top 1-2 hulls per pilot without a
+        // further round-trip.
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theater->id)
+            ->pluck('killmail_id')
+            ->all();
+
+        $shipsByCharacter = $this->buildShipRollup($killmailIds);
+        $shipTypeIds = [];
+        foreach ($shipsByCharacter as $rows) {
+            foreach (array_keys($rows) as $tid) {
+                $shipTypeIds[$tid] = true;
+            }
+        }
+        $shipNames = $shipTypeIds !== []
+            ? DB::table('ref_item_types')
+                ->whereIn('id', array_keys($shipTypeIds))
+                ->pluck('name', 'id')
+            : collect();
+
+        // Compact killmail list for the "Kill feed" section. Ordered
+        // by killed_at, includes victim name + ship, attacker count,
+        // final blow pilot, total_value. One query — we eagerly
+        // resolve final-blow pilot name via esi_entity_names below.
+        $killFeed = $this->buildKillFeed($killmailIds, $names, $shipNames);
+
         return [
             'theater' => $theater,
             'sides' => $sides,
@@ -168,7 +200,109 @@ class BattleTheaterDetail extends Page
             'side_totals' => $sideTotals,
             'alliance_rows' => $allianceRows,
             'viewer' => $viewer,
+            'ships_by_character' => $shipsByCharacter,
+            'ship_names' => $shipNames,
+            'kill_feed' => $killFeed,
         ];
+    }
+
+    /**
+     * @param  list<int>  $killmailIds
+     * @return array<int, array<int, int>>  character_id -> [ship_type_id -> kill_count_on_that_hull]
+     */
+    private function buildShipRollup(array $killmailIds): array
+    {
+        if ($killmailIds === []) {
+            return [];
+        }
+
+        $out = [];
+
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('character_id')
+            ->where('ship_type_id', '>', 0)
+            ->select(['character_id', 'ship_type_id'])
+            ->orderBy('killmail_id')
+            ->get()
+            ->each(function ($row) use (&$out): void {
+                $cid = (int) $row->character_id;
+                $tid = (int) $row->ship_type_id;
+                $out[$cid][$tid] = ($out[$cid][$tid] ?? 0) + 1;
+            });
+
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('victim_character_id')
+            ->where('victim_ship_type_id', '>', 0)
+            ->select(['victim_character_id', 'victim_ship_type_id'])
+            ->get()
+            ->each(function ($row) use (&$out): void {
+                $cid = (int) $row->victim_character_id;
+                $tid = (int) $row->victim_ship_type_id;
+                // Prepend "lost" marker via negative key is ugly — keep
+                // both counts merged; the view can show "Hull · Nx"
+                // regardless of whether it was flown or lost, which is
+                // what the user actually cares about ("what was this
+                // pilot in during this fight").
+                $out[$cid][$tid] = ($out[$cid][$tid] ?? 0) + 1;
+            });
+
+        return $out;
+    }
+
+    /**
+     * @param  list<int>  $killmailIds
+     * @param  \Illuminate\Support\Collection  $names  entity_id -> name
+     * @param  \Illuminate\Support\Collection  $shipNames  type_id -> name
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildKillFeed(array $killmailIds, $names, $shipNames): array
+    {
+        if ($killmailIds === []) {
+            return [];
+        }
+
+        $rows = DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->select([
+                'killmail_id', 'killed_at', 'solar_system_id',
+                'victim_character_id', 'victim_corporation_id', 'victim_alliance_id',
+                'victim_ship_type_id', 'total_value', 'attacker_count',
+            ])
+            ->orderBy('killed_at')
+            ->get();
+
+        // Final-blow attacker name per killmail — one round-trip.
+        $finalBlows = DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->where('is_final_blow', true)
+            ->select(['killmail_id', 'character_id', 'alliance_id', 'ship_type_id'])
+            ->get()
+            ->keyBy('killmail_id');
+
+        $out = [];
+        foreach ($rows as $r) {
+            $fb = $finalBlows->get($r->killmail_id);
+            $out[] = [
+                'killmail_id' => (int) $r->killmail_id,
+                'killed_at' => $r->killed_at,
+                'system_id' => (int) $r->solar_system_id,
+                'victim_id' => $r->victim_character_id ? (int) $r->victim_character_id : null,
+                'victim_name' => $r->victim_character_id ? ($names[(int) $r->victim_character_id] ?? '#'.$r->victim_character_id) : '(NPC)',
+                'victim_corp_id' => $r->victim_corporation_id ? (int) $r->victim_corporation_id : null,
+                'victim_alliance_id' => $r->victim_alliance_id ? (int) $r->victim_alliance_id : null,
+                'ship_type_id' => (int) $r->victim_ship_type_id,
+                'ship_name' => $shipNames[(int) $r->victim_ship_type_id] ?? '#'.$r->victim_ship_type_id,
+                'total_value' => (float) $r->total_value,
+                'attacker_count' => (int) $r->attacker_count,
+                'final_blow_char_id' => $fb && $fb->character_id ? (int) $fb->character_id : null,
+                'final_blow_name' => $fb && $fb->character_id ? ($names[(int) $fb->character_id] ?? '#'.$fb->character_id) : null,
+                'final_blow_ship_id' => $fb ? (int) $fb->ship_type_id : null,
+            ];
+        }
+
+        return $out;
     }
 
     /**

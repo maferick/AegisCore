@@ -91,7 +91,10 @@ class BattleTheater extends Model
     /** Duration in seconds between start_time and end_time. */
     public function durationSeconds(): int
     {
-        return (int) max(0, $this->end_time->diffInSeconds($this->start_time));
+        // abs() because Carbon's diffInSeconds returns signed deltas in
+        // recent versions — a subtle change from the historical absolute
+        // behaviour that was silently flooring to 0 via max(0, ...).
+        return (int) abs((int) $this->end_time->diffInSeconds($this->start_time));
     }
 
     /** Human-readable label. Used by the list page. */

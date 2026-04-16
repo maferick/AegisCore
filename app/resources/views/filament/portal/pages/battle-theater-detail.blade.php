@@ -11,9 +11,29 @@
     /** @var array $side_totals */
     /** @var \Illuminate\Support\Collection $alliance_rows */
     /** @var \App\Domains\UsersCharacters\Models\ViewerContext|null $viewer */
+    /** @var array $ships_by_character */
+    /** @var \Illuminate\Support\Collection $ship_names */
+    /** @var array $kill_feed */
 
     $sideALabel = $sides->sideABlocId ? ($blocs[$sides->sideABlocId]->display_name ?? 'Side A') : 'Side A';
-    $sideBLabel = $sides->sideBBlocId ? ($blocs[$sides->sideBBlocId]->display_name ?? 'Side B') : 'Side B';
+    $sideBLabel = $sides->sideBBlocId ? ($blocs[$sides->sideBBlocId]->display_name ?? 'Side B') : 'No opposing bloc';
+
+    // EVE image server helpers. CCP CDN, no auth, public cache.
+    $charImg = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/characters/{$id}/portrait?size={$size}" : null;
+    $corpImg = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/corporations/{$id}/logo?size={$size}" : null;
+    $allianceImg = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/alliances/{$id}/logo?size={$size}" : null;
+    $typeImg = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/types/{$id}/icon?size={$size}" : null;
+    $typeRender = fn (?int $id, int $size = 64): ?string => $id ? "https://images.evetech.net/types/{$id}/render?size={$size}" : null;
+
+    // Primary ship per pilot: the hull they appeared in most within
+    // the theater. Ties broken by higher type_id (arbitrary but stable).
+    $primaryShipOf = function (int $characterId) use ($ships_by_character, $ship_names): array {
+        $rows = $ships_by_character[$characterId] ?? [];
+        if ($rows === []) return ['type_id' => null, 'name' => '—'];
+        arsort($rows);
+        $tid = (int) array_key_first($rows);
+        return ['type_id' => $tid, 'name' => $ship_names[$tid] ?? ('#' . $tid)];
+    };
 @endphp
 
 <x-filament-panels::page>
@@ -25,7 +45,8 @@
                 <div class="text-sm text-gray-500 dark:text-gray-400">
                     {{ $theater->region?->name ?? '—' }}
                     · {{ $theater->start_time?->format('Y-m-d H:i') }} → {{ $theater->end_time?->format('H:i') }}
-                    · {{ gmdate('H:i:s', $theater->durationSeconds()) }} duration
+                    @php $dur = $theater->durationSeconds(); @endphp
+                    · {{ sprintf('%02d:%02d:%02d', intdiv($dur, 3600), intdiv($dur % 3600, 60), $dur % 60) }} duration
                     @if ($theater->locked_at)
                         · <span class="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800">Locked</span>
                     @else
@@ -52,12 +73,12 @@
     {{-- Side summary ---------------------------------------------- --}}
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         @foreach ([
-            S::SIDE_A => [$sideALabel, 'blue'],
-            S::SIDE_B => [$sideBLabel, 'red'],
-            S::SIDE_C => ['Other / third parties', 'gray'],
+            S::SIDE_A => [$sideALabel, 'blue', $sides->sideABlocId],
+            S::SIDE_B => [$sideBLabel, 'red', $sides->sideBBlocId],
+            S::SIDE_C => ['Other / third parties', 'gray', null],
         ] as $sideKey => $meta)
             @php
-                [$label, $tone] = $meta;
+                [$label, $tone, $blocId] = $meta;
                 $t = $side_totals[$sideKey];
                 $toneBg = [
                     'blue' => 'bg-blue-50 dark:bg-blue-950',
@@ -78,6 +99,75 @@
                 </div>
             </div>
         @endforeach
+    </div>
+
+    {{-- Kill feed ------------------------------------------------- --}}
+    <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow p-6 mb-6">
+        <h3 class="text-lg font-semibold mb-4">Kill feed ({{ count($kill_feed) }})</h3>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="text-left text-gray-500 dark:text-gray-400">
+                    <tr>
+                        <th class="py-2">Time</th>
+                        <th class="py-2">Victim</th>
+                        <th class="py-2">Ship</th>
+                        <th class="py-2">Final blow</th>
+                        <th class="py-2 text-right">Attackers</th>
+                        <th class="py-2 text-right">ISK</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                    @foreach ($kill_feed as $km)
+                        <tr>
+                            <td class="py-2 font-mono text-xs text-gray-500 whitespace-nowrap">
+                                {{ \Carbon\Carbon::parse($km['killed_at'])->format('H:i:s') }}
+                            </td>
+                            <td class="py-2">
+                                <div class="flex items-center gap-2">
+                                    @if ($km['victim_id'])
+                                        <img src="{{ $charImg($km['victim_id'], 32) }}" alt="" class="w-6 h-6 rounded" loading="lazy" />
+                                    @endif
+                                    <div class="min-w-0">
+                                        <div class="truncate">{{ $km['victim_name'] }}</div>
+                                        @if ($km['victim_alliance_id'])
+                                            <div class="flex items-center gap-1 text-xs text-gray-500">
+                                                <img src="{{ $allianceImg($km['victim_alliance_id'], 16) }}" alt="" class="w-3 h-3" loading="lazy" />
+                                                <span class="truncate">{{ $names[$km['victim_alliance_id']] ?? '#'.$km['victim_alliance_id'] }}</span>
+                                            </div>
+                                        @endif
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="py-2">
+                                <div class="flex items-center gap-2">
+                                    @if ($km['ship_type_id'] > 0)
+                                        <img src="{{ $typeImg($km['ship_type_id'], 32) }}" alt="" class="w-6 h-6" loading="lazy" />
+                                    @endif
+                                    <span class="truncate">{{ $km['ship_name'] }}</span>
+                                </div>
+                            </td>
+                            <td class="py-2">
+                                @if ($km['final_blow_char_id'])
+                                    <div class="flex items-center gap-2">
+                                        <img src="{{ $charImg($km['final_blow_char_id'], 32) }}" alt="" class="w-6 h-6 rounded" loading="lazy" />
+                                        <div class="min-w-0">
+                                            <div class="truncate">{{ $km['final_blow_name'] }}</div>
+                                            @if ($km['final_blow_ship_id'])
+                                                <div class="text-xs text-gray-500 truncate">{{ $ship_names[$km['final_blow_ship_id']] ?? '#'.$km['final_blow_ship_id'] }}</div>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @else
+                                    <span class="text-gray-400">—</span>
+                                @endif
+                            </td>
+                            <td class="py-2 text-right font-mono">{{ $km['attacker_count'] }}</td>
+                            <td class="py-2 text-right font-mono">{{ Battles::formatIsk($km['total_value']) }}</td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </div>
     </div>
 
     {{-- Alliance table -------------------------------------------- --}}
@@ -101,10 +191,17 @@
                     @foreach ($alliance_rows as $row)
                         <tr>
                             <td class="py-2">
-                                {{ $row['alliance_name'] }}
-                                @if ($row['alliance_id'] > 0)
-                                    <span class="text-xs font-mono text-gray-400 ml-2">#{{ $row['alliance_id'] }}</span>
-                                @endif
+                                <div class="flex items-center gap-2">
+                                    @if ($row['alliance_id'] > 0)
+                                        <img src="{{ $allianceImg($row['alliance_id'], 32) }}" alt="" class="w-6 h-6" loading="lazy" />
+                                    @endif
+                                    <div class="min-w-0">
+                                        <div class="truncate">{{ $row['alliance_name'] }}</div>
+                                        @if ($row['alliance_id'] > 0)
+                                            <div class="text-xs font-mono text-gray-400">#{{ $row['alliance_id'] }}</div>
+                                        @endif
+                                    </div>
+                                </div>
                             </td>
                             <td class="py-2 font-mono text-xs">{{ $row['side'] }}</td>
                             <td class="py-2 text-right font-mono">{{ $row['pilots'] }}</td>
@@ -129,11 +226,12 @@
                     <tr>
                         <th class="py-2">Side</th>
                         <th class="py-2">Pilot</th>
+                        <th class="py-2">Ship</th>
                         <th class="py-2">Alliance</th>
                         <th class="py-2 text-right">Kills</th>
-                        <th class="py-2 text-right">Final blows</th>
-                        <th class="py-2 text-right">Damage done</th>
-                        <th class="py-2 text-right">Damage taken</th>
+                        <th class="py-2 text-right">FB</th>
+                        <th class="py-2 text-right">Dmg done</th>
+                        <th class="py-2 text-right">Dmg taken</th>
                         <th class="py-2 text-right">Deaths</th>
                         <th class="py-2 text-right">ISK lost</th>
                     </tr>
@@ -141,14 +239,36 @@
                 <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                     @foreach ($participants as $p)
                         @php
-                            $side = $sides->sideByCharacterId[(int) $p->character_id] ?? 'C';
-                            $charName = $names[(int) $p->character_id] ?? 'Character #'.$p->character_id;
+                            $cid = (int) $p->character_id;
+                            $side = $sides->sideByCharacterId[$cid] ?? 'C';
+                            $charName = $names[$cid] ?? 'Character #'.$cid;
                             $allianceName = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : '—';
+                            $ship = $primaryShipOf($cid);
                         @endphp
                         <tr>
                             <td class="py-2 font-mono text-xs">{{ $side }}</td>
-                            <td class="py-2">{{ $charName }}</td>
-                            <td class="py-2 text-gray-500">{{ $allianceName }}</td>
+                            <td class="py-2">
+                                <div class="flex items-center gap-2">
+                                    <img src="{{ $charImg($cid, 32) }}" alt="" class="w-6 h-6 rounded" loading="lazy" />
+                                    <span class="truncate">{{ $charName }}</span>
+                                </div>
+                            </td>
+                            <td class="py-2">
+                                <div class="flex items-center gap-2">
+                                    @if ($ship['type_id'])
+                                        <img src="{{ $typeImg($ship['type_id'], 32) }}" alt="" class="w-6 h-6" loading="lazy" />
+                                    @endif
+                                    <span class="truncate">{{ $ship['name'] }}</span>
+                                </div>
+                            </td>
+                            <td class="py-2">
+                                <div class="flex items-center gap-2 text-gray-500">
+                                    @if ($p->alliance_id)
+                                        <img src="{{ $allianceImg((int) $p->alliance_id, 20) }}" alt="" class="w-4 h-4" loading="lazy" />
+                                    @endif
+                                    <span class="truncate">{{ $allianceName }}</span>
+                                </div>
+                            </td>
                             <td class="py-2 text-right font-mono">{{ $p->kills }}</td>
                             <td class="py-2 text-right font-mono">{{ $p->final_blows }}</td>
                             <td class="py-2 text-right font-mono">{{ number_format($p->damage_done) }}</td>
