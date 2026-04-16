@@ -21,28 +21,20 @@ use UnitEnum;
 /**
  * Portal detail page for a single battle theater.
  *
- * Render sections (ADR-0006 § 5):
+ * Layout modelled after eve-kill.com / zkillboard related-kills pages:
+ *   1. Header              — system, region, time span, top-line counts.
+ *   2. VS banner + cards   — big logos per side, efficiency split bar,
+ *                            kills / losses / ISK destroyed / ISK lost.
+ *   3. Most valuable kills — top 3 per side showcased with ship art.
+ *   4. Ship composition    — grouped by ship-class bucket per side.
+ *   5. Top damage dealers  — top 5 per side by damage_done.
+ *   6. Alliance roster     — per-alliance rollup by side (logos + stats).
+ *   7. Pilot table         — sorted by ISK_lost desc.
+ *   8. Kill feed           — time-ordered kill list, colored by victim side.
+ *   9. Systems             — where the fighting happened.
  *
- *   1. Header           — label, primary system, region, time span,
- *                         lock state, top-line rollup numbers.
- *   2. Side summary     — three columns (A / B / other). Each shows
- *                         the bloc label (when mapped), pilot count,
- *                         ISK lost. "ISK killed" per side is the
- *                         opposing side's ISK lost — one number, two
- *                         perspectives (per the locked metric spec).
- *   3. Alliance table   — alliance → side, pilots, kills, deaths,
- *                         ISK lost, damage done / taken.
- *   4. Pilot table      — per-character row sorted by ISK_lost DESC.
- *                         Columns: side, pilot, alliance/corp, kills,
- *                         final blows, damage done, damage taken,
- *                         ISK lost.
- *   5. Systems          — where the fighting happened (from
- *                         battle_theater_systems).
- *
- * Side assignment is viewer-relative. Resolved once on mount from the
- * authed user's ViewerContext; kept on $this->sides through the
- * render. Viewers without a confirmed bloc see the two largest blocs
- * in the fight as A/B.
+ * Side assignment is viewer-relative (ADR-0006 § 2) — resolved once
+ * on each render from the authed user's ViewerContext.
  */
 class BattleTheaterDetail extends Page
 {
@@ -52,38 +44,27 @@ class BattleTheaterDetail extends Page
 
     protected static ?string $slug = 'battles/{record}';
 
-    // Hidden from the portal sidebar — the list page at
-    // /portal/battles drills into this page via recordUrl().
     protected static bool $shouldRegisterNavigation = false;
 
     protected string $view = 'filament.portal.pages.battle-theater-detail';
 
-    // Only the scalar id is a Livewire public property. Resolved model
-    // + side resolution + viewer context are recomputed each request
-    // from that id — Livewire cannot serialise a custom value object
-    // (BattleTheaterSideResolution) or an Eloquent model across
-    // component round-trips, and keeping them public throws
-    // "Property type not supported in Livewire" on every request.
+    // Livewire cannot serialise the Eloquent model or the side-resolution
+    // value object across round-trips; persist only the scalar id and
+    // reload in getViewData().
     public ?int $recordId = null;
 
     public function mount(BattleTheater|int $record): void
     {
-        // Filament's page router gives us either the raw path segment
-        // (int) or a resolved model — accept both. We only keep the
-        // id here; getViewData() reloads the model + relations every
-        // render.
         $this->recordId = $record instanceof BattleTheater ? (int) $record->id : (int) $record;
     }
 
-    /** Load the theater + eager relations. Called lazily. */
     private function loadRecord(): BattleTheater
     {
         return BattleTheater::query()
-            ->with(['primarySystem:id,name', 'region:id,name'])
+            ->with(['primarySystem:id,name,security_status', 'region:id,name'])
             ->findOrFail($this->recordId);
     }
 
-    /** Resolve the viewer's ViewerContext, or null if unauth / no chars. */
     private function loadViewer(): ?ViewerContext
     {
         $user = Auth::user();
@@ -107,16 +88,6 @@ class BattleTheaterDetail extends Page
     }
 
     /**
-     * Payload assembled once per render and passed to the blade view
-     * as a single array. Keeps the blade side free of controller logic
-     * and ensures every section gets its inputs from the same set of
-     * eager-loaded collections.
-     *
-     * Nothing here is stored on the component — the value object
-     * (BattleTheaterSideResolution) is non-serialisable for Livewire
-     * so it lives only for the duration of this method call. The
-     * blade receives scalars / collections / the resolved model.
-     *
      * @return array<string, mixed>
      */
     public function getViewData(): array
@@ -127,11 +98,10 @@ class BattleTheaterDetail extends Page
 
         $participants = $theater->participants()->orderByDesc('isk_lost')->get();
         $systems = $theater->systems()
-            ->with('solarSystem:id,name')
+            ->with('solarSystem:id,name,security_status')
             ->orderByDesc('kill_count')
             ->get();
 
-        // Bloc display names for the side headers + alliance rows.
         $blocIds = array_values(array_filter([
             $sides->sideABlocId,
             $sides->sideBBlocId,
@@ -141,7 +111,6 @@ class BattleTheaterDetail extends Page
             ? CoalitionBloc::query()->whereIn('id', array_unique($blocIds))->get()->keyBy('id')
             : collect();
 
-        // Entity names for characters + corps + alliances.
         $charIds = $participants->pluck('character_id')->filter()->unique()->values();
         $corpIds = $participants->pluck('corporation_id')->filter()->unique()->values();
         $allIds = $participants->pluck('alliance_id')->filter()->unique()->values();
@@ -149,46 +118,47 @@ class BattleTheaterDetail extends Page
             ->whereIn('entity_id', $charIds->merge($corpIds)->merge($allIds)->unique()->values()->all())
             ->pluck('name', 'entity_id');
 
-        // Side totals. ISK Lost per side is summed from participants;
-        // ISK Killed is the opposing side's ISK Lost (one number, two
-        // perspectives — ADR-0006 § 1).
         $sideTotals = $this->computeSideTotals($participants, $sides);
 
-        // Alliance rollup (GROUP BY alliance_id in memory — fast at
-        // theater-sized row counts; keeps the DB schema minimal).
         $allianceRows = $this->buildAllianceRollup($participants, $names, $sides);
 
-        // Ship rollup per pilot. Two sources feed the map:
-        // (a) killmail_attackers.ship_type_id — the ship each attacker
-        //     was flying when they participated in a kill.
-        // (b) killmails.victim_ship_type_id — what each victim lost.
-        // Both go through one batched query per source, then get
-        // keyed character_id -> [ship_type_id -> count, ...] so the
-        // view can render the top 1-2 hulls per pilot without a
-        // further round-trip.
         $killmailIds = DB::table('battle_theater_killmails')
             ->where('theater_id', $theater->id)
             ->pluck('killmail_id')
             ->all();
 
         $shipsByCharacter = $this->buildShipRollup($killmailIds);
+
+        // Gather every ship type id referenced across pilot hulls,
+        // composition, kill feed, etc., and hydrate name + group in
+        // one query.
         $shipTypeIds = [];
         foreach ($shipsByCharacter as $rows) {
             foreach (array_keys($rows) as $tid) {
                 $shipTypeIds[$tid] = true;
             }
         }
-        $shipNames = $shipTypeIds !== []
-            ? DB::table('ref_item_types')
-                ->whereIn('id', array_keys($shipTypeIds))
-                ->pluck('name', 'id')
+        $shipTypes = $shipTypeIds !== []
+            ? DB::table('ref_item_types as t')
+                ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
+                ->whereIn('t.id', array_keys($shipTypeIds))
+                ->select('t.id', 't.name', 't.group_id', 'g.name as group_name')
+                ->get()
+                ->keyBy('id')
             : collect();
+        $shipNames = $shipTypes->map(fn ($r) => $r->name);
+        $shipGroupNames = $shipTypes->map(fn ($r) => $r->group_name);
 
-        // Compact killmail list for the "Kill feed" section. Ordered
-        // by killed_at, includes victim name + ship, attacker count,
-        // final blow pilot, total_value. One query — we eagerly
-        // resolve final-blow pilot name via esi_entity_names below.
         $killFeed = $this->buildKillFeed($killmailIds, $names, $shipNames);
+
+        // Derived read-models the blade consumes directly — builds each
+        // in one pass so the view stays loop-free.
+        $composition = $this->buildComposition($participants, $sides, $shipsByCharacter, $shipGroupNames);
+        $mostValuableKills = $this->buildMostValuableKills($killFeed, $sides);
+        $topDamage = $this->buildTopDamage($participants, $sides, $names, $shipsByCharacter, $shipNames);
+        $rosterBySide = $this->buildRosterBySide($allianceRows, $sides);
+        $flagshipLogos = $this->buildFlagshipLogos($allianceRows);
+        $headerStats = $this->buildHeaderStats($participants);
 
         return [
             'theater' => $theater,
@@ -202,13 +172,20 @@ class BattleTheaterDetail extends Page
             'viewer' => $viewer,
             'ships_by_character' => $shipsByCharacter,
             'ship_names' => $shipNames,
+            'ship_group_names' => $shipGroupNames,
             'kill_feed' => $killFeed,
+            'composition' => $composition,
+            'most_valuable_kills' => $mostValuableKills,
+            'top_damage' => $topDamage,
+            'roster_by_side' => $rosterBySide,
+            'flagship_logos' => $flagshipLogos,
+            'header_stats' => $headerStats,
         ];
     }
 
     /**
      * @param  list<int>  $killmailIds
-     * @return array<int, array<int, int>>  character_id -> [ship_type_id -> kill_count_on_that_hull]
+     * @return array<int, array<int, int>>
      */
     private function buildShipRollup(array $killmailIds): array
     {
@@ -240,11 +217,6 @@ class BattleTheaterDetail extends Page
             ->each(function ($row) use (&$out): void {
                 $cid = (int) $row->victim_character_id;
                 $tid = (int) $row->victim_ship_type_id;
-                // Prepend "lost" marker via negative key is ugly — keep
-                // both counts merged; the view can show "Hull · Nx"
-                // regardless of whether it was flown or lost, which is
-                // what the user actually cares about ("what was this
-                // pilot in during this fight").
                 $out[$cid][$tid] = ($out[$cid][$tid] ?? 0) + 1;
             });
 
@@ -253,11 +225,9 @@ class BattleTheaterDetail extends Page
 
     /**
      * @param  list<int>  $killmailIds
-     * @param  \Illuminate\Support\Collection  $names  entity_id -> name
-     * @param  \Illuminate\Support\Collection  $shipNames  type_id -> name
      * @return array<int, array<string, mixed>>
      */
-    private function buildKillFeed(array $killmailIds, $names, $shipNames): array
+    private function buildKillFeed(array $killmailIds, Collection $names, Collection $shipNames): array
     {
         if ($killmailIds === []) {
             return [];
@@ -273,11 +243,10 @@ class BattleTheaterDetail extends Page
             ->orderBy('killed_at')
             ->get();
 
-        // Final-blow attacker name per killmail — one round-trip.
         $finalBlows = DB::table('killmail_attackers')
             ->whereIn('killmail_id', $killmailIds)
             ->where('is_final_blow', true)
-            ->select(['killmail_id', 'character_id', 'alliance_id', 'ship_type_id'])
+            ->select(['killmail_id', 'character_id', 'alliance_id', 'corporation_id', 'ship_type_id'])
             ->get()
             ->keyBy('killmail_id');
 
@@ -298,6 +267,7 @@ class BattleTheaterDetail extends Page
                 'attacker_count' => (int) $r->attacker_count,
                 'final_blow_char_id' => $fb && $fb->character_id ? (int) $fb->character_id : null,
                 'final_blow_name' => $fb && $fb->character_id ? ($names[(int) $fb->character_id] ?? '#'.$fb->character_id) : null,
+                'final_blow_alliance_id' => $fb && $fb->alliance_id ? (int) $fb->alliance_id : null,
                 'final_blow_ship_id' => $fb ? (int) $fb->ship_type_id : null,
             ];
         }
@@ -308,7 +278,7 @@ class BattleTheaterDetail extends Page
     /**
      * Per-side rollup: pilot_count, kills, deaths, damage_done,
      * damage_taken, isk_lost. ISK killed mirrored from the opposing
-     * side so both Side A and Side B always reconcile.
+     * side so both sides reconcile (ADR-0006 § 1).
      *
      * @param  Collection<int, \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant>  $participants
      * @return array<string, array<string, int|float>>
@@ -341,11 +311,6 @@ class BattleTheaterDetail extends Page
             $totals[$side]['isk_lost'] += (float) $p->isk_lost;
         }
 
-        // ISK killed = opposing side's ISK lost. The metric contract
-        // in ADR-0006 § 1 forbids independently computing ISK killed
-        // — it's exactly the mirror. Side C's "killed" is left as 0
-        // (third parties are collapsed; their kills don't attribute
-        // to either main side at the rollup level).
         $totals[BattleTheaterSideResolver::SIDE_A]['isk_killed'] = $totals[BattleTheaterSideResolver::SIDE_B]['isk_lost'];
         $totals[BattleTheaterSideResolver::SIDE_B]['isk_killed'] = $totals[BattleTheaterSideResolver::SIDE_A]['isk_lost'];
         $totals[BattleTheaterSideResolver::SIDE_C]['isk_killed'] = 0.0;
@@ -356,7 +321,7 @@ class BattleTheaterDetail extends Page
     /**
      * @return Collection<int, array<string, mixed>>
      */
-    private function buildAllianceRollup(Collection $participants, $names, BattleTheaterSideResolution $sides): Collection
+    private function buildAllianceRollup(Collection $participants, Collection $names, BattleTheaterSideResolution $sides): Collection
     {
         $byAlliance = [];
         foreach ($participants as $p) {
@@ -385,5 +350,212 @@ class BattleTheaterDetail extends Page
         return collect(array_values($byAlliance))
             ->sortByDesc('isk_lost')
             ->values();
+    }
+
+    /**
+     * Ship composition per side — bucket each appearance by ship
+     * class (`ref_item_groups.name`) and count. Returns, per side, a
+     * list of [class, count, sample_type_id] sorted by count desc.
+     *
+     * "Ship class" is the SDE group name: "Frigate", "Heavy Assault
+     * Cruiser", "Dreadnought", etc. Good enough for a roster-style
+     * composition table without needing a hand-maintained taxonomy.
+     *
+     * @param  array<int, array<int, int>>  $shipsByCharacter
+     * @return array<string, list<array{class: string, count: int, sample_type_id: int}>>
+     */
+    private function buildComposition(
+        Collection $participants,
+        BattleTheaterSideResolution $sides,
+        array $shipsByCharacter,
+        Collection $shipGroupNames,
+    ): array {
+        $bySide = [
+            BattleTheaterSideResolver::SIDE_A => [],
+            BattleTheaterSideResolver::SIDE_B => [],
+            BattleTheaterSideResolver::SIDE_C => [],
+        ];
+
+        foreach ($participants as $p) {
+            $cid = (int) $p->character_id;
+            $side = $sides->sideByCharacterId[$cid] ?? BattleTheaterSideResolver::SIDE_C;
+            $hulls = $shipsByCharacter[$cid] ?? [];
+            if ($hulls === []) {
+                continue;
+            }
+            // Attribute the pilot to their primary hull — the one they
+            // appeared in most — to avoid double-counting when a pilot
+            // reshipped mid-fight.
+            arsort($hulls);
+            $primaryTid = (int) array_key_first($hulls);
+            $group = (string) ($shipGroupNames[$primaryTid] ?? 'Unknown');
+            $row = $bySide[$side][$group] ?? ['class' => $group, 'count' => 0, 'sample_type_id' => $primaryTid];
+            $row['count']++;
+            $bySide[$side][$group] = $row;
+        }
+
+        $out = [];
+        foreach ($bySide as $side => $rows) {
+            $list = array_values($rows);
+            usort($list, fn ($a, $b) => $b['count'] <=> $a['count']);
+            $out[$side] = $list;
+        }
+
+        return $out;
+    }
+
+    /**
+     * For each side, the top 3 kills (biggest ISK victim) where the
+     * victim belongs to the OPPOSING side — i.e. the flashy wins this
+     * side put on the board.
+     *
+     * @param  array<int, array<string, mixed>>  $killFeed
+     * @return array<string, list<array<string, mixed>>>
+     */
+    private function buildMostValuableKills(array $killFeed, BattleTheaterSideResolution $sides): array
+    {
+        // Group by victim side, then top 3 by value.
+        $buckets = [
+            BattleTheaterSideResolver::SIDE_A => [],
+            BattleTheaterSideResolver::SIDE_B => [],
+            BattleTheaterSideResolver::SIDE_C => [],
+        ];
+        foreach ($killFeed as $km) {
+            $victimSide = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? BattleTheaterSideResolver::SIDE_C) : BattleTheaterSideResolver::SIDE_C;
+            $buckets[$victimSide][] = $km;
+        }
+        foreach ($buckets as $k => $rows) {
+            usort($rows, fn ($a, $b) => $b['total_value'] <=> $a['total_value']);
+            $buckets[$k] = array_slice($rows, 0, 3);
+        }
+
+        // Side A's "best kills" = victims from Side B (and third parties
+        // they happened to kill). Side B's best kills = victims from A.
+        return [
+            BattleTheaterSideResolver::SIDE_A => $buckets[BattleTheaterSideResolver::SIDE_B],
+            BattleTheaterSideResolver::SIDE_B => $buckets[BattleTheaterSideResolver::SIDE_A],
+        ];
+    }
+
+    /**
+     * Top-5 damage dealers per side, with primary hull lookup for the
+     * cards.
+     *
+     * @param  array<int, array<int, int>>  $shipsByCharacter
+     * @return array<string, list<array<string, mixed>>>
+     */
+    private function buildTopDamage(
+        Collection $participants,
+        BattleTheaterSideResolution $sides,
+        Collection $names,
+        array $shipsByCharacter,
+        Collection $shipNames,
+    ): array {
+        $bySide = [
+            BattleTheaterSideResolver::SIDE_A => [],
+            BattleTheaterSideResolver::SIDE_B => [],
+        ];
+        foreach ($participants as $p) {
+            $cid = (int) $p->character_id;
+            $side = $sides->sideByCharacterId[$cid] ?? BattleTheaterSideResolver::SIDE_C;
+            if (! isset($bySide[$side])) {
+                continue;
+            }
+            $hulls = $shipsByCharacter[$cid] ?? [];
+            $primaryTid = null;
+            if ($hulls !== []) {
+                arsort($hulls);
+                $primaryTid = (int) array_key_first($hulls);
+            }
+            $bySide[$side][] = [
+                'character_id' => $cid,
+                'character_name' => $names[$cid] ?? 'Character #'.$cid,
+                'alliance_id' => $p->alliance_id ? (int) $p->alliance_id : null,
+                'alliance_name' => $p->alliance_id ? ($names[(int) $p->alliance_id] ?? null) : null,
+                'damage_done' => (int) $p->damage_done,
+                'kills' => (int) $p->kills,
+                'final_blows' => (int) $p->final_blows,
+                'ship_type_id' => $primaryTid,
+                'ship_name' => $primaryTid ? ($shipNames[$primaryTid] ?? '#'.$primaryTid) : null,
+            ];
+        }
+        foreach ($bySide as $k => $rows) {
+            usort($rows, fn ($a, $b) => $b['damage_done'] <=> $a['damage_done']);
+            $bySide[$k] = array_slice($rows, 0, 5);
+        }
+
+        return $bySide;
+    }
+
+    /**
+     * Split the alliance rollup by side so the roster panel can render
+     * Side A | Side B | Other as three parallel lists.
+     *
+     * @return array<string, Collection<int, array<string, mixed>>>
+     */
+    private function buildRosterBySide(Collection $allianceRows, BattleTheaterSideResolution $sides): array
+    {
+        return [
+            BattleTheaterSideResolver::SIDE_A => $allianceRows->where('side', BattleTheaterSideResolver::SIDE_A)->values(),
+            BattleTheaterSideResolver::SIDE_B => $allianceRows->where('side', BattleTheaterSideResolver::SIDE_B)->values(),
+            BattleTheaterSideResolver::SIDE_C => $allianceRows->where('side', BattleTheaterSideResolver::SIDE_C)->values(),
+        ];
+    }
+
+    /**
+     * Biggest-alliance-per-side — drives the big alliance logo shown
+     * in the VS banner at the top of the page. "Biggest" = most
+     * pilots committed.
+     *
+     * @return array<string, array{alliance_id: int, alliance_name: string, pilots: int}|null>
+     */
+    private function buildFlagshipLogos(Collection $allianceRows): array
+    {
+        $pick = function (string $side) use ($allianceRows): ?array {
+            $rows = $allianceRows->where('side', $side)->where('alliance_id', '>', 0)->sortByDesc('pilots')->values();
+            if ($rows->isEmpty()) {
+                return null;
+            }
+            $r = $rows->first();
+
+            return [
+                'alliance_id' => (int) $r['alliance_id'],
+                'alliance_name' => (string) $r['alliance_name'],
+                'pilots' => (int) $r['pilots'],
+            ];
+        };
+
+        return [
+            BattleTheaterSideResolver::SIDE_A => $pick(BattleTheaterSideResolver::SIDE_A),
+            BattleTheaterSideResolver::SIDE_B => $pick(BattleTheaterSideResolver::SIDE_B),
+        ];
+    }
+
+    /**
+     * Header meta — distinct corps + alliances, total damage across
+     * the whole fight, NPC-final-blow count.
+     *
+     * @return array<string, int>
+     */
+    private function buildHeaderStats(Collection $participants): array
+    {
+        $corps = [];
+        $alliances = [];
+        $damage = 0;
+        foreach ($participants as $p) {
+            if ($p->corporation_id) {
+                $corps[(int) $p->corporation_id] = true;
+            }
+            if ($p->alliance_id) {
+                $alliances[(int) $p->alliance_id] = true;
+            }
+            $damage += (int) $p->damage_done;
+        }
+
+        return [
+            'corps' => count($corps),
+            'alliances' => count($alliances),
+            'damage' => $damage,
+        ];
     }
 }
