@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
  */
 class MyCharacterWidget extends Widget
 {
-    protected static string $view = 'filament.portal.widgets.my-character';
+    protected string $view = 'filament.portal.widgets.my-character';
 
     protected static ?int $sort = 1;
 
