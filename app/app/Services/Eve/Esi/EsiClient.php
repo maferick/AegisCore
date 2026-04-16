@@ -148,6 +148,44 @@ final class EsiClient implements EsiClientInterface
     }
 
     /**
+     * POST to an ESI endpoint. Same rate limiting and error handling
+     * as GET. No conditional-GET caching (POST responses aren't cacheable).
+     *
+     * @param  array<int|string, mixed>  $body
+     * @param  array<string, string>  $headers
+     */
+    public function post(
+        string $path,
+        array $body = [],
+        ?string $bearerToken = null,
+        array $headers = [],
+    ): EsiResponse {
+        $url = $this->resolveUrl($path);
+
+        $this->awaitRateLimit($url);
+
+        $request = Http::withUserAgent($this->userAgent)
+            ->timeout($this->timeoutSeconds)
+            ->acceptJson()
+            ->asJson();
+
+        if ($bearerToken !== null) {
+            $request = $request->withToken($bearerToken);
+        }
+
+        if ($headers !== []) {
+            $request = $request->withHeaders($this->filterReservedHeaders($headers));
+        }
+
+        $response = $request->post($url, $body);
+
+        $this->logRateLimit($url, $response);
+
+        // POST has no conditional-GET cache key — pass empty string.
+        return $this->handleResponse($url, '', $response);
+    }
+
+    /**
      * Drop headers the transport owns so a caller can't break
      * conditional-GET, auth, or rate-limit semantics by passing them.
      * Case-insensitive match.

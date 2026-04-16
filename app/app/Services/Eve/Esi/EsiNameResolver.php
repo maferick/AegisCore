@@ -6,9 +6,7 @@ namespace App\Services\Eve\Esi;
 
 use App\Models\EsiEntityName;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -33,16 +31,13 @@ use Illuminate\Support\Facades\Log;
  */
 class EsiNameResolver
 {
-    /**
-     * Max age before a cached entry is considered stale and re-fetched.
-     * Default: 7 days. Entity names change rarely in EVE.
-     */
     private const STALE_AFTER_SECONDS = 604_800;
 
-    /**
-     * ESI /universe/names/ accepts up to 1000 IDs per call.
-     */
     private const ESI_BATCH_LIMIT = 1000;
+
+    public function __construct(
+        private readonly EsiClientInterface $esiClient,
+    ) {}
 
     /**
      * Resolve one or more CCP entity IDs to names.
@@ -139,34 +134,34 @@ class EsiNameResolver
      * @param  array<int, int>  $ids
      * @return array<int, array{id: int, name: string, category: string}>
      */
+    /**
+     * Call ESI POST /universe/names/ via the shared EsiClient.
+     *
+     * Goes through the same rate limiter, User-Agent, and error handling
+     * as every other ESI call in the platform.
+     */
     private function fetchFromEsi(array $ids): array
     {
-        $baseUrl = (string) config('eve.esi.base_url', 'https://esi.evetech.net/latest');
-        $userAgent = (string) config('eve.esi.user_agent', 'AegisCore/0.1');
-        $timeout = (int) config('eve.esi.timeout_seconds', 10);
-
         $all = [];
 
         foreach (array_chunk($ids, self::ESI_BATCH_LIMIT) as $chunk) {
             try {
-                $response = Http::withUserAgent($userAgent)
-                    ->timeout($timeout)
-                    ->acceptJson()
-                    ->asJson()
-                    ->post(rtrim($baseUrl, '/').'/universe/names/', array_values($chunk));
+                $response = $this->esiClient->post(
+                    '/universe/names/',
+                    array_values($chunk),
+                );
 
-                if (! $response->successful()) {
-                    Log::warning('ESI /universe/names/ returned HTTP '.$response->status(), [
-                        'chunk_size' => count($chunk),
-                    ]);
-
-                    continue;
-                }
-
-                $body = $response->json();
+                $body = $response->body;
                 if (is_array($body)) {
                     array_push($all, ...$body);
                 }
+            } catch (EsiRateLimitException $e) {
+                Log::warning('ESI /universe/names/ rate limited', [
+                    'chunk_size' => count($chunk),
+                    'retry_after' => $e->retryAfter,
+                ]);
+                // Stop hitting ESI — the rate limiter will block further calls.
+                break;
             } catch (\Throwable $e) {
                 Log::warning('ESI /universe/names/ failed', [
                     'chunk_size' => count($chunk),

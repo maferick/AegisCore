@@ -46,6 +46,9 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
     /** Unique lock TTL — release if the job hangs beyond this. */
     public int $uniqueFor = 600;
 
+    /** Skip ESI name resolution when backlog exceeds this threshold. */
+    private const NAME_RESOLVE_BACKLOG_THRESHOLD = 1000;
+
     public function handle(EnrichKillmail $action): void
     {
         $killmails = Killmail::unenriched()
@@ -57,13 +60,19 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // Skip ESI name resolution during heavy backlog to avoid
+        // hammering /universe/names/. Names get resolved once the
+        // backlog is small enough for real-time enrichment.
+        $pendingCount = Killmail::unenriched()->count();
+        $resolveNames = $pendingCount <= self::NAME_RESOLVE_BACKLOG_THRESHOLD;
+
         $enriched = 0;
         $skipped = 0;
         $failed = 0;
 
         foreach ($killmails as $killmail) {
             try {
-                $action->handle($killmail);
+                $action->handle($killmail, resolveNames: $resolveNames);
                 $enriched++;
             } catch (\Throwable $e) {
                 // MariaDB 1020 = "Record has changed since last read".

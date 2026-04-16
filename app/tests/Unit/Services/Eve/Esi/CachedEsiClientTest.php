@@ -334,4 +334,13 @@ final class RecordingInnerClient implements EsiClientInterface
 
         return $next;
     }
+
+    public function post(
+        string $path,
+        array $body = [],
+        ?string $bearerToken = null,
+        array $headers = [],
+    ): EsiResponse {
+        return $this->get($path);
+    }
 }

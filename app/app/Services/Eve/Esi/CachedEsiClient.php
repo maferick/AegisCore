@@ -405,4 +405,17 @@ final class CachedEsiClient implements EsiClientInterface
     {
         return hash('sha256', 'esi-auth:'.($bearerToken ?? 'public'));
     }
+
+    /**
+     * POST passthrough — no caching for POST requests.
+     * Delegates directly to the inner transport for rate limiting.
+     */
+    public function post(
+        string $path,
+        array $body = [],
+        ?string $bearerToken = null,
+        array $headers = [],
+    ): EsiResponse {
+        return $this->inner->post($path, $body, $bearerToken, $headers);
+    }
 }

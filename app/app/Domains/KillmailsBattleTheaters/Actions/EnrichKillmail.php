@@ -36,7 +36,14 @@ final class EnrichKillmail
         private readonly EsiNameResolver $nameResolver,
     ) {}
 
-    public function handle(Killmail $killmail): KillmailEnrichmentResult
+    /**
+     * @param  bool  $resolveNames  Whether to call ESI for entity name
+     *                              resolution. Set false during heavy
+     *                              backlog processing to avoid hammering
+     *                              ESI — names can be resolved in a
+     *                              separate pass later.
+     */
+    public function handle(Killmail $killmail, bool $resolveNames = true): KillmailEnrichmentResult
     {
         $wasAlreadyEnriched = $killmail->isEnriched();
 
@@ -55,8 +62,13 @@ final class EnrichKillmail
             $killmail->save();
         });
 
-        // Name resolution runs outside the transaction — best-effort.
-        $entityNamesResolved = $this->resolveEntityNames($killmail);
+        // Name resolution runs outside the transaction — best-effort
+        // caching into esi_entity_names. Skipped during backlog drain
+        // to avoid hammering ESI with /universe/names/ calls.
+        $entityNamesResolved = 0;
+        if ($resolveNames) {
+            $entityNamesResolved = $this->resolveEntityNames($killmail);
+        }
 
         return new KillmailEnrichmentResult(
             killmailId: $killmail->killmail_id,

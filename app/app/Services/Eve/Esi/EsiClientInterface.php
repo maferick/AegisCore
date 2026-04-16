@@ -7,7 +7,7 @@ namespace App\Services\Eve\Esi;
 use App\Providers\AppServiceProvider;
 
 /**
- * Transport contract for esi.evetech.net GETs.
+ * Transport contract for esi.evetech.net.
  *
  * Implementations:
  *
@@ -64,5 +64,24 @@ interface EsiClientInterface
         ?string $bearerToken = null,
         array $headers = [],
         bool $forceRefresh = false,
+    ): EsiResponse;
+
+    /**
+     * POST to an ESI endpoint (e.g. /universe/names/).
+     *
+     * Same rate limiting, User-Agent, and error handling as GET.
+     * No conditional-GET caching (POST responses aren't cacheable).
+     *
+     * @param  array<int|string, mixed>  $body  JSON-serializable request body.
+     * @param  array<string, string>  $headers
+     *
+     * @throws EsiRateLimitException on 429 / 420
+     * @throws EsiException on any other 4xx / 5xx
+     */
+    public function post(
+        string $path,
+        array $body = [],
+        ?string $bearerToken = null,
+        array $headers = [],
     ): EsiResponse;
 }
