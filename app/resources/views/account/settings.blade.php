@@ -40,6 +40,7 @@
                 radial-gradient(ellipse at 15% -10%, rgba(79, 208, 208, 0.10) 0%, transparent 45%),
                 radial-gradient(ellipse at 85% 110%, rgba(229, 169, 0, 0.05) 0%, transparent 45%),
                 var(--bg);
+            background-attachment: fixed, fixed, scroll;
             color: var(--text);
             min-height: 100vh;
             display: flex;
@@ -56,6 +57,30 @@
         }
         header a { color: var(--accent); text-decoration: none; }
         header a:hover { text-decoration: underline; }
+        .logo-lockup {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            text-decoration: none !important;
+            color: var(--text) !important;
+            transition: opacity 0.15s;
+        }
+        .logo-lockup:hover { opacity: 0.85; }
+        .logo-mark {
+            width: 26px;
+            height: 26px;
+            flex-shrink: 0;
+            transition: filter 0.2s;
+        }
+        .logo-lockup:hover .logo-mark {
+            filter: drop-shadow(0 0 6px rgba(79, 208, 208, 0.45));
+        }
+        .logotype {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.92rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+        }
 
         main {
             flex: 1;
@@ -283,7 +308,18 @@
 </head>
 <body>
 <header>
-    <a href="{{ route('home') }}">← AegisCore</a>
+    <a href="{{ url('/') }}" class="logo-lockup" aria-label="AegisCore home">
+        <svg class="logo-mark" viewBox="0 0 64 64" fill="none" role="img" aria-hidden="true">
+            <path d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z"
+                  stroke="#4fd0d0" stroke-width="2.5" stroke-linejoin="round"
+                  fill="rgba(10, 10, 11, 0.7)"/>
+            <path d="M32 18 L44 25 L44 39 L32 46 L20 39 L20 25 Z"
+                  stroke="#e5a900" stroke-width="1" stroke-linejoin="round"
+                  opacity="0.7" fill="none"/>
+            <circle cx="32" cy="32" r="2.75" fill="#4fd0d0"/>
+        </svg>
+        <span class="logotype">AegisCore</span>
+    </a>
     <form method="POST" action="{{ route('auth.logout') }}" style="margin: 0;">
         @csrf
         <button class="btn secondary" type="submit">Sign out</button>
