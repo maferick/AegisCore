@@ -57,6 +57,26 @@ class ViewKillmail extends Page
             ->whereIn('entity_id', $entityIds->unique()->filter()->values())
             ->pluck('name', 'entity_id');
 
+        // Resolve ALL type names from SDE ref_item_types in one query.
+        // Covers items, victim ship, attacker ships, and weapons.
+        $allTypeIds = collect();
+        $allTypeIds->push($km->victim_ship_type_id);
+        foreach ($km->items as $item) {
+            $allTypeIds->push($item->type_id);
+        }
+        foreach ($km->attackers as $att) {
+            if ($att->ship_type_id) {
+                $allTypeIds->push($att->ship_type_id);
+            }
+            if ($att->weapon_type_id) {
+                $allTypeIds->push($att->weapon_type_id);
+            }
+        }
+
+        $typeNames = DB::table('ref_item_types')
+            ->whereIn('id', $allTypeIds->unique()->filter()->values())
+            ->pluck('name', 'id');
+
         // Group items by slot.
         $itemsBySlot = $km->items->groupBy('slot_category');
 
@@ -67,6 +87,7 @@ class ViewKillmail extends Page
         return [
             'km' => $km,
             'names' => $names,
+            'typeNames' => $typeNames,
             'itemsBySlot' => $itemsBySlot,
             'systemName' => $systemName,
             'regionName' => $regionName,

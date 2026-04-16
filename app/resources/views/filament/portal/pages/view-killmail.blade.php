@@ -71,7 +71,7 @@
     <div>
         <div class="km-victim-name">{{ $victim['name'] }}</div>
         <div class="km-victim-meta" style="margin-top: 0.25rem;">
-            {{ $km->victim_ship_type_name ?? 'Unknown Ship' }}
+            {{ $km->victim_ship_type_name ?? $typeNames[$km->victim_ship_type_id] ?? 'Unknown Ship' }}
             <span style="color: #3a3a42; margin: 0 0.3rem;">&middot;</span>
             {{ $km->victim_ship_group_name ?? '' }}
         </div>
@@ -178,10 +178,7 @@
                             <div class="km-attacker-ship">
                                 <img src="https://images.evetech.net/types/{{ $att->ship_type_id }}/icon?size=32"
                                      alt="" referrerpolicy="no-referrer" style="width: 16px; height: 16px; border-radius: 2px;">
-                                @php
-                                    $shipName = \Illuminate\Support\Facades\DB::table('ref_item_types')->where('id', $att->ship_type_id)->value('name');
-                                @endphp
-                                {{ $shipName ?? 'Ship #'.$att->ship_type_id }}
+                                {{ $typeNames[$att->ship_type_id] ?? 'Ship #'.$att->ship_type_id }}
                             </div>
                         @endif
                     </div>
@@ -204,8 +201,8 @@
                         <div class="km-item-row">
                             <img src="https://images.evetech.net/types/{{ $item->type_id }}/icon?size=32"
                                  alt="" referrerpolicy="no-referrer" class="km-item-icon">
-                            <div class="km-item-name" title="{{ $item->type_name ?? 'Type #'.$item->type_id }}">
-                                {{ $item->type_name ?? 'Type #'.$item->type_id }}
+                            <div class="km-item-name" title="{{ $item->type_name ?? $typeNames[$item->type_id] ?? 'Type #'.$item->type_id }}">
+                                {{ $item->type_name ?? $typeNames[$item->type_id] ?? 'Type #'.$item->type_id }}
                             </div>
                             <div class="km-item-qty">
                                 @if($item->quantity_destroyed > 0)
