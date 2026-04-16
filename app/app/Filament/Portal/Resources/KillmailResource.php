@@ -64,11 +64,27 @@ class KillmailResource extends Resource
                     ->size(40)
                     ->circular(false),
 
-                TextColumn::make('victim_ship_type_name')
+                TextColumn::make('ship_display')
                     ->label('Ship')
-                    ->placeholder('—')
-                    ->searchable()
-                    ->description(fn (Killmail $record): string => $record->victim_ship_group_name ?? ''),
+                    ->state(function (Killmail $record): string {
+                        if ($record->victim_ship_type_name) {
+                            return $record->victim_ship_type_name;
+                        }
+
+                        return DB::table('ref_item_types')
+                            ->where('id', $record->victim_ship_type_id)
+                            ->value('name') ?? '—';
+                    })
+                    ->description(function (Killmail $record): string {
+                        if ($record->victim_ship_group_name) {
+                            return $record->victim_ship_group_name;
+                        }
+
+                        return DB::table('ref_item_types as t')
+                            ->join('ref_item_groups as g', 'g.id', '=', 't.group_id')
+                            ->where('t.id', $record->victim_ship_type_id)
+                            ->value('g.name') ?? '';
+                    }),
 
                 TextColumn::make('role')
                     ->label('Role')
