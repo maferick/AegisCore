@@ -48,6 +48,7 @@ class PortalPanelProvider extends PanelProvider
             ->brandLogoHeight('1.75rem')
             ->favicon(asset('favicon.svg'))
             ->defaultThemeMode(ThemeMode::Dark)
+            ->maxContentWidth(\Filament\Support\Enums\MaxWidth::Full)
             ->discoverResources(in: app_path('Filament/Portal/Resources'), for: 'App\\Filament\\Portal\\Resources')
             ->discoverPages(in: app_path('Filament/Portal/Pages'), for: 'App\\Filament\\Portal\\Pages')
             ->discoverWidgets(in: app_path('Filament/Portal/Widgets'), for: 'App\\Filament\\Portal\\Widgets')

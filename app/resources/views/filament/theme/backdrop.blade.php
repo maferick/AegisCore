@@ -66,4 +66,5 @@
             --col-span-default: span 1 / span 1 !important;
         }
     }
+
 </style>

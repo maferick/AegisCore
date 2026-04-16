@@ -73,6 +73,7 @@ class AdminPanelProvider extends PanelProvider
             // render hook (below) is scoped to `html.dark` so light
             // mode keeps the stock Filament palette.
             ->defaultThemeMode(ThemeMode::Dark)
+            ->maxContentWidth(\Filament\Support\Enums\MaxWidth::Full)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
