@@ -172,6 +172,7 @@ final class EnrichKillmail
 
         $valuations = $this->valuationService->resolve($typeIds, $killmail->killed_at);
 
+        // Build per-item updates in memory, then batch-save.
         $valued = 0;
 
         foreach ($items as $item) {
@@ -186,9 +187,43 @@ final class EnrichKillmail
             $item->total_value = bcmul($v->unitPrice, (string) $totalQty, 2);
             $item->valuation_date = $v->dateUsed;
             $item->valuation_source = $v->source;
-            $item->save();
-
             $valued++;
+        }
+
+        // Single bulk UPDATE: classification + valuation for all items
+        // on this killmail, instead of one UPDATE per item.
+        if ($valued > 0) {
+            $now = now();
+            $rows = [];
+            foreach ($items as $item) {
+                if ($item->isDirty()) {
+                    $rows[] = [
+                        'id' => $item->id,
+                        'type_name' => $item->type_name,
+                        'group_id' => $item->group_id,
+                        'group_name' => $item->group_name,
+                        'category_id' => $item->category_id,
+                        'category_name' => $item->category_name,
+                        'meta_group_id' => $item->meta_group_id,
+                        'meta_level' => $item->meta_level,
+                        'unit_value' => $item->unit_value,
+                        'total_value' => $item->total_value,
+                        'valuation_date' => $item->valuation_date,
+                        'valuation_source' => $item->valuation_source,
+                        'updated_at' => $now,
+                    ];
+                }
+            }
+
+            if ($rows !== []) {
+                DB::table('killmail_items')->upsert(
+                    $rows,
+                    ['id'],
+                    ['type_name', 'group_id', 'group_name', 'category_id', 'category_name',
+                     'meta_group_id', 'meta_level', 'unit_value', 'total_value',
+                     'valuation_date', 'valuation_source', 'updated_at'],
+                );
+            }
         }
 
         $hullVal = $valuations[$killmail->victim_ship_type_id] ?? null;
