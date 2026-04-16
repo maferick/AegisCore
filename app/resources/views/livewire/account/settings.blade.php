@@ -26,6 +26,8 @@
     /** @var list<string> $standings_token_missing_scopes */
     /** @var array<string, mixed>|null $viewer_bloc_state */
     /** @var \Illuminate\Support\Collection $coalition_blocs */
+    /** @var \App\Domains\UsersCharacters\Models\ViewerEntityClassification|null $lookup_classification */
+    /** @var \Illuminate\Support\Collection $viewer_overrides */
 @endphp
 <div>
     {{-- ---------- Status flashes (wire-reactive) ---------- --}}
@@ -163,6 +165,173 @@
                 </div>
             </div>
         </section>
+
+        {{-- ---------- Entity lookup + self-service override ---------- --}}
+        {{--
+            Donor-facing surface for the full resolver. Type a CCP corp or
+            alliance id, get back the resolved alignment from this donor's
+            perspective (honouring every precedence step: their overrides,
+            their standings, global overrides, coalition labels, alliance
+            inheritance, history, fallback).
+
+            Self-service override sits alongside: one click to force
+            friendly/hostile/neutral/unknown for the looked-up entity.
+            Overrides persist as `scope=viewer` rows on
+            `entity_classification_overrides` and are honoured by every
+            downstream render until removed. Expiry is left unset in this
+            flow — donors pick "until I change my mind" as the default;
+            admins can add expiring overrides via the Filament resource
+            when a sunset date is known.
+        --}}
+        <section class="card">
+            <h2>Entity classification lookup</h2>
+            <p class="subtitle" style="margin-bottom: 1rem;">
+                Look up any corporation or alliance by CCP id and see how
+                the classifier resolves it <em>from your viewer's
+                perspective</em>. The precedence chain runs every time
+                (your overrides &rarr; your standings &rarr; global
+                overrides &rarr; coalition labels &rarr; alliance
+                inheritance &rarr; history &rarr; fallback).
+            </p>
+
+            <form wire:submit.prevent="resolveEntity" style="margin-bottom: 1rem;">
+                <div class="kv">
+                    <div class="kv-label">Entity type</div>
+                    <div>
+                        <label style="margin-right: 1rem;">
+                            <input type="radio"
+                                   wire:model="lookupEntityType"
+                                   value="alliance">
+                            Alliance
+                        </label>
+                        <label>
+                            <input type="radio"
+                                   wire:model="lookupEntityType"
+                                   value="corporation">
+                            Corporation
+                        </label>
+                    </div>
+
+                    <div class="kv-label">CCP entity ID</div>
+                    <div>
+                        <input type="number"
+                               wire:model="lookupEntityId"
+                               min="1"
+                               step="1"
+                               placeholder="e.g. 99003581"
+                               class="mono"
+                               style="width: 14rem;">
+                        <button class="btn" type="submit" style="margin-left: 0.5rem;">
+                            <span wire:loading.remove wire:target="resolveEntity">Look up</span>
+                            <span wire:loading wire:target="resolveEntity">Resolving…</span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            @if ($lookup_classification !== null)
+                @php
+                    $c = $lookup_classification;
+                    $colorFor = fn (string $a): string => match ($a) {
+                        'friendly' => 'ok',
+                        'hostile' => 'bad',
+                        'neutral' => 'muted',
+                        default => 'warn',
+                    };
+                @endphp
+                <div class="kv" style="margin-bottom: 1rem;">
+                    <div class="kv-label">Target</div>
+                    <div class="mono">
+                        {{ $c->target_entity_type }}
+                        <span class="badge muted">#{{ $c->target_entity_id }}</span>
+                    </div>
+
+                    <div class="kv-label">Resolved alignment</div>
+                    <div>
+                        <span class="badge {{ $colorFor($c->resolved_alignment) }}">
+                            {{ $c->resolved_alignment }}
+                        </span>
+                        <span class="subtitle" style="margin-left: 0.5rem;">
+                            confidence: {{ $c->confidence_band }}
+                        </span>
+                        @if ($c->needs_review)
+                            <span class="badge warn" style="margin-left: 0.5rem;">needs review</span>
+                        @endif
+                    </div>
+
+                    <div class="kv-label">Why</div>
+                    <div>{{ $c->reason_summary }}</div>
+
+                    <div class="kv-label">Computed</div>
+                    <div class="subtitle">{{ $c->computed_at?->diffForHumans() ?? 'just now' }}</div>
+                </div>
+
+                <div style="margin-bottom: 1rem;">
+                    <span class="subtitle" style="margin-right: 0.75rem;">Override for me:</span>
+                    @foreach (['friendly', 'hostile', 'neutral', 'unknown'] as $a)
+                        <button class="btn secondary"
+                                type="button"
+                                style="margin: 0 0.25rem 0.25rem 0;"
+                                wire:click="overrideLookup('{{ $a }}')"
+                                wire:loading.attr="disabled"
+                                wire:target="overrideLookup">
+                            {{ $a }}
+                        </button>
+                    @endforeach
+                </div>
+            @endif
+        </section>
+
+        {{-- ---------- Personal overrides list ---------- --}}
+        @if ($viewer_overrides->isNotEmpty())
+            <section class="card">
+                <h2>Your classification overrides</h2>
+                <p class="subtitle" style="margin-bottom: 1rem;">
+                    Entities you've forced to a specific alignment for your
+                    own view. These override everything except your own
+                    direct standings — and they outrank global admin
+                    overrides, so this is the strongest signal <em>for
+                    you</em> short of an in-game contact.
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Target</th>
+                            <th>Forced alignment</th>
+                            <th>Reason</th>
+                            <th>Created</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach ($viewer_overrides as $o)
+                        <tr>
+                            <td class="mono">
+                                {{ $o->target_entity_type }}
+                                <span class="badge muted">#{{ $o->target_entity_id }}</span>
+                            </td>
+                            <td>
+                                <span class="badge {{ match($o->forced_alignment) { 'friendly' => 'ok', 'hostile' => 'bad', 'neutral' => 'muted', default => 'warn' } }}">
+                                    {{ $o->forced_alignment }}
+                                </span>
+                            </td>
+                            <td class="subtitle">{{ $o->reason }}</td>
+                            <td class="subtitle">{{ $o->created_at->diffForHumans() }}</td>
+                            <td>
+                                <button class="btn secondary"
+                                        type="button"
+                                        wire:click="removeViewerOverride({{ $o->id }})"
+                                        wire:loading.attr="disabled"
+                                        wire:target="removeViewerOverride">
+                                    Remove
+                                </button>
+                            </td>
+                        </tr>
+                    @endforeach
+                    </tbody>
+                </table>
+            </section>
+        @endif
     @endif
 
     @if ($has_market_access)

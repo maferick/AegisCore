@@ -11,9 +11,12 @@ use App\Domains\UsersCharacters\Models\Character;
 use App\Domains\UsersCharacters\Models\CharacterStanding;
 use App\Domains\UsersCharacters\Models\CharacterStandingLabel;
 use App\Domains\UsersCharacters\Models\CoalitionBloc;
+use App\Domains\UsersCharacters\Models\EntityClassificationOverride;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Domains\UsersCharacters\Models\ViewerContext;
+use App\Domains\UsersCharacters\Models\ViewerEntityClassification;
 use App\Domains\UsersCharacters\Services\CharacterStandingsFetcher;
+use App\Domains\UsersCharacters\Services\ViewerEntityClassificationResolverService;
 use App\Services\Eve\MarketTokenAuthorizer;
 use App\Services\Eve\Sso\EveSsoClient;
 use Illuminate\Support\Collection;
@@ -96,6 +99,23 @@ class AccountSettings extends Component
     public array $resultStructureIds = [];
 
     // ------------------------------------------------------------------
+    // Classification entity-lookup state
+    // ------------------------------------------------------------------
+
+    /** Entity type for the lookup form — 'corporation' or 'alliance'. */
+    public string $lookupEntityType = ViewerEntityClassification::ENTITY_ALLIANCE;
+
+    /** Entity CCP id the donor typed for the lookup form. */
+    public ?int $lookupEntityId = null;
+
+    /**
+     * Result of the most recent lookup. Stored as the classification's
+     * id so the view can re-read fresh state after an override is
+     * applied (rather than holding a stale in-memory model).
+     */
+    public ?int $lookupClassificationId = null;
+
+    // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
 
@@ -121,6 +141,8 @@ class AccountSettings extends Component
             'standings_token_missing_scopes' => $this->standingsTokenMissingScopes(),
             'viewer_bloc_state' => $this->viewerBlocState($sync),
             'coalition_blocs' => $this->coalitionBlocs(),
+            'lookup_classification' => $this->lookupClassificationFresh(),
+            'viewer_overrides' => $this->viewerOverrides(),
         ]);
     }
 
@@ -435,6 +457,60 @@ class AccountSettings extends Component
             ->get();
     }
 
+    /**
+     * The classification result currently shown in the lookup card.
+     * Held by id (`$lookupClassificationId`) and re-loaded fresh every
+     * render so the view reflects the authoritative post-override row
+     * rather than an in-memory copy from before an override was
+     * applied.
+     */
+    private function lookupClassificationFresh(): ?ViewerEntityClassification
+    {
+        if ($this->lookupClassificationId === null) {
+            return null;
+        }
+
+        return ViewerEntityClassification::query()->find($this->lookupClassificationId);
+    }
+
+    /**
+     * The authed donor's own active, non-expired overrides, keyed on
+     * their primary viewer context. Used by the lookup card to surface
+     * "your personal overrides" + remove buttons, and to avoid
+     * creating a second viewer-scope override for the same target
+     * (we edit the existing one instead).
+     *
+     * @return Collection<int, EntityClassificationOverride>
+     */
+    private function viewerOverrides(): Collection
+    {
+        $user = Auth::user();
+        if ($user === null) {
+            return collect();
+        }
+
+        $character = $user->characters()->orderBy('id')->first();
+        if ($character === null) {
+            return collect();
+        }
+
+        $context = ViewerContext::query()->where('character_id', $character->id)->first();
+        if ($context === null) {
+            return collect();
+        }
+
+        return EntityClassificationOverride::query()
+            ->where('scope_type', EntityClassificationOverride::SCOPE_VIEWER)
+            ->where('viewer_context_id', $context->id)
+            ->where('is_active', true)
+            ->where(function ($q): void {
+                $q->whereNull('expires_at')
+                    ->orWhere('expires_at', '>', now());
+            })
+            ->orderByDesc('updated_at')
+            ->get();
+    }
+
     // ------------------------------------------------------------------
     // Actions
     // ------------------------------------------------------------------
@@ -705,6 +781,173 @@ class AccountSettings extends Component
         $sync->handle($character, forceReinfer: true);
 
         $this->status = 'Re-ran inference against the latest labels.';
+    }
+
+    /**
+     * Resolve + cache a classification for the donor's primary viewer
+     * context against the (type, id) the donor typed in the lookup
+     * form. Falls through the full resolver precedence chain — viewer
+     * overrides wins, then viewer evidence, then global override, and
+     * so on (see ViewerEntityClassificationResolverService for the
+     * exact order).
+     *
+     * Input validation is lightweight: we require a positive integer
+     * ID and one of the two supported entity types. We don't validate
+     * that the ID corresponds to a real CCP entity — the resolver
+     * just produces an "unknown" / fallback result for an unknown ID,
+     * which is fine.
+     */
+    public function resolveEntity(ViewerEntityClassificationResolverService $resolver): void
+    {
+        $this->error = null;
+        $this->status = null;
+        $this->lookupClassificationId = null;
+
+        $context = $this->primaryViewerContextOrFail();
+        if ($context === null) {
+            return;
+        }
+
+        if (! in_array($this->lookupEntityType, [
+            ViewerEntityClassification::ENTITY_CORPORATION,
+            ViewerEntityClassification::ENTITY_ALLIANCE,
+        ], true)) {
+            $this->error = 'Pick corporation or alliance.';
+
+            return;
+        }
+
+        if ($this->lookupEntityId === null || $this->lookupEntityId <= 0) {
+            $this->error = 'Enter a valid CCP entity ID.';
+
+            return;
+        }
+
+        $classification = $resolver->resolveForTarget(
+            $context,
+            $this->lookupEntityType,
+            $this->lookupEntityId,
+        );
+
+        $this->lookupClassificationId = $classification->id;
+    }
+
+    /**
+     * Create (or update, if one already exists) a viewer-scope override
+     * that forces the given alignment on the last-looked-up entity.
+     * Re-runs the resolver afterwards so the lookup card updates in
+     * place to reflect the override taking effect.
+     */
+    public function overrideLookup(string $alignment, ViewerEntityClassificationResolverService $resolver): void
+    {
+        $this->error = null;
+        $this->status = null;
+
+        if (! in_array($alignment, [
+            EntityClassificationOverride::ALIGNMENT_FRIENDLY,
+            EntityClassificationOverride::ALIGNMENT_HOSTILE,
+            EntityClassificationOverride::ALIGNMENT_NEUTRAL,
+            EntityClassificationOverride::ALIGNMENT_UNKNOWN,
+        ], true)) {
+            $this->error = 'Invalid alignment.';
+
+            return;
+        }
+
+        $classification = $this->lookupClassificationFresh();
+        if ($classification === null) {
+            $this->error = 'Look up an entity first.';
+
+            return;
+        }
+
+        $context = $this->primaryViewerContextOrFail();
+        if ($context === null) {
+            return;
+        }
+
+        $character = $context->character;
+
+        EntityClassificationOverride::query()->updateOrCreate(
+            [
+                'scope_type' => EntityClassificationOverride::SCOPE_VIEWER,
+                'viewer_context_id' => $context->id,
+                'target_entity_type' => $classification->target_entity_type,
+                'target_entity_id' => $classification->target_entity_id,
+            ],
+            [
+                'forced_alignment' => $alignment,
+                'forced_side_key' => null,
+                'forced_role' => null,
+                'reason' => 'Self-service override from /account/settings lookup.',
+                'expires_at' => null,
+                'created_by_character_id' => $character?->id,
+                'is_active' => true,
+            ],
+        );
+
+        // Re-resolve so the lookup card reflects the override.
+        $fresh = $resolver->resolveForTarget(
+            $context,
+            $classification->target_entity_type,
+            $classification->target_entity_id,
+        );
+        $this->lookupClassificationId = $fresh->id;
+
+        $this->status = "Set to {$alignment} for you. Resolver now honours your override on this entity.";
+    }
+
+    /**
+     * Remove one of the donor's own active overrides (soft deactivate
+     * — we keep the row for audit, flipping is_active=false). Scopes
+     * the query by viewer_context_id so a forged id can't delete
+     * another donor's override.
+     *
+     * If the removed override was covering the entity currently shown
+     * in the lookup card, we re-resolve so the card returns to the
+     * deterministic result.
+     */
+    public function removeViewerOverride(int $overrideId, ViewerEntityClassificationResolverService $resolver): void
+    {
+        $this->error = null;
+        $this->status = null;
+
+        $context = $this->primaryViewerContextOrFail();
+        if ($context === null) {
+            return;
+        }
+
+        $override = EntityClassificationOverride::query()
+            ->where('id', $overrideId)
+            ->where('viewer_context_id', $context->id)
+            ->where('scope_type', EntityClassificationOverride::SCOPE_VIEWER)
+            ->first();
+        if ($override === null) {
+            $this->error = 'Override not found.';
+
+            return;
+        }
+
+        $targetType = $override->target_entity_type;
+        $targetId = $override->target_entity_id;
+
+        $override->is_active = false;
+        $override->save();
+
+        // If the removed override covered the currently-displayed
+        // classification, refresh it so the card reflects the
+        // post-override resolution.
+        $classification = $this->lookupClassificationFresh();
+        if (
+            $classification !== null
+            && $classification->target_entity_type === $targetType
+            && $classification->target_entity_id === $targetId
+        ) {
+            $fresh = $resolver->resolveForTarget($context, $targetType, $targetId);
+            $this->lookupClassificationId = $fresh->id;
+        }
+
+        $this->status = 'Override removed. Resolver now uses the deterministic chain for this entity.';
     }
 
     /**

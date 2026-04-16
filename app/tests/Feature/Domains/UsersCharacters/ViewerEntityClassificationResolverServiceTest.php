@@ -145,6 +145,43 @@ final class ViewerEntityClassificationResolverServiceTest extends TestCase
         self::assertStringContainsString('Global override applied', $resolved->reason_summary);
     }
 
+    public function test_direct_label_match_resolves_friendly_for_same_bloc(): void
+    {
+        // Regression: the label-resolution query joins across
+        // coalition_entity_labels, coalition_relationship_types, and
+        // coalition_blocs — three tables that all carry `is_active`,
+        // `entity_type`, or `bloc_id`. An earlier revision of the
+        // resolver referenced these columns unqualified in the WHERE
+        // clause, which is ambiguous on strict-SQL engines and only
+        // surfaced if step 4 actually fired (no viewer override, no
+        // standing, no global override). None of the other tests in
+        // this file exercised that path directly — they all get
+        // short-circuited earlier in the chain. This test pins the
+        // fully-qualified column references in place.
+        [$viewerContext, $viewerBloc, $memberType] = $this->makeViewerContext();
+
+        $targetAllianceId = 99_000_555;
+
+        CoalitionEntityLabel::query()->create([
+            'entity_type' => CoalitionEntityLabel::ENTITY_ALLIANCE,
+            'entity_id' => $targetAllianceId,
+            'raw_label' => 'wc.member',
+            'bloc_id' => $viewerBloc->id,
+            'relationship_type_id' => $memberType->id,
+            'source' => CoalitionEntityLabel::SOURCE_MANUAL,
+            'is_active' => true,
+        ]);
+
+        $service = new ViewerEntityClassificationResolverService();
+        $resolved = $service->resolveForTarget(
+            $viewerContext,
+            ViewerEntityClassification::ENTITY_ALLIANCE,
+            $targetAllianceId,
+        );
+
+        self::assertSame(ViewerEntityClassification::ALIGNMENT_FRIENDLY, $resolved->resolved_alignment);
+    }
+
     public function test_fallback_uses_unknown_when_viewer_bloc_is_unset(): void
     {
         [$viewerContext] = $this->makeViewerContext();
