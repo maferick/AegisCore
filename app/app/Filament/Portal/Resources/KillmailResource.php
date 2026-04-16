@@ -45,6 +45,7 @@ class KillmailResource extends Resource
     {
         return $table
             ->defaultSort('killed_at', 'desc')
+            ->recordUrl(fn (Killmail $record): string => static::getUrl('view', ['record' => $record->killmail_id]))
             ->modifyQueryUsing(function (Builder $query) {
                 $user = auth()->user();
                 $character = $user?->characters()->first();
@@ -194,7 +195,13 @@ class KillmailResource extends Resource
     {
         return [
             'index' => Pages\ListKillmails::route('/'),
+            'view' => Pages\ViewKillmail::route('/{record}'),
         ];
+    }
+
+    public static function getRecordRouteKeyName(): ?string
+    {
+        return 'killmail_id';
     }
 
     public static function canCreate(): bool
