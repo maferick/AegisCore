@@ -197,10 +197,32 @@
             @if(isset($itemsBySlot[$slot]) && $itemsBySlot[$slot]->isNotEmpty())
                 <div class="km-card">
                     <h3>{{ $slotLabels[$slot] ?? ucfirst($slot) }}</h3>
-                    @foreach($itemsBySlot[$slot]->sortByDesc('total_value') as $item)
-                        <div class="km-item-row">
+                    @php
+                        $slotItems = $itemsBySlot[$slot];
+
+                        // For fitted slots (high/mid/low): group by flag so
+                        // charges nest under their parent module. A module and
+                        // its loaded charge share the same ESI flag value.
+                        $fittedSlots = ['high','mid','low'];
+                        $isFitted = in_array($slot, $fittedSlots);
+
+                        if ($isFitted) {
+                            $ordered = collect();
+                            foreach ($slotItems->groupBy('flag')->sortKeys() as $flagItems) {
+                                $modules = $flagItems->reject(fn ($i) => $chargeTypeIds->has($i->type_id));
+                                $charges = $flagItems->filter(fn ($i) => $chargeTypeIds->has($i->type_id));
+                                foreach ($modules as $m) { $ordered->push(['item' => $m, 'charge' => false]); }
+                                foreach ($charges as $c) { $ordered->push(['item' => $c, 'charge' => true]); }
+                            }
+                        }
+                    @endphp
+
+                    @foreach($isFitted && isset($ordered) ? $ordered : $slotItems->sortByDesc('total_value')->map(fn ($i) => ['item' => $i, 'charge' => false]) as $entry)
+                        @php $item = $entry['item']; $isCharge = $entry['charge']; @endphp
+                        <div class="km-item-row" @if($isCharge) style="padding-left: 2rem; opacity: 0.7;" @endif>
                             <img src="https://images.evetech.net/types/{{ $item->type_id }}/icon?size=32"
-                                 alt="" referrerpolicy="no-referrer" class="km-item-icon">
+                                 alt="" referrerpolicy="no-referrer"
+                                 class="km-item-icon" @if($isCharge) style="width: 22px; height: 22px;" @endif>
                             <div class="km-item-name" title="{{ $item->type_name ?? $typeNames[$item->type_id] ?? 'Type #'.$item->type_id }}">
                                 {{ $item->type_name ?? $typeNames[$item->type_id] ?? 'Type #'.$item->type_id }}
                             </div>

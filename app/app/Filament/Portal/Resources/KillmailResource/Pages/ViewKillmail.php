@@ -73,9 +73,22 @@ class ViewKillmail extends Page
             }
         }
 
+        $uniqueTypeIds = $allTypeIds->unique()->filter()->values();
+
         $typeNames = DB::table('ref_item_types')
-            ->whereIn('id', $allTypeIds->unique()->filter()->values())
+            ->whereIn('id', $uniqueTypeIds)
             ->pluck('name', 'id');
+
+        // Build a type_id → category_id map for charge detection.
+        // Category 8 = Charge (ammo, crystals, cap boosters, scripts).
+        $typeCategoryMap = DB::table('ref_item_types as t')
+            ->join('ref_item_groups as g', 'g.id', '=', 't.group_id')
+            ->whereIn('t.id', $uniqueTypeIds)
+            ->pluck('g.category_id', 't.id');
+
+        // Tag each item as charge or not (used by the template to nest
+        // charges under their parent module in fitted slots).
+        $chargeTypeIds = $typeCategoryMap->filter(fn ($catId) => $catId == 8)->keys()->flip();
 
         // Group items by slot.
         $itemsBySlot = $km->items->groupBy('slot_category');
@@ -88,6 +101,7 @@ class ViewKillmail extends Page
             'km' => $km,
             'names' => $names,
             'typeNames' => $typeNames,
+            'chargeTypeIds' => $chargeTypeIds,
             'itemsBySlot' => $itemsBySlot,
             'systemName' => $systemName,
             'regionName' => $regionName,
