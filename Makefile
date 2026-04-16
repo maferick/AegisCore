@@ -85,16 +85,26 @@ pull:
 # the running scheduler would still be on the old image — exactly
 # the failure mode that produced PR-#59's "unrecognized arguments:
 # --interval 300" runtime error.
+# IMPORTANT: Never recreate data store containers (mariadb, redis,
+# neo4j, opensearch, influxdb2) during a code deploy. Only rebuild
+# application containers. Data store config changes go through
+# `make safe-restart-mariadb` or manual `docker compose restart <svc>`.
 update:
 	git pull --ff-only
 	./scripts/backup-mariadb.sh
-	$(COMPOSE) up -d --build
+	@echo ""
+	@echo "Rebuilding application containers (data stores excluded)..."
+	$(COMPOSE) build php-fpm
+	$(COMPOSE) up -d php-fpm scheduler horizon
+	$(COMPOSE) up -d --build killmail_stream killmail_backfill_scheduler \
+		market_poll_scheduler market_import_scheduler \
+		killmail_search_scheduler outbox_relay nginx
 	$(COMPOSE) exec php-fpm composer install --optimize-autoloader --no-interaction
 	$(COMPOSE) exec php-fpm php artisan migrate --force
 	@echo ""
-	@echo "Stack updated. If Horizon is running and you touched jobs/config:"
-	@echo "    make artisan CMD=\"config:clear\""
-	@echo "    make artisan CMD=\"horizon:terminate\"   # supervisord/systemd will respawn it"
+	@echo "Stack updated. Data stores were NOT touched."
+	@echo "If you need to restart MariaDB (config change), use:"
+	@echo "    make safe-restart-mariadb"
 
 # Backup MariaDB — logical dump with 7-day retention.
 backup:
