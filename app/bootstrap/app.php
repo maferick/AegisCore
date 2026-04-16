@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
         \App\Domains\UsersCharacters\Console\SyncStandingsCommand::class,
         \App\Domains\UsersCharacters\Console\SyncCorporationAffiliationsCommand::class,
         \App\Domains\UsersCharacters\Console\SweepStaleClassificationsCommand::class,
+        \App\Domains\KillmailsBattleTheaters\Console\EnrichKillmailsCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting
