@@ -58,32 +58,50 @@ class BattleTheaterDetail extends Page
 
     protected string $view = 'filament.portal.pages.battle-theater-detail';
 
-    public ?BattleTheater $record = null;
+    // Only the scalar id is a Livewire public property. Resolved model
+    // + side resolution + viewer context are recomputed each request
+    // from that id — Livewire cannot serialise a custom value object
+    // (BattleTheaterSideResolution) or an Eloquent model across
+    // component round-trips, and keeping them public throws
+    // "Property type not supported in Livewire" on every request.
+    public ?int $recordId = null;
 
-    public ?BattleTheaterSideResolution $sides = null;
-
-    public ?ViewerContext $viewer = null;
-
-    public function mount(int $record): void
+    public function mount(BattleTheater|int $record): void
     {
-        $this->record = BattleTheater::query()
-            ->with(['primarySystem:id,name', 'region:id,name'])
-            ->findOrFail($record);
+        // Filament's page router gives us either the raw path segment
+        // (int) or a resolved model — accept both. We only keep the
+        // id here; getViewData() reloads the model + relations every
+        // render.
+        $this->recordId = $record instanceof BattleTheater ? (int) $record->id : (int) $record;
+    }
 
+    /** Load the theater + eager relations. Called lazily. */
+    private function loadRecord(): BattleTheater
+    {
+        return BattleTheater::query()
+            ->with(['primarySystem:id,name', 'region:id,name'])
+            ->findOrFail($this->recordId);
+    }
+
+    /** Resolve the viewer's ViewerContext, or null if unauth / no chars. */
+    private function loadViewer(): ?ViewerContext
+    {
         $user = Auth::user();
-        if ($user !== null) {
-            $character = $user->characters()->orderBy('id')->first();
-            if ($character !== null) {
-                $this->viewer = app(SyncViewerContextForCharacter::class)->handle($character);
-            }
+        if ($user === null) {
+            return null;
+        }
+        $character = $user->characters()->orderBy('id')->first();
+        if ($character === null) {
+            return null;
         }
 
-        $this->sides = app(BattleTheaterSideResolver::class)->resolve($this->record, $this->viewer);
+        return app(SyncViewerContextForCharacter::class)->handle($character);
     }
 
     public function getTitle(): string
     {
-        $system = $this->record?->primarySystem?->name ?? '#'.$this->record?->primary_system_id;
+        $theater = $this->loadRecord();
+        $system = $theater->primarySystem?->name ?? '#'.$theater->primary_system_id;
 
         return "Battle in {$system}";
     }
@@ -94,11 +112,19 @@ class BattleTheaterDetail extends Page
      * and ensures every section gets its inputs from the same set of
      * eager-loaded collections.
      *
+     * Nothing here is stored on the component — the value object
+     * (BattleTheaterSideResolution) is non-serialisable for Livewire
+     * so it lives only for the duration of this method call. The
+     * blade receives scalars / collections / the resolved model.
+     *
      * @return array<string, mixed>
      */
     public function getViewData(): array
     {
-        $theater = $this->record;
+        $theater = $this->loadRecord();
+        $viewer = $this->loadViewer();
+        $sides = app(BattleTheaterSideResolver::class)->resolve($theater, $viewer);
+
         $participants = $theater->participants()->orderByDesc('isk_lost')->get();
         $systems = $theater->systems()
             ->with('solarSystem:id,name')
@@ -107,9 +133,9 @@ class BattleTheaterDetail extends Page
 
         // Bloc display names for the side headers + alliance rows.
         $blocIds = array_values(array_filter([
-            $this->sides->sideABlocId,
-            $this->sides->sideBBlocId,
-            ...array_values($this->sides->allianceToBloc),
+            $sides->sideABlocId,
+            $sides->sideBBlocId,
+            ...array_values($sides->allianceToBloc),
         ], fn ($v) => $v !== null));
         $blocs = $blocIds !== []
             ? CoalitionBloc::query()->whereIn('id', array_unique($blocIds))->get()->keyBy('id')
@@ -126,22 +152,22 @@ class BattleTheaterDetail extends Page
         // Side totals. ISK Lost per side is summed from participants;
         // ISK Killed is the opposing side's ISK Lost (one number, two
         // perspectives — ADR-0006 § 1).
-        $sideTotals = $this->computeSideTotals($participants);
+        $sideTotals = $this->computeSideTotals($participants, $sides);
 
         // Alliance rollup (GROUP BY alliance_id in memory — fast at
         // theater-sized row counts; keeps the DB schema minimal).
-        $allianceRows = $this->buildAllianceRollup($participants, $names);
+        $allianceRows = $this->buildAllianceRollup($participants, $names, $sides);
 
         return [
             'theater' => $theater,
-            'sides' => $this->sides,
+            'sides' => $sides,
             'blocs' => $blocs,
             'names' => $names,
             'participants' => $participants,
             'systems' => $systems,
             'side_totals' => $sideTotals,
             'alliance_rows' => $allianceRows,
-            'viewer' => $this->viewer,
+            'viewer' => $viewer,
         ];
     }
 
@@ -153,7 +179,7 @@ class BattleTheaterDetail extends Page
      * @param  Collection<int, \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant>  $participants
      * @return array<string, array<string, int|float>>
      */
-    private function computeSideTotals(Collection $participants): array
+    private function computeSideTotals(Collection $participants, BattleTheaterSideResolution $sides): array
     {
         $zero = [
             'pilots' => 0,
@@ -171,7 +197,7 @@ class BattleTheaterDetail extends Page
         ];
 
         foreach ($participants as $p) {
-            $side = $this->sides->sideByCharacterId[(int) $p->character_id] ?? BattleTheaterSideResolver::SIDE_C;
+            $side = $sides->sideByCharacterId[(int) $p->character_id] ?? BattleTheaterSideResolver::SIDE_C;
             $totals[$side]['pilots']++;
             $totals[$side]['kills'] += (int) $p->kills;
             $totals[$side]['final_blows'] += (int) $p->final_blows;
@@ -196,12 +222,12 @@ class BattleTheaterDetail extends Page
     /**
      * @return Collection<int, array<string, mixed>>
      */
-    private function buildAllianceRollup(Collection $participants, $names): Collection
+    private function buildAllianceRollup(Collection $participants, $names, BattleTheaterSideResolution $sides): Collection
     {
         $byAlliance = [];
         foreach ($participants as $p) {
             $aid = (int) ($p->alliance_id ?? 0);
-            $side = $this->sides->sideByCharacterId[(int) $p->character_id] ?? BattleTheaterSideResolver::SIDE_C;
+            $side = $sides->sideByCharacterId[(int) $p->character_id] ?? BattleTheaterSideResolver::SIDE_C;
             $row = $byAlliance[$aid] ?? [
                 'alliance_id' => $aid,
                 'alliance_name' => $aid > 0 ? ($names[$aid] ?? "Alliance #{$aid}") : '(no alliance)',
