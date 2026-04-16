@@ -67,4 +67,11 @@
         }
     }
 
+    /* Cap content at 90% width so it doesn't hug the edges on
+     * ultrawide monitors. The Full maxContentWidth removes Filament's
+     * own max-width cap; this adds breathing room back. */
+    .fi-main-ctn {
+        max-width: 90% !important;
+        margin-inline: auto !important;
+    }
 </style>
