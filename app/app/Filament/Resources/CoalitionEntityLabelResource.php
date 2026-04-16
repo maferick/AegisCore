@@ -24,6 +24,8 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use UnitEnum;
 
 /**
@@ -107,14 +109,20 @@ class CoalitionEntityLabelResource extends Resource
                         ->label('CCP entity ID')
                         ->helperText(
                             'The CCP corporation_id or alliance_id for the target. '
-                            .'Look up from evewho.com or zkillboard if you don\'t '
-                            .'have it handy. An ID picker lands in a later slice '
-                            .'once the player-side corp/alliance ref table exists.'
+                            .'The name resolves automatically from ESI on save.'
                         )
                         ->required()
                         ->numeric()
                         ->minValue(1)
                         ->disabledOn('edit'),
+
+                    TextInput::make('entity_name')
+                        ->label('Entity name')
+                        ->helperText(
+                            'Cached display name. Auto-resolved from ESI on save '
+                            .'if left blank. Override manually if needed.'
+                        )
+                        ->maxLength(150),
                 ])
                 ->columns(2),
 
@@ -199,12 +207,19 @@ class CoalitionEntityLabelResource extends Resource
                     ->badge()
                     ->color(fn (string $state): string => $state === CoalitionEntityLabel::ENTITY_ALLIANCE ? 'primary' : 'gray'),
 
+                TextColumn::make('entity_name')
+                    ->label('Entity')
+                    ->searchable()
+                    ->sortable()
+                    ->placeholder('— unnamed —')
+                    ->description(fn (CoalitionEntityLabel $record): string => (string) $record->entity_id),
+
                 TextColumn::make('entity_id')
                     ->label('Entity ID')
                     ->numeric()
                     ->copyable()
-                    ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 TextColumn::make('raw_label')
                     ->label('Label')
@@ -292,6 +307,39 @@ class CoalitionEntityLabelResource extends Resource
     }
 
     // -- helpers ----------------------------------------------------------
+
+    /**
+     * Resolve a CCP entity ID to its display name via POST /universe/names/.
+     *
+     * Returns null on any failure — callers should tolerate a missing name
+     * rather than blocking the save.
+     */
+    public static function resolveEntityName(int $entityId): ?string
+    {
+        try {
+            $baseUrl = (string) config('eve.esi.base_url', 'https://esi.evetech.net/latest');
+            $userAgent = (string) config('eve.esi.user_agent', 'AegisCore/0.1');
+            $timeout = (int) config('eve.esi.timeout_seconds', 10);
+
+            $response = Http::withUserAgent($userAgent)
+                ->timeout($timeout)
+                ->acceptJson()
+                ->asJson()
+                ->post(rtrim($baseUrl, '/').'/universe/names/', [$entityId]);
+
+            if ($response->successful() && is_array($response->json())) {
+                foreach ($response->json() as $entry) {
+                    if (($entry['id'] ?? null) === $entityId) {
+                        return $entry['name'] ?? null;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('ESI /universe/names/ failed for entity '.$entityId.': '.$e->getMessage());
+        }
+
+        return null;
+    }
 
     /**
      * Autofill `raw_label` from the picked bloc + relationship when both

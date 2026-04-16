@@ -24,6 +24,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             CoalitionBlocSeeder::class,
             CoalitionRelationshipTypeSeeder::class,
+            CoalitionEntityLabelSeeder::class,
         ]);
 
         // User::factory(10)->create();

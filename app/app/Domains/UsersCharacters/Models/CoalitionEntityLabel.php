@@ -48,6 +48,7 @@ class CoalitionEntityLabel extends Model
     protected $fillable = [
         'entity_type',
         'entity_id',
+        'entity_name',
         'raw_label',
         'bloc_id',
         'relationship_type_id',

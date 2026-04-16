@@ -10,14 +10,20 @@ use Filament\Resources\Pages\CreateRecord;
 /**
  * Create page for /admin/coalition-entity-labels/create.
  *
- * No mutations needed beyond the form defaults — the resource's form
- * already handles raw_label autofill and source defaulting to 'manual'.
- * Uniqueness is enforced at the DB level by
- * `uniq_coalition_labels_entity_raw_src` (on entity_type, entity_id,
- * raw_label, source), so an accidental duplicate surfaces as a
- * constraint violation rather than a silent second row.
+ * Auto-resolves entity_name from ESI when the admin leaves it blank.
  */
 class CreateCoalitionEntityLabel extends CreateRecord
 {
     protected static string $resource = CoalitionEntityLabelResource::class;
+
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        if (empty($data['entity_name']) && ! empty($data['entity_id'])) {
+            $data['entity_name'] = CoalitionEntityLabelResource::resolveEntityName(
+                (int) $data['entity_id'],
+            );
+        }
+
+        return $data;
+    }
 }
