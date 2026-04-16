@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/account/market-hubs` Livewire page (closes ADR-0005 Follow-up
+  #1).** Registration + revoke stay on `/account/settings` (those
+  flows need the ESI-backed structure picker). The new dedicated
+  page adds what settings couldn't cleanly express alongside the
+  picker:
+  - **Multi-hub list** sourced from
+    `MarketHubAccessPolicy::visibleHubsFor`, grouped into public
+    reference (Jita + other NPC hubs) and private (donor-registered
+    structures the user is entitled to see). Single chokepoint —
+    same query shape as the comparison panels, so this list can
+    never drift from what the rest of the market UI will show.
+  - **Set / clear `users.default_private_market_hub_id`**. Public-
+    reference hubs are intentionally not valid defaults per
+    ADR-0005 § User preference (the pin is the donor's private
+    comparison target; Jita is the implicit other half). Set-
+    default re-runs `canView()` at write time, so a forged POST
+    with an id the user can't actually view is rejected regardless
+    of what was rendered.
+  - **Operational signals** for private hubs: active /
+    total collector count, "You" + "Primary" indicators when the
+    user holds a collector row, freeze badge when
+    `disabled_reason = 'no_active_collector'`, last-sync humaniser.
+  Route: `Route::get('/account/market-hubs', ...)->name('account.market-hubs')`.
+  Controller: `AccountMarketHubsController` (thin chrome wrapper,
+  same pattern as `AccountSettingsController`). Livewire:
+  `App\Livewire\AccountMarketHubs`. Cross-links between
+  `/account/settings` and `/account/market-hubs` added in both
+  side-navs. Page chrome deliberately mirrors settings' palette
+  so the two donor surfaces read as one product.
+
 ### Changed
 - **Retired `market_watched_locations.owner_user_id` (closes ADR-0005
   Follow-up #3).** The poller stopped reading the column two commits

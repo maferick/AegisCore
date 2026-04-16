@@ -65,7 +65,7 @@ class PortalPanelProvider extends PanelProvider
                     ->icon('heroicon-o-arrow-left-on-rectangle'),
                 MenuItem::make()
                     ->label('Account settings')
-                    ->url(fn (): string => route('account.settings'))
+                    ->url(fn (): string => route('filament.portal.pages.account-settings'))
                     ->icon('heroicon-o-cog-6-tooth'),
             ])
             ->renderHook(

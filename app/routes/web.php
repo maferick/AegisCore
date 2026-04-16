@@ -60,16 +60,27 @@ Route::post('/logout', function (Request $request) {
     return redirect()->route('home');
 })->name('auth.logout');
 
-// Account / settings — the donor-facing user surface, ADR-0004 §
-// /account/settings. Phase-1 stub is a simple Blade view showing
-// linked characters, donor status, and (for donors) the market-data
-// authorisation CTA + current token status. The structure-picker +
-// watched-locations management lands as a Livewire component in a
-// follow-up step; the route name is the stable contract the SSO
-// flow's redirects target today.
-Route::get('/account/settings', [\App\Http\Controllers\AccountSettingsController::class, 'show'])
-    ->middleware('auth')
+// Legacy `/account/settings` — the account-settings UX was moved into
+// the Filament Portal panel at `/portal/account-settings`
+// (App\Filament\Portal\Pages\AccountSettings) which embeds the same
+// Livewire `account.settings` component inside the portal chrome, so
+// donors see a unified navigation instead of two disconnected pages.
+// This 302 keeps any old bookmarks + inbound SSO-callback redirects
+// from previous deploys working without a 404. All first-party
+// callers now target `route('filament.portal.pages.account-settings')`
+// directly.
+Route::redirect('/account/settings', '/portal/account-settings')
     ->name('account.settings');
+
+// Account / market hubs — ADR-0005 § Follow-ups #1. Registration and
+// revoke stay on `/account/settings` (the ESI-backed structure picker
+// lives there). This page is the dedicated multi-hub surface: richer
+// list view of every hub the user may see via
+// MarketHubAccessPolicy::visibleHubsFor + set/clear
+// users.default_private_market_hub_id.
+Route::get('/account/market-hubs', [\App\Http\Controllers\AccountMarketHubsController::class, 'show'])
+    ->middleware('auth')
+    ->name('account.market-hubs');
 
 // Public map data endpoint for the EVE map renderer module.
 //

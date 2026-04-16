@@ -231,14 +231,19 @@ misconfiguration can silently broadcast a private hub.
 
 ## Follow-ups
 
-1. Livewire self-service page (`/account/market-hubs`): register,
-   set default, revoke. Note: `/account/settings` already handles
-   register (via the extended `addStructure()`) + revoke (via the
-   rewritten `removeStructure()` that removes the donor's collector
-   + self-entitlement without tearing down the watched row). A
-   dedicated `/account/market-hubs` page would only add set-default
-   (`users.default_private_market_hub_id`) and a richer multi-hub
-   list view.
+1. ~~Livewire self-service page (`/account/market-hubs`): register,
+   set default, revoke.~~ **Done.** `/account/settings` retains
+   register (`addStructure()`) + revoke (`removeStructure()`) since
+   those flows need the ESI-backed structure picker. The dedicated
+   `/account/market-hubs` page (Livewire `account.market-hubs` +
+   `AccountMarketHubsController`) adds the two things settings
+   couldn't cleanly express: set / clear
+   `users.default_private_market_hub_id`, and a richer multi-hub
+   list view sourced from `MarketHubAccessPolicy::visibleHubsFor`
+   (collector count, primary indicator, freeze state, last sync).
+   Set-default re-runs `canView()` at write time and rejects
+   public-reference hubs — the pin is scoped to private hubs per
+   § User preference.
 2. Filament admin resource for cross-hub audit + grant issuance.
 3. ~~Python poller update: pick collectors via
    `market_hub_collectors` with failover; retire

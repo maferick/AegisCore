@@ -215,7 +215,7 @@ class EveSsoController extends Controller
         // operators (matches the /account/settings UI gate and ADR-0005's
         // intersection rule applied to feature access).
         if (! ($user->isDonor() || $user->isAdmin())) {
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'Market data access is a donor benefit. Become a donor to enable it.');
         }
 
@@ -224,7 +224,7 @@ class EveSsoController extends Controller
         } catch (EveSsoException $e) {
             Log::warning('EVE SSO misconfigured (market flow)', ['error' => $e->getMessage()]);
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'EVE SSO is not configured on this server.');
         }
 
@@ -232,7 +232,7 @@ class EveSsoController extends Controller
         if (empty($scopes)) {
             Log::warning('EVE market flow attempted with empty EVE_SSO_MARKET_SCOPES');
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'EVE_SSO_MARKET_SCOPES is empty — no scopes to request.');
         }
 
@@ -479,7 +479,7 @@ class EveSsoController extends Controller
         if (! is_int($authorizedBy) || $authorizedBy <= 0) {
             Log::warning('EVE market callback missing authorizing user id');
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'Market authorisation session expired. Try again.');
         }
 
@@ -490,7 +490,7 @@ class EveSsoController extends Controller
                 'authorized_by_user_id' => $authorizedBy,
             ]);
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'Market authorisation failed — authorising user not found.');
         }
 
@@ -505,7 +505,7 @@ class EveSsoController extends Controller
                 'character_id' => $token->characterId,
             ]);
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'Market data access is a donor benefit. Become a donor to enable it.');
         }
 
@@ -527,7 +527,7 @@ class EveSsoController extends Controller
                 'character_name' => $token->characterName,
             ]);
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', sprintf(
                     'Authorised character %s is not linked to your account. '.
                     'Log in with this character via EVE SSO first, then re-try authorising market data.',
@@ -547,7 +547,7 @@ class EveSsoController extends Controller
                 'scopes' => $token->scopes,
             ]);
 
-            return redirect()->route('account.settings')
+            return redirect()->route('filament.portal.pages.account-settings')
                 ->with('error', 'Market authorisation did not grant the required scope (esi-markets.structure_markets.v1). Try again.');
         }
 
@@ -573,7 +573,7 @@ class EveSsoController extends Controller
             'expires_at' => $expiresAt->toIso8601String(),
         ]);
 
-        return redirect()->route('account.settings')
+        return redirect()->route('filament.portal.pages.account-settings')
             ->with('success', "Authorised {$token->characterName} for market-data access.");
     }
 
@@ -698,7 +698,7 @@ class EveSsoController extends Controller
                 ->route('filament.admin.pages.eve-donations')
                 ->with('error', $message),
             self::FLOW_MARKET => redirect()
-                ->route('account.settings')
+                ->route('filament.portal.pages.account-settings')
                 ->with('error', $message),
             default => redirect()
                 ->route('filament.admin.auth.login')
