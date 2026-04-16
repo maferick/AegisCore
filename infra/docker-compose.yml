@@ -293,7 +293,7 @@ services:
       ESI_RATE_LIMIT_MAX_WAIT_SECONDS: "${ESI_RATE_LIMIT_MAX_WAIT_SECONDS:-5}"
     volumes:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html
-      - ${AEGISCORE_ROOT:-/opt/aegiscore}/php/conf.d:/usr/local/etc/php/conf.d/aegiscore:ro
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/php/conf.d/aegiscore.ini:/usr/local/etc/php/conf.d/zz-aegiscore.ini:ro
       # Read-only mount of the repo's pinned SDE version marker. The daily
       # `reference:check-sde-version` command reads /var/www/sde/version.txt
       # and compares it against upstream.

@@ -218,9 +218,9 @@ return [
             'maxProcesses' => 1,
             'maxTime' => 0,
             'maxJobs' => 0,
-            // Megabytes per worker process. 256 covers the enrichment
-            // batch (500 killmails with eager-loaded items + attackers).
-            'memory' => 256,
+            // Megabytes per worker process. 512 covers the enrichment
+            // batch (2000 killmails with eager-loaded items + attackers).
+            'memory' => 512,
             // One try per dispatch. Scheduled jobs get their retry
             // from the next tick; ad-hoc dispatches that need retries
             // should opt in per-job via `$tries` on the class.

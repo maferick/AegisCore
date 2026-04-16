@@ -33,7 +33,7 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    private const CHUNK_SIZE = 500;
+    private const CHUNK_SIZE = 1000;
 
     public int $tries = 3;
 
