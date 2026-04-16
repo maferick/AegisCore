@@ -9,6 +9,7 @@ use App\Domains\UsersCharacters\Models\EveDonationsToken;
 use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiException;
+use App\Services\Eve\Esi\EsiNameResolver;
 use App\Services\Eve\Esi\EsiRateLimitException;
 use App\Services\Eve\Sso\EveSsoClient;
 use App\Services\Eve\Sso\EveSsoException;
@@ -19,7 +20,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -392,30 +392,7 @@ class PollDonationsWallet implements ShouldQueue
             return;
         }
 
-        // /universe/names/ caps at 1000 IDs per call; donor batches are
-        // tiny but chunk anyway to be future-proof.
-        $resolved = [];
-        foreach (array_chunk($needsResolve, 1000) as $chunk) {
-            try {
-                $names = $this->postUniverseNames($chunk);
-            } catch (Throwable $e) {
-                Log::warning('eve:poll-donations names resolve failed', [
-                    'chunk' => $chunk,
-                    'error' => $e->getMessage(),
-                ]);
-
-                continue;
-            }
-
-            foreach ($names as $entry) {
-                $id = (int) ($entry['id'] ?? 0);
-                $name = (string) ($entry['name'] ?? '');
-                if ($id === 0 || $name === '') {
-                    continue;
-                }
-                $resolved[$id] = $name;
-            }
-        }
+        $resolved = app(EsiNameResolver::class)->resolveNames($needsResolve);
 
         if ($resolved === []) {
             return;
@@ -429,41 +406,6 @@ class PollDonationsWallet implements ShouldQueue
                     ->update(['donor_name' => $name]);
             }
         });
-    }
-
-    /**
-     * Thin wrapper around the unauth'd /universe/names/ endpoint.
-     *
-     * Done with the Http facade rather than EsiClient because EsiClient
-     * is GET-only by design and adding a POST path for a single caller
-     * would muddy the rate-limiter boundary (names is on a different
-     * limit group from per-character endpoints). Move into EsiClient
-     * if a second POST caller appears.
-     *
-     * @param  array<int, int>  $ids
-     * @return array<int, array{id: int, name: string, category: string}>
-     */
-    private function postUniverseNames(array $ids): array
-    {
-        $baseUrl = (string) config('eve.esi.base_url', 'https://esi.evetech.net/latest');
-        $userAgent = (string) config('eve.esi.user_agent', 'AegisCore/0.1');
-        $timeout = (int) config('eve.esi.timeout_seconds', 10);
-
-        $response = Http::withUserAgent($userAgent)
-            ->timeout($timeout)
-            ->acceptJson()
-            ->asJson()
-            ->post(rtrim($baseUrl, '/').'/universe/names/', $ids);
-
-        if (! $response->successful()) {
-            throw new \RuntimeException(
-                "/universe/names/ returned HTTP {$response->status()}",
-            );
-        }
-
-        $body = $response->json();
-
-        return is_array($body) ? $body : [];
     }
 
     /**

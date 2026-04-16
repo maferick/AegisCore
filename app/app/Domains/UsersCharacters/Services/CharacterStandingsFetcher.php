@@ -10,10 +10,10 @@ use App\Domains\UsersCharacters\Models\CharacterStandingLabel;
 use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiException;
+use App\Services\Eve\Esi\EsiNameResolver;
 use App\Services\Eve\Esi\EsiRateLimitException;
 use App\Services\Eve\MarketTokenAuthorizer;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
@@ -101,6 +101,7 @@ final class CharacterStandingsFetcher
     public function __construct(
         private readonly EsiClientInterface $esi,
         private readonly MarketTokenAuthorizer $authorizer,
+        private readonly EsiNameResolver $nameResolver,
     ) {}
 
     /**
@@ -654,28 +655,7 @@ final class CharacterStandingsFetcher
             return;
         }
 
-        $resolved = [];
-        foreach (array_chunk($ids, 1000) as $chunk) {
-            try {
-                $names = $this->postUniverseNames($chunk);
-            } catch (Throwable $e) {
-                Log::warning('standings sync name resolve failed', [
-                    'chunk_size' => count($chunk),
-                    'error' => $e->getMessage(),
-                ]);
-
-                continue;
-            }
-
-            foreach ($names as $entry) {
-                $id = (int) ($entry['id'] ?? 0);
-                $name = (string) ($entry['name'] ?? '');
-                if ($id === 0 || $name === '') {
-                    continue;
-                }
-                $resolved[$id] = $name;
-            }
-        }
+        $resolved = $this->nameResolver->resolveNames($ids);
 
         if ($resolved === []) {
             return;
@@ -694,37 +674,5 @@ final class CharacterStandingsFetcher
                     ->update(['contact_name' => $name]);
             }
         });
-    }
-
-    /**
-     * POST /universe/names/ — resolve IDs → names/categories in one
-     * batch. Unauth'd, up to 1000 IDs per call. Mirrors
-     * PollDonationsWallet::postUniverseNames() — consolidate into a
-     * shared service when a third caller appears.
-     *
-     * @param  array<int, int>  $ids
-     * @return array<int, array{id: int, name: string, category: string}>
-     */
-    private function postUniverseNames(array $ids): array
-    {
-        $baseUrl = (string) config('eve.esi.base_url', 'https://esi.evetech.net/latest');
-        $userAgent = (string) config('eve.esi.user_agent', 'AegisCore/0.1');
-        $timeout = (int) config('eve.esi.timeout_seconds', 10);
-
-        $response = Http::withUserAgent($userAgent)
-            ->timeout($timeout)
-            ->acceptJson()
-            ->asJson()
-            ->post(rtrim($baseUrl, '/').'/universe/names/', $ids);
-
-        if (! $response->successful()) {
-            throw new RuntimeException(
-                "/universe/names/ returned HTTP {$response->status()}",
-            );
-        }
-
-        $body = $response->json();
-
-        return is_array($body) ? $body : [];
     }
 }
