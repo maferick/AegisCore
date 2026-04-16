@@ -10,22 +10,21 @@ use App\Domains\KillmailsBattleTheaters\Models\KillmailItem;
 use App\Domains\KillmailsBattleTheaters\Services\JitaValuationService;
 use App\Reference\Models\SolarSystem;
 use App\Services\Eve\Esi\EsiNameResolver;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Enriches a single already-persisted killmail with location hierarchy,
- * item valuations, aggregated totals, and entity name caching.
+ * item valuations, asset classification, aggregated totals, and entity
+ * name caching.
  *
  * Idempotent: safe to re-run on the same killmail — previous enrichment
- * data is overwritten. Bump {@see ENRICHMENT_VERSION} when valuation
- * logic changes to trigger re-enrichment sweeps.
+ * data is overwritten.
  *
- * Steps 1–4 (location, valuation, aggregates, mark enriched) run inside
- * a single DB transaction. Step 5 (entity name resolution) runs outside
- * the transaction because it may hit ESI over HTTP and we don't want a
- * slow or failing call to hold locks or roll back valuation work.
+ * If the Python backfill is concurrently re-ingesting this killmail,
+ * MariaDB will throw error 1020 ("Record has changed since last read").
+ * The caller (EnrichPendingKillmails job) catches this and skips —
+ * the killmail stays unenriched and gets picked up on the next pass.
  */
 final class EnrichKillmail
 {
@@ -56,9 +55,7 @@ final class EnrichKillmail
             $killmail->save();
         });
 
-        // Name resolution runs outside the transaction — best-effort
-        // caching into esi_entity_names. If it fails, the killmail is
-        // still correctly enriched.
+        // Name resolution runs outside the transaction — best-effort.
         $entityNamesResolved = $this->resolveEntityNames($killmail);
 
         return new KillmailEnrichmentResult(
@@ -71,9 +68,6 @@ final class EnrichKillmail
         );
     }
 
-    /**
-     * Step 1: Resolve constellation + region from the solar system.
-     */
     private function resolveLocation(Killmail $killmail): void
     {
         if ($killmail->constellation_id && $killmail->region_id) {
@@ -95,18 +89,10 @@ final class EnrichKillmail
         $killmail->region_id = $solarSystem->region_id;
     }
 
-    /**
-     * Step 1b: Classify all items + hull from ref_item_types/groups/categories.
-     *
-     * Single batch query joining type → group → category, then writes
-     * resolved metadata to each item row and the hull fields on the
-     * killmail. Gracefully handles missing ref data (SDE not imported).
-     */
     private function classifyAssets(Killmail $killmail): void
     {
         $items = $killmail->items;
 
-        // Collect all unique type_ids: items + hull.
         $typeIds = $items->pluck('type_id')->all();
         $typeIds[] = $killmail->victim_ship_type_id;
         $typeIds = array_values(array_unique(array_filter($typeIds, fn (int $id) => $id > 0)));
@@ -115,7 +101,6 @@ final class EnrichKillmail
             return;
         }
 
-        // Single query: type → group → category + meta info.
         $typeMetadata = DB::table('ref_item_types as t')
             ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
             ->leftJoin('ref_item_categories as c', 'c.id', '=', 'g.category_id')
@@ -136,7 +121,6 @@ final class EnrichKillmail
             return;
         }
 
-        // Write metadata to each item row.
         foreach ($items as $item) {
             $meta = $typeMetadata->get($item->type_id);
             if ($meta === null) {
@@ -150,10 +134,8 @@ final class EnrichKillmail
             $item->category_name = $meta->category_name;
             $item->meta_group_id = $meta->meta_group_id;
             $item->meta_level = $meta->meta_level;
-            // Don't save yet — valueItems() will save each item.
         }
 
-        // Hull classification — write to the killmail directly.
         $hullMeta = $typeMetadata->get($killmail->victim_ship_type_id);
         if ($hullMeta !== null) {
             $killmail->victim_ship_type_name = $hullMeta->type_name;
@@ -164,11 +146,6 @@ final class EnrichKillmail
         }
     }
 
-    /**
-     * Step 2: Value all items + hull via Jita historical pricing.
-     *
-     * @return int Number of items that received a valuation.
-     */
     private function valueItems(Killmail $killmail): int
     {
         $items = $killmail->items;
@@ -202,16 +179,12 @@ final class EnrichKillmail
             $valued++;
         }
 
-        // Hull valuation — write to the killmail directly.
         $hullVal = $valuations[$killmail->victim_ship_type_id] ?? null;
         $killmail->hull_value = $hullVal?->unitPrice ?? '0.00';
 
         return $valued;
     }
 
-    /**
-     * Step 3: Compute valuation aggregates from per-item totals.
-     */
     private function computeAggregates(Killmail $killmail): void
     {
         $bySlot = [];
@@ -260,13 +233,6 @@ final class EnrichKillmail
         $killmail->total_value = $total;
     }
 
-    /**
-     * Step 5: Warm the shared entity name cache for all participants.
-     *
-     * Best-effort — failures are logged by EsiNameResolver internally.
-     *
-     * @return int Number of entity names resolved.
-     */
     private function resolveEntityNames(Killmail $killmail): int
     {
         $ids = [];
