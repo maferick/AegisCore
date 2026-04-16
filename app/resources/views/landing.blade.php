@@ -591,7 +591,6 @@
             <div class="nav-strip-inner">
                 @if ($authUser)
                     <a href="/portal" class="nav-link">My Character</a>
-                    <a href="{{ route('account.settings') }}" class="nav-link">Account</a>
                     @if ($isAdmin)
                         <a href="/admin" class="nav-link nav-link--admin">Admin</a>
                     @endif
