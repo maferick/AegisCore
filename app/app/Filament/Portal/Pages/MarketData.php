@@ -6,6 +6,7 @@ namespace App\Filament\Portal\Pages;
 
 use BackedEnum;
 use Filament\Pages\Page;
+use UnitEnum;
 
 class MarketData extends Page
 {
@@ -13,11 +14,11 @@ class MarketData extends Page
 
     protected static ?string $navigationLabel = 'Market Data';
 
-    protected static ?string $navigationGroup = 'Account';
+    protected static string|UnitEnum|null $navigationGroup = 'Account';
 
     protected static ?int $navigationSort = 51;
 
     protected static ?string $title = 'Market Data & Structures';
 
-    protected static string $view = 'filament.portal.pages.market-data';
+    protected string $view = 'filament.portal.pages.market-data';
 }

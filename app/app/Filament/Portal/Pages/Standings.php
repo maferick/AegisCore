@@ -6,6 +6,7 @@ namespace App\Filament\Portal\Pages;
 
 use BackedEnum;
 use Filament\Pages\Page;
+use UnitEnum;
 
 class Standings extends Page
 {
@@ -13,11 +14,11 @@ class Standings extends Page
 
     protected static ?string $navigationLabel = 'Standings';
 
-    protected static ?string $navigationGroup = 'Account';
+    protected static string|UnitEnum|null $navigationGroup = 'Account';
 
     protected static ?int $navigationSort = 52;
 
     protected static ?string $title = 'Corp & Alliance Standings';
 
-    protected static string $view = 'filament.portal.pages.standings';
+    protected string $view = 'filament.portal.pages.standings';
 }
