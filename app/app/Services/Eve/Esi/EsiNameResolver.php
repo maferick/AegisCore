@@ -169,14 +169,80 @@ class EsiNameResolver
                 // Stop hitting ESI — the rate limiter will block further calls.
                 break;
             } catch (\Throwable $e) {
+                // CCP returns 404 for the ENTIRE batch if even one ID
+                // is invalid (deleted character, disbanded corp, typo
+                // faction id). Without bisection we'd lose every
+                // valid name in the chunk too — on a backfill that's
+                // thousands of real names dropped per run. Bisect
+                // until chunks are small enough to isolate the dead
+                // IDs, keeping the 404-free halves.
+                $message = $e->getMessage();
+                $is404 = str_contains($message, 'HTTP 404');
+
+                if ($is404 && count($chunk) > 1) {
+                    $recovered = $this->bisectRetry(array_values($chunk));
+                    if ($recovered !== []) {
+                        array_push($all, ...$recovered);
+                    }
+
+                    continue;
+                }
+
                 Log::warning('ESI /universe/names/ failed', [
                     'chunk_size' => count($chunk),
-                    'error' => $e->getMessage(),
+                    'error' => $message,
                 ]);
             }
         }
 
         return $all;
+    }
+
+    /**
+     * Retry a 404'd chunk by splitting it in half. Recurses down to
+     * size 1; at size 1 a 404 is logged (the single ID is genuinely
+     * unresolvable) and skipped, so the caller never sees the bad ID.
+     * Every other ID in the original chunk is preserved.
+     *
+     * @param  array<int, int>  $chunk
+     * @return list<array{id: int, name: string, category: string}>
+     */
+    private function bisectRetry(array $chunk): array
+    {
+        if (count($chunk) === 1) {
+            try {
+                $response = $this->esiClient->post('/universe/names/', $chunk);
+                $body = $response->body;
+
+                return is_array($body) ? $body : [];
+            } catch (\Throwable) {
+                // Single unresolvable ID — CCP has no record of it.
+                return [];
+            }
+        }
+
+        $half = intdiv(count($chunk), 2);
+        $left = array_slice($chunk, 0, $half);
+        $right = array_slice($chunk, $half);
+
+        $out = [];
+        foreach ([$left, $right] as $part) {
+            try {
+                $response = $this->esiClient->post('/universe/names/', $part);
+                $body = $response->body;
+                if (is_array($body)) {
+                    array_push($out, ...$body);
+                }
+            } catch (\Throwable $e) {
+                if (count($part) > 1 && str_contains($e->getMessage(), 'HTTP 404')) {
+                    $out = array_merge($out, $this->bisectRetry($part));
+                }
+                // Non-404 or single-ID failure: drop silently, bad IDs
+                // should not poison the rest of the batch.
+            }
+        }
+
+        return $out;
     }
 
     /**
