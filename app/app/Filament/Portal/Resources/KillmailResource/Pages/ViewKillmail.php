@@ -7,6 +7,7 @@ namespace App\Filament\Portal\Resources\KillmailResource\Pages;
 use App\Domains\KillmailsBattleTheaters\Models\Killmail;
 use App\Domains\KillmailsBattleTheaters\Services\JitaValuationService;
 use App\Filament\Portal\Resources\KillmailResource;
+use App\Services\Eve\Esi\EsiNameResolver;
 use Filament\Resources\Pages\Page;
 use Illuminate\Support\Facades\DB;
 
@@ -54,9 +55,12 @@ class ViewKillmail extends Page
             }
         }
 
-        $names = DB::table('esi_entity_names')
-            ->whereIn('entity_id', $entityIds->unique()->filter()->values())
-            ->pluck('name', 'entity_id');
+        // Resolve names via the shared resolver — checks DB cache first,
+        // calls ESI /universe/names/ for any missing. Single page view,
+        // so one ESI call for ~50 uncached IDs is acceptable.
+        $uniqueEntityIds = $entityIds->unique()->filter()->values()->all();
+        $resolved = app(EsiNameResolver::class)->resolve($uniqueEntityIds);
+        $names = collect($resolved)->mapWithKeys(fn ($entry, $id) => [$id => $entry['name']]);
 
         // -- Type names + categories from SDE -------------------------
         $allTypeIds = collect([$km->victim_ship_type_id]);
