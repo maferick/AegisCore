@@ -6,76 +6,26 @@ namespace App\Filament\Widgets;
 
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
  * Admin dashboard widget: entity intelligence from the killmail pipeline.
  *
- * Shows how many unique characters, corporations, and alliances have
- * been observed through killmail ingestion, and how many have been
- * name-resolved in the shared entity cache.
- *
- * The unique entity counts are expensive (COUNT DISTINCT across millions
- * of rows), so they're cached for 5 minutes. The name cache counts are
- * cheap and run live.
+ * Uses fast queries only — counts from esi_entity_names (small table)
+ * and simple COUNT(*) on indexed columns. No expensive COUNT(DISTINCT)
+ * over unions that caused timeouts.
  */
 class EntityIntelligenceWidget extends StatsOverviewWidget
 {
     protected ?string $heading = 'Entity Intelligence';
 
-    protected ?string $description = 'Characters, corps, and alliances observed from killmails.';
+    protected ?string $description = 'Entity name resolution from killmail participants.';
 
     protected static ?int $sort = 6;
 
-    /** Cache TTL in seconds for the expensive unique-entity counts. */
-    private const CACHE_TTL = 300;
-
     protected function getStats(): array
     {
-        $kmTotal = (int) DB::table('killmails')->count();
-
-        if ($kmTotal === 0) {
-            return [
-                Stat::make('Entities', '0')
-                    ->description('No killmails ingested yet')
-                    ->color('gray')
-                    ->icon('heroicon-o-user-group'),
-            ];
-        }
-
-        // Expensive counts — cached for 5 minutes.
-        $entityCounts = Cache::remember('widget:entity_intelligence:counts', self::CACHE_TTL, function () {
-            return [
-                'characters' => (int) DB::selectOne("
-                    SELECT COUNT(DISTINCT cid) as cnt FROM (
-                        SELECT victim_character_id as cid FROM killmails WHERE victim_character_id IS NOT NULL
-                        UNION ALL
-                        SELECT character_id FROM killmail_attackers WHERE character_id IS NOT NULL
-                    ) t
-                ")->cnt,
-                'corporations' => (int) DB::selectOne("
-                    SELECT COUNT(DISTINCT cid) as cnt FROM (
-                        SELECT victim_corporation_id as cid FROM killmails WHERE victim_corporation_id IS NOT NULL
-                        UNION ALL
-                        SELECT corporation_id FROM killmail_attackers WHERE corporation_id IS NOT NULL
-                    ) t
-                ")->cnt,
-                'alliances' => (int) DB::selectOne("
-                    SELECT COUNT(DISTINCT cid) as cnt FROM (
-                        SELECT victim_alliance_id as cid FROM killmails WHERE victim_alliance_id IS NOT NULL
-                        UNION ALL
-                        SELECT alliance_id FROM killmail_attackers WHERE alliance_id IS NOT NULL
-                    ) t
-                ")->cnt,
-            ];
-        });
-
-        $uniqueCharacters = $entityCounts['characters'];
-        $uniqueCorps = $entityCounts['corporations'];
-        $uniqueAlliances = $entityCounts['alliances'];
-
-        // Name cache counts — cheap, run live.
+        // All counts from esi_entity_names — small table, fast.
         $namesByCategory = DB::table('esi_entity_names')
             ->selectRaw('category, COUNT(*) as cnt')
             ->groupBy('category')
@@ -86,28 +36,37 @@ class EntityIntelligenceWidget extends StatsOverviewWidget
         $namedAlliances = (int) ($namesByCategory['alliance'] ?? 0);
         $totalNamed = (int) array_sum($namesByCategory->all());
 
-        $charPct = $uniqueCharacters > 0 ? round(($namedChars / $uniqueCharacters) * 100, 1) : 0;
-        $corpPct = $uniqueCorps > 0 ? round(($namedCorps / $uniqueCorps) * 100, 1) : 0;
-        $alliancePct = $uniqueAlliances > 0 ? round(($namedAlliances / $uniqueAlliances) * 100, 1) : 0;
+        if ($totalNamed === 0) {
+            return [
+                Stat::make('Name Cache', '0')
+                    ->description('No entities resolved yet')
+                    ->color('gray')
+                    ->icon('heroicon-o-user-group'),
+            ];
+        }
+
+        // Simple fast counts from main tables (indexed, no DISTINCT).
+        $totalKillmails = (int) DB::table('killmails')->count();
+        $totalAttackers = (int) DB::table('killmail_attackers')->count();
 
         return [
-            Stat::make('Characters', number_format($uniqueCharacters))
-                ->description("{$namedChars} named ({$charPct}%)")
-                ->color($charPct >= 80 ? 'success' : ($charPct >= 30 ? 'warning' : 'danger'))
+            Stat::make('Characters', number_format($namedChars))
+                ->description('Names resolved')
+                ->color($namedChars > 0 ? 'success' : 'gray')
                 ->icon('heroicon-o-user'),
 
-            Stat::make('Corporations', number_format($uniqueCorps))
-                ->description("{$namedCorps} named ({$corpPct}%)")
-                ->color($corpPct >= 80 ? 'success' : ($corpPct >= 30 ? 'warning' : 'danger'))
+            Stat::make('Corporations', number_format($namedCorps))
+                ->description('Names resolved')
+                ->color($namedCorps > 0 ? 'success' : 'gray')
                 ->icon('heroicon-o-building-office'),
 
-            Stat::make('Alliances', number_format($uniqueAlliances))
-                ->description("{$namedAlliances} named ({$alliancePct}%)")
-                ->color($alliancePct >= 80 ? 'success' : ($alliancePct >= 30 ? 'warning' : 'danger'))
+            Stat::make('Alliances', number_format($namedAlliances))
+                ->description('Names resolved')
+                ->color($namedAlliances > 0 ? 'success' : 'gray')
                 ->icon('heroicon-o-flag'),
 
             Stat::make('Name Cache', number_format($totalNamed))
-                ->description('Total entities in esi_entity_names')
+                ->description(number_format($totalKillmails).' kills / '.number_format($totalAttackers).' participants')
                 ->color('primary')
                 ->icon('heroicon-o-bookmark'),
         ];
