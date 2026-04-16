@@ -87,6 +87,7 @@ pull:
 # --interval 300" runtime error.
 update:
 	git pull --ff-only
+	./scripts/backup-mariadb.sh
 	$(COMPOSE) up -d --build
 	$(COMPOSE) exec php-fpm composer install --optimize-autoloader --no-interaction
 	$(COMPOSE) exec php-fpm php artisan migrate --force
@@ -94,6 +95,15 @@ update:
 	@echo "Stack updated. If Horizon is running and you touched jobs/config:"
 	@echo "    make artisan CMD=\"config:clear\""
 	@echo "    make artisan CMD=\"horizon:terminate\"   # supervisord/systemd will respawn it"
+
+# Backup MariaDB — logical dump with 7-day retention.
+backup:
+	./scripts/backup-mariadb.sh
+
+# Safe MariaDB restart for config changes (InnoDB settings, etc).
+# Stops traffic → clean shutdown → backup → restart → verify.
+safe-restart-mariadb:
+	./scripts/safe-mariadb-restart.sh
 
 bootstrap:
 	sudo mkdir -p \
