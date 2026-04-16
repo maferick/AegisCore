@@ -2,6 +2,11 @@
 
 namespace App\Providers;
 
+use App\Domains\UsersCharacters\Models\CharacterStanding;
+use App\Domains\UsersCharacters\Models\CoalitionEntityLabel;
+use App\Domains\UsersCharacters\Models\CorporationAffiliationProfile;
+use App\Domains\UsersCharacters\Models\EntityClassificationOverride;
+use App\Domains\UsersCharacters\Observers\ClassificationDirtyObserver;
 use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
 use App\Livewire\AccountSettings;
 use App\Services\Eve\Esi\CachedEsiClient;
@@ -92,5 +97,16 @@ class AppServiceProvider extends ServiceProvider
         // redundant and can be dropped — until then this line is the
         // chokepoint that keeps /account/settings reachable.
         Livewire::component('account.settings', AccountSettings::class);
+
+        // Classification dirty-flag observers. When any of the four
+        // upstream models that feed the resolver chain changes, the
+        // observer flips `is_dirty=1` on the affected
+        // viewer_entity_classifications rows so the next recompute
+        // sweep picks them up.
+        $dirtyObserver = ClassificationDirtyObserver::class;
+        CharacterStanding::observe($dirtyObserver);
+        CoalitionEntityLabel::observe($dirtyObserver);
+        EntityClassificationOverride::observe($dirtyObserver);
+        CorporationAffiliationProfile::observe($dirtyObserver);
     }
 }

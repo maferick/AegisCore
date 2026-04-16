@@ -9,6 +9,7 @@ use App\Domains\UsersCharacters\Models\CharacterStanding;
 use App\Domains\UsersCharacters\Models\CoalitionBloc;
 use App\Domains\UsersCharacters\Models\CoalitionEntityLabel;
 use App\Domains\UsersCharacters\Models\CoalitionRelationshipType;
+use App\Domains\UsersCharacters\Models\CorporationAffiliationProfile;
 use App\Domains\UsersCharacters\Models\EntityClassificationOverride;
 use App\Domains\UsersCharacters\Models\ViewerContext;
 use App\Domains\UsersCharacters\Models\ViewerEntityClassification;
@@ -180,6 +181,84 @@ final class ViewerEntityClassificationResolverServiceTest extends TestCase
         );
 
         self::assertSame(ViewerEntityClassification::ALIGNMENT_FRIENDLY, $resolved->resolved_alignment);
+    }
+
+    public function test_conflicting_corp_and_alliance_standings_set_needs_review(): void
+    {
+        [$viewerContext] = $this->makeViewerContext();
+        $targetAllianceId = 99_000_321;
+
+        CharacterStanding::query()->create([
+            'owner_type' => CharacterStanding::OWNER_CORPORATION,
+            'owner_id' => $viewerContext->viewer_corporation_id,
+            'contact_id' => $targetAllianceId,
+            'contact_type' => CharacterStanding::CONTACT_ALLIANCE,
+            'standing' => '9.0',
+            'source_character_id' => $viewerContext->character_id,
+            'synced_at' => CarbonImmutable::parse('2026-04-15T00:00:00Z'),
+        ]);
+
+        CharacterStanding::query()->create([
+            'owner_type' => CharacterStanding::OWNER_ALLIANCE,
+            'owner_id' => $viewerContext->viewer_alliance_id,
+            'contact_id' => $targetAllianceId,
+            'contact_type' => CharacterStanding::CONTACT_ALLIANCE,
+            'standing' => '-9.0',
+            'source_character_id' => $viewerContext->character_id,
+            'synced_at' => CarbonImmutable::parse('2026-04-15T00:00:00Z'),
+        ]);
+
+        $service = new ViewerEntityClassificationResolverService();
+        $resolved = $service->resolveForTarget(
+            $viewerContext,
+            ViewerEntityClassification::ENTITY_ALLIANCE,
+            $targetAllianceId,
+        );
+
+        self::assertSame(ViewerEntityClassification::ALIGNMENT_FRIENDLY, $resolved->resolved_alignment);
+        self::assertTrue($resolved->needs_review);
+        self::assertStringContainsString('Conflicting standings exist', $resolved->reason_summary);
+        self::assertIsArray($resolved->evidence_snapshot);
+        self::assertNotEmpty($resolved->evidence_snapshot['conflicting_owner_level_evidence']);
+    }
+
+    public function test_stale_affiliation_profile_downgrades_inherited_confidence(): void
+    {
+        [$viewerContext, $viewerBloc, $memberType] = $this->makeViewerContext();
+        $targetCorpId = 98_000_777;
+        $allianceId = 99_000_777;
+
+        CoalitionEntityLabel::query()->create([
+            'entity_type' => CoalitionEntityLabel::ENTITY_ALLIANCE,
+            'entity_id' => $allianceId,
+            'raw_label' => 'wc.member',
+            'bloc_id' => $viewerBloc->id,
+            'relationship_type_id' => $memberType->id,
+            'source' => CoalitionEntityLabel::SOURCE_MANUAL,
+            'is_active' => true,
+        ]);
+
+        CorporationAffiliationProfile::query()->create([
+            'corporation_id' => $targetCorpId,
+            'current_alliance_id' => $allianceId,
+            'previous_alliance_id' => null,
+            'last_alliance_change_at' => null,
+            'recently_changed_affiliation' => false,
+            'history_confidence_band' => CorporationAffiliationProfile::CONFIDENCE_HIGH,
+            'observed_at' => CarbonImmutable::parse('2026-02-01T00:00:00Z'),
+        ]);
+
+        $service = new ViewerEntityClassificationResolverService();
+        $resolved = $service->resolveForTarget(
+            $viewerContext,
+            ViewerEntityClassification::ENTITY_CORPORATION,
+            $targetCorpId,
+        );
+
+        self::assertSame(ViewerEntityClassification::ALIGNMENT_FRIENDLY, $resolved->resolved_alignment);
+        self::assertSame(ViewerEntityClassification::CONFIDENCE_LOW, $resolved->confidence_band);
+        self::assertTrue($resolved->needs_review);
+        self::assertStringContainsString('stale', $resolved->reason_summary);
     }
 
     public function test_fallback_uses_unknown_when_viewer_bloc_is_unset(): void

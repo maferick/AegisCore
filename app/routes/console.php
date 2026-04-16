@@ -133,3 +133,27 @@ Schedule::command('classification:sync-corp-affiliations')
     ->onOneServer()
     ->withoutOverlapping(30)
     ->name('classification-sync-corp-affiliations');
+
+// Nightly stale-classification sweep + recompute dispatch.
+//
+// Phase 1: finds active viewers whose `last_recomputed_at` is older than
+// the staleness window (classification.recompute.staleness_days, default
+// 7 days) and marks their cached classification rows `is_dirty=1`.
+//
+// Phase 2 (--dispatch): for each distinct viewer with dirty rows,
+// dispatches a RecomputeDirtyClassifications job onto Horizon. Each job
+// is per-viewer and capped at `classification.recompute.max_dirty_per_viewer`
+// rows (default 50), keeping it within the plane boundary.
+//
+// Cadence: daily at 05:00 UTC — after the standings sync (04:00) and
+// corp-affiliation sync (04:30) have finished writing fresh upstream data.
+// The recompute then runs against up-to-date evidence.
+//
+// `withoutOverlapping(30)` guards against a long-running mark pass
+// (e.g. thousands of viewers) stacking with the next scheduled tick.
+Schedule::command('classification:sweep-stale --dispatch')
+    ->dailyAt('05:00')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('classification-sweep-stale');

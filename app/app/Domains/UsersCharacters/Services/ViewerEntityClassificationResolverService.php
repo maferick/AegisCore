@@ -13,6 +13,7 @@ use App\Domains\UsersCharacters\Models\ViewerContext;
 use App\Domains\UsersCharacters\Models\ViewerEntityClassification;
 use App\Domains\UsersCharacters\Models\ViewerEntityClassificationHistory;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 /**
  * v1 resolver for donor-facing entity classifications.
@@ -28,6 +29,13 @@ use Illuminate\Support\Carbon;
  *   6. alliance-history-derived inference (corp targets)
  *   7. consensus (Phase 2, not implemented in v1)
  *   8. fallback (neutral / unknown)
+ *
+ * Persistence is transactional: the classification upsert and the
+ * history append live in one DB::transaction so a partial write
+ * (cache row saved but audit entry lost) cannot happen.
+ *
+ * Standing thresholds and affiliation freshness windows are read from
+ * config('classification.*') so operators can tune without a deploy.
  */
 final class ViewerEntityClassificationResolverService
 {
@@ -44,48 +52,13 @@ final class ViewerEntityClassificationResolverService
             $now,
         );
 
-        $classification = ViewerEntityClassification::query()->firstOrNew([
-            'viewer_context_id' => $viewerContext->id,
-            'target_entity_type' => $targetEntityType,
-            'target_entity_id' => $targetEntityId,
-        ]);
-
-        $wasExisting = $classification->exists;
-        $oldAlignment = $wasExisting ? $classification->resolved_alignment : null;
-        $oldConfidence = $wasExisting ? $classification->confidence_band : null;
-
-        $classification->fill([
-            'resolved_alignment' => $resolution['resolved_alignment'],
-            'resolved_side_key' => $resolution['resolved_side_key'],
-            'resolved_role' => $resolution['resolved_role'],
-            'confidence_band' => $resolution['confidence_band'],
-            'reason_summary' => $resolution['reason_summary'],
-            'evidence_snapshot' => $resolution['evidence_snapshot'],
-            'needs_review' => $resolution['needs_review'],
-            'is_dirty' => false,
-            'computed_at' => $now,
-        ]);
-        $classification->save();
-
-        $changed = ! $wasExisting
-            || $oldAlignment !== $classification->resolved_alignment
-            || $oldConfidence !== $classification->confidence_band;
-
-        if ($changed) {
-            ViewerEntityClassificationHistory::query()->create([
-                'viewer_context_id' => $viewerContext->id,
-                'target_entity_type' => $targetEntityType,
-                'target_entity_id' => $targetEntityId,
-                'old_alignment' => $oldAlignment,
-                'new_alignment' => $classification->resolved_alignment,
-                'old_confidence_band' => $oldConfidence,
-                'new_confidence_band' => $classification->confidence_band,
-                'change_reason' => $classification->reason_summary,
-                'changed_at' => $now,
-            ]);
-        }
-
-        return $classification->refresh();
+        return $this->persistResolution(
+            $viewerContext,
+            $targetEntityType,
+            $targetEntityId,
+            $resolution,
+            $now,
+        );
     }
 
     /**
@@ -94,19 +67,85 @@ final class ViewerEntityClassificationResolverService
      */
     public function resolveManyForViewerContext(ViewerContext $viewerContext, array $targets): array
     {
+        $now = Carbon::now();
         $results = [];
 
         foreach ($targets as $target) {
-            $results[] = $this->resolveForTarget(
+            $resolution = $this->resolveDeterministically(
                 $viewerContext,
                 $target['target_entity_type'],
                 $target['target_entity_id'],
+                $now,
+            );
+
+            $results[] = $this->persistResolution(
+                $viewerContext,
+                $target['target_entity_type'],
+                $target['target_entity_id'],
+                $resolution,
+                $now,
             );
         }
 
-        $viewerContext->forceFill(['last_recomputed_at' => Carbon::now()])->save();
+        $viewerContext->forceFill(['last_recomputed_at' => $now])->save();
 
         return $results;
+    }
+
+    /**
+     * @param  array<string, mixed>  $resolution
+     */
+    private function persistResolution(
+        ViewerContext $viewerContext,
+        string $targetEntityType,
+        int $targetEntityId,
+        array $resolution,
+        Carbon $now,
+    ): ViewerEntityClassification {
+        return DB::transaction(function () use ($viewerContext, $targetEntityType, $targetEntityId, $resolution, $now): ViewerEntityClassification {
+            $classification = ViewerEntityClassification::query()->firstOrNew([
+                'viewer_context_id' => $viewerContext->id,
+                'target_entity_type' => $targetEntityType,
+                'target_entity_id' => $targetEntityId,
+            ]);
+
+            $wasExisting = $classification->exists;
+            $oldAlignment = $wasExisting ? $classification->resolved_alignment : null;
+            $oldConfidence = $wasExisting ? $classification->confidence_band : null;
+
+            $classification->fill([
+                'resolved_alignment' => $resolution['resolved_alignment'],
+                'resolved_side_key' => $resolution['resolved_side_key'],
+                'resolved_role' => $resolution['resolved_role'],
+                'confidence_band' => $resolution['confidence_band'],
+                'reason_summary' => $resolution['reason_summary'],
+                'evidence_snapshot' => $resolution['evidence_snapshot'],
+                'needs_review' => $resolution['needs_review'],
+                'is_dirty' => false,
+                'computed_at' => $now,
+            ]);
+            $classification->save();
+
+            $changed = ! $wasExisting
+                || $oldAlignment !== $classification->resolved_alignment
+                || $oldConfidence !== $classification->confidence_band;
+
+            if ($changed) {
+                ViewerEntityClassificationHistory::query()->create([
+                    'viewer_context_id' => $viewerContext->id,
+                    'target_entity_type' => $targetEntityType,
+                    'target_entity_id' => $targetEntityId,
+                    'old_alignment' => $oldAlignment,
+                    'new_alignment' => $classification->resolved_alignment,
+                    'old_confidence_band' => $oldConfidence,
+                    'new_confidence_band' => $classification->confidence_band,
+                    'change_reason' => $classification->reason_summary,
+                    'changed_at' => $now,
+                ]);
+            }
+
+            return $classification->refresh();
+        });
     }
 
     /**
@@ -190,39 +229,61 @@ final class ViewerEntityClassificationResolverService
         if ($targetEntityType === ViewerEntityClassification::ENTITY_CORPORATION) {
             $profile = CorporationAffiliationProfile::query()->find($targetEntityId);
             if ($profile !== null && $profile->current_alliance_id !== null) {
-                $inherited = $this->resolveFromEntityLabels(
-                    $viewerContext->bloc_id,
-                    ViewerEntityClassification::ENTITY_ALLIANCE,
-                    $profile->current_alliance_id,
-                    5,
-                    'Inherited from corporation current alliance label.',
-                );
-                if ($inherited !== null) {
-                    $inherited['confidence_band'] = ViewerEntityClassification::CONFIDENCE_MEDIUM;
-                    $inherited['evidence_snapshot']['via_corporation_affiliation_profile_id'] = $profile->corporation_id;
+                $freshnessBand = $this->freshnessBandForProfile($profile, $now);
+                if ($freshnessBand !== null) {
+                    $inherited = $this->resolveFromEntityLabels(
+                        $viewerContext->bloc_id,
+                        ViewerEntityClassification::ENTITY_ALLIANCE,
+                        $profile->current_alliance_id,
+                        5,
+                        'Inherited from corporation current alliance label.',
+                    );
+                    if ($inherited !== null) {
+                        $inherited['confidence_band'] = $this->minimumConfidenceBand([
+                            ViewerEntityClassification::CONFIDENCE_MEDIUM,
+                            $freshnessBand,
+                        ]);
+                        $inherited['needs_review'] = $inherited['needs_review']
+                            || $freshnessBand === ViewerEntityClassification::CONFIDENCE_LOW;
+                        if ($freshnessBand !== ViewerEntityClassification::CONFIDENCE_HIGH) {
+                            $inherited['reason_summary'] .= ' Affiliation profile is stale; confidence downgraded.';
+                        }
+                        $inherited['evidence_snapshot']['profile_observed_at'] = $profile->observed_at?->toIso8601String();
+                        $inherited['evidence_snapshot']['profile_freshness_band'] = $freshnessBand;
+                        $inherited['evidence_snapshot']['via_corporation_affiliation_profile_id'] = $profile->corporation_id;
 
-                    return $inherited;
+                        return $inherited;
+                    }
                 }
             }
 
             // 6) history-derived inference via previous alliance.
-            if ($profile !== null && $profile->previous_alliance_id !== null) {
-                $history = $this->resolveFromEntityLabels(
-                    $viewerContext->bloc_id,
-                    ViewerEntityClassification::ENTITY_ALLIANCE,
-                    $profile->previous_alliance_id,
-                    6,
-                    'Inferred from corporation previous-alliance history.',
-                );
-                if ($history !== null) {
-                    $history['confidence_band'] = ViewerEntityClassification::CONFIDENCE_LOW;
-                    $history['needs_review'] = true;
-                    $history['evidence_snapshot']['history_confidence_band'] = $profile->history_confidence_band;
-                    $history['evidence_snapshot']['recently_changed_affiliation'] = $profile->recently_changed_affiliation;
-                    $history['evidence_snapshot']['last_alliance_change_at'] = $profile->last_alliance_change_at?->toIso8601String();
-                    $history['evidence_snapshot']['via_corporation_affiliation_profile_id'] = $profile->corporation_id;
+            if (isset($profile) && $profile !== null && $profile->previous_alliance_id !== null) {
+                $freshnessBand = $this->freshnessBandForProfile($profile, $now);
+                if ($freshnessBand !== null) {
+                    $history = $this->resolveFromEntityLabels(
+                        $viewerContext->bloc_id,
+                        ViewerEntityClassification::ENTITY_ALLIANCE,
+                        $profile->previous_alliance_id,
+                        6,
+                        'Inferred from corporation previous-alliance history.',
+                    );
+                    if ($history !== null) {
+                        $history['confidence_band'] = $this->minimumConfidenceBand([
+                            ViewerEntityClassification::CONFIDENCE_LOW,
+                            $profile->history_confidence_band ?? ViewerEntityClassification::CONFIDENCE_LOW,
+                            $freshnessBand,
+                        ]);
+                        $history['needs_review'] = true;
+                        $history['evidence_snapshot']['history_confidence_band'] = $profile->history_confidence_band;
+                        $history['evidence_snapshot']['recently_changed_affiliation'] = $profile->recently_changed_affiliation;
+                        $history['evidence_snapshot']['last_alliance_change_at'] = $profile->last_alliance_change_at?->toIso8601String();
+                        $history['evidence_snapshot']['profile_observed_at'] = $profile->observed_at?->toIso8601String();
+                        $history['evidence_snapshot']['profile_freshness_band'] = $freshnessBand;
+                        $history['evidence_snapshot']['via_corporation_affiliation_profile_id'] = $profile->corporation_id;
 
-                    return $history;
+                        return $history;
+                    }
                 }
             }
         }
@@ -283,6 +344,7 @@ final class ViewerEntityClassificationResolverService
             [CharacterStanding::OWNER_ALLIANCE, $viewerContext->viewer_alliance_id],
         ];
 
+        $allStandings = [];
         foreach ($ownerCandidates as [$ownerType, $ownerId]) {
             if ($ownerId === null) {
                 continue;
@@ -295,40 +357,63 @@ final class ViewerEntityClassificationResolverService
                 ->where('contact_id', $targetEntityId)
                 ->first();
 
-            if ($standing === null) {
-                continue;
+            if ($standing !== null) {
+                $allStandings[] = [$ownerType, $ownerId, $standing];
             }
-
-            $alignment = match ($standing->classification()) {
-                'friendly' => ViewerEntityClassification::ALIGNMENT_FRIENDLY,
-                'enemy' => ViewerEntityClassification::ALIGNMENT_HOSTILE,
-                default => ViewerEntityClassification::ALIGNMENT_NEUTRAL,
-            };
-
-            return [
-                'resolved_alignment' => $alignment,
-                'resolved_side_key' => null,
-                'resolved_role' => null,
-                'confidence_band' => ViewerEntityClassification::CONFIDENCE_HIGH,
-                'reason_summary' => sprintf(
-                    'Viewer standing evidence (%s #%d): %s.',
-                    $ownerType,
-                    $ownerId,
-                    $standing->standing,
-                ),
-                'evidence_snapshot' => [
-                    'step' => 2,
-                    'source' => 'direct_standing',
-                    'standing_id' => $standing->id,
-                    'owner_type' => $ownerType,
-                    'owner_id' => $ownerId,
-                    'standing' => $standing->standing,
-                ],
-                'needs_review' => false,
-            ];
         }
 
-        return null;
+        if ($allStandings === []) {
+            return null;
+        }
+
+        // Most specific wins (character > corp > alliance — iteration
+        // order above guarantees this). Record the winner and check
+        // for conflicts with less specific levels.
+        [$winnerOwnerType, $winnerOwnerId, $winnerStanding] = $allStandings[0];
+        $winnerAlignment = $this->alignmentFromStanding($winnerStanding);
+
+        $conflicts = [];
+        for ($i = 1, $count = count($allStandings); $i < $count; $i++) {
+            [$otherOwnerType, $otherOwnerId, $otherStanding] = $allStandings[$i];
+            $otherAlignment = $this->alignmentFromStanding($otherStanding);
+            if ($otherAlignment !== $winnerAlignment) {
+                $conflicts[] = [
+                    'owner_type' => $otherOwnerType,
+                    'owner_id' => $otherOwnerId,
+                    'standing' => $otherStanding->standing,
+                    'alignment' => $otherAlignment,
+                ];
+            }
+        }
+
+        $needsReview = $conflicts !== [];
+        $reason = sprintf(
+            'Viewer standing evidence (%s #%d): %s.',
+            $winnerOwnerType,
+            $winnerOwnerId,
+            $winnerStanding->standing,
+        );
+        if ($needsReview) {
+            $reason .= ' Conflicting standings exist at other owner levels; precedence applied.';
+        }
+
+        return [
+            'resolved_alignment' => $winnerAlignment,
+            'resolved_side_key' => null,
+            'resolved_role' => null,
+            'confidence_band' => ViewerEntityClassification::CONFIDENCE_HIGH,
+            'reason_summary' => $reason,
+            'evidence_snapshot' => [
+                'step' => 2,
+                'source' => 'direct_standing',
+                'standing_id' => $winnerStanding->id,
+                'owner_type' => $winnerOwnerType,
+                'owner_id' => $winnerOwnerId,
+                'standing' => $winnerStanding->standing,
+                'conflicting_owner_level_evidence' => $conflicts,
+            ],
+            'needs_review' => $needsReview,
+        ];
     }
 
     /**
@@ -412,6 +497,22 @@ final class ViewerEntityClassificationResolverService
         ];
     }
 
+    private function alignmentFromStanding(CharacterStanding $standing): string
+    {
+        $value = (float) $standing->standing;
+        $friendlyAt = (float) config('classification.standings.friendly_at', 5.0);
+        $hostileAt = (float) config('classification.standings.hostile_at', -5.0);
+
+        if ($value >= $friendlyAt) {
+            return ViewerEntityClassification::ALIGNMENT_FRIENDLY;
+        }
+        if ($value <= $hostileAt) {
+            return ViewerEntityClassification::ALIGNMENT_HOSTILE;
+        }
+
+        return ViewerEntityClassification::ALIGNMENT_NEUTRAL;
+    }
+
     private function alignmentFromBlocMatch(?int $viewerBlocId, int $targetBlocId, string $targetBlocCode): string
     {
         if ($targetBlocCode === CoalitionBloc::CODE_UNKNOWN) {
@@ -431,5 +532,51 @@ final class ViewerEntityClassificationResolverService
         }
 
         return ViewerEntityClassification::ALIGNMENT_HOSTILE;
+    }
+
+    /**
+     * Returns the confidence band implied by how recently the profile
+     * was observed. Returns null when the profile is beyond the stale
+     * window — the caller should skip the rung entirely.
+     */
+    private function freshnessBandForProfile(CorporationAffiliationProfile $profile, Carbon $now): ?string
+    {
+        $observedAt = $profile->observed_at;
+        if ($observedAt === null) {
+            return ViewerEntityClassification::CONFIDENCE_LOW;
+        }
+
+        $freshDays = (int) config('classification.affiliation_freshness.fresh_days', 7);
+        $staleDays = (int) config('classification.affiliation_freshness.stale_days', 30);
+        $ageDays = (int) $observedAt->diffInDays($now);
+
+        if ($ageDays <= $freshDays) {
+            return ViewerEntityClassification::CONFIDENCE_HIGH;
+        }
+        if ($ageDays <= $staleDays) {
+            return ViewerEntityClassification::CONFIDENCE_MEDIUM;
+        }
+
+        // Beyond stale window — rung should be skipped.
+        return null;
+    }
+
+    /** @param list<string> $bands */
+    private function minimumConfidenceBand(array $bands): string
+    {
+        $rank = [
+            ViewerEntityClassification::CONFIDENCE_LOW => 1,
+            ViewerEntityClassification::CONFIDENCE_MEDIUM => 2,
+            ViewerEntityClassification::CONFIDENCE_HIGH => 3,
+        ];
+
+        $winner = ViewerEntityClassification::CONFIDENCE_HIGH;
+        foreach ($bands as $band) {
+            if (($rank[$band] ?? 0) < $rank[$winner]) {
+                $winner = $band;
+            }
+        }
+
+        return $winner;
     }
 }
