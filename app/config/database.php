@@ -81,7 +81,20 @@ return [
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 (PHP_VERSION_ID >= 80500 ? Mysql::ATTR_SSL_CA : PDO::MYSQL_ATTR_SSL_CA) => env('MYSQL_ATTR_SSL_CA'),
+                // Detect stale connections before using them. When
+                // MariaDB restarts (container rebuild, OOM, upgrade),
+                // long-lived workers (Horizon, scheduler) keep a dead
+                // PDO handle. This timeout triggers a server-side ping
+                // before reuse so PDO reconnects transparently instead
+                // of throwing "server has gone away".
+                PDO::ATTR_TIMEOUT => 5,
             ]) : [],
+
+            // Laravel 11+ sticky option: after a write, subsequent
+            // reads in the same request use the write connection.
+            // Harmless on single-server setups; load-bearing if
+            // read replicas are ever added.
+            'sticky' => true,
         ],
 
         'pgsql' => [

@@ -14,6 +14,10 @@ use App\Services\Eve\Esi\EsiClient;
 use App\Services\Eve\Esi\EsiClientInterface;
 use App\Services\Eve\Esi\EsiRateLimiter;
 use App\Services\Eve\Sso\EveSsoClient;
+use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
 
@@ -81,6 +85,32 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // ---- Self-healing DB connections for long-lived workers --------
+        //
+        // Horizon workers hold persistent PDO connections across jobs.
+        // When a container restarts (MariaDB rebuild, OOM, upgrade),
+        // the worker's cached connection goes stale and the next job
+        // fails with "server has gone away" or "connection refused".
+        //
+        // This listener fires before every queued job and pings the DB.
+        // If the connection is dead, Laravel's reconnect logic kicks in
+        // transparently. The cost is one SELECT 1 per job — negligible
+        // compared to the job's own queries.
+        Event::listen(JobProcessing::class, function () {
+            try {
+                DB::connection()->getPdo();
+            } catch (\Throwable) {
+                try {
+                    DB::reconnect();
+                    Log::info('queue-worker: reconnected to MariaDB after stale connection');
+                } catch (\Throwable $e) {
+                    Log::warning('queue-worker: failed to reconnect to MariaDB', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        });
+
         // Explicit alias for the /account/settings Livewire component.
         //
         // The class lives at `App\Livewire\AccountSettings` (single
