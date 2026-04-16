@@ -15,25 +15,24 @@
 # image bump, so it's where operator-visible tuning belongs.
 
 [mysqld]
-# ===== Memory budget ≈ 16 GiB =====
-# InnoDB's buffer pool is the dominant consumer. Sized at ~75 % of the
-# 16 GiB budget; the remaining ~4 GiB covers per-connection buffers,
-# temp tables, and OS / library overhead under peak concurrency.
+# ===== Memory budget — 125GB host, ~50GB to services =====
+# Buffer pool sized for 7.7M+ killmails with items + attackers,
+# plus market_history (16M rows), ref_* tables, and growth.
 #
 # Verify effective values on a running server with:
 #   docker compose exec mariadb mariadb -uroot -p \
 #     -e "SHOW VARIABLES LIKE 'innodb_buffer%'; \
 #         SHOW VARIABLES LIKE 'innodb_log%'; \
 #         SHOW VARIABLES LIKE 'max_connections';"
-innodb_buffer_pool_size        = 12G
-innodb_log_buffer_size         = 64M
-innodb_log_file_size           = 1G
+innodb_buffer_pool_size        = 32G
+innodb_buffer_pool_instances   = 8
+innodb_log_buffer_size         = 256M
+innodb_log_file_size           = 2G
 
-# In-memory temp tables before MariaDB spills them to disk — bumped
-# from the 16 M default so analytic joins over `ref_*` tables (SDE
-# imports) stay RAM-resident on a first pass.
-tmp_table_size                 = 64M
-max_heap_table_size            = 64M
+# In-memory temp tables — bumped for analytic joins over killmail +
+# ref_* tables.
+tmp_table_size                 = 256M
+max_heap_table_size            = 256M
 
 # ===== InnoDB durability + I/O =====
 # ACID on the canonical store: flush log on every commit. Per ADR-0003
