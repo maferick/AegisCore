@@ -116,6 +116,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tick, indexed on `enabled`.
 
 ### Fixed
+- **Killmail backfill no longer cascades `(0, '')` warnings when the
+  MariaDB connection dies mid-day.** Root cause: the backfill held
+  ONE transaction per day and looped through every killmail in the
+  archive inside it. When the socket died (MariaDB restart, idle
+  timeout, transient network blip), every subsequent INSERT on that
+  dead connection returned `OperationalError(0, '')`, the
+  `except Exception` in the per-killmail loop logged "skipping
+  killmail", and the cascade flooded the log until the day's loop
+  ended. The live stream (`stream.py`) already had the right shape
+  — per-killmail commit + reconnect on `(0, '')` / 2006 / 2013 /
+  2014 / 2055; backfill now does the same. Changes:
+  - **`killmail_ingest/db.py`**: extracted `is_connection_lost()` +
+    added `is_retryable_server_abort()` (errnos 1213 deadlock / 1205
+    lock-wait-timeout) as shared helpers. `open_connection()` is the
+    single source of truth for the pymysql param set so stream +
+    backfill can't drift on timeouts / cursor class.
+  - **`killmail_ingest/backfill.py`**: rewrote `_process_day` to
+    commit per killmail rather than per day. New `_ConnHolder`
+    pattern lets the runner transparently reassign the live
+    connection after a reconnect. On deadlock / lock-wait: rollback
+    and retry up to 3× with jittered backoff (`_RETRY_BASE_DELAY` +
+    random jitter up to `_RETRY_JITTER` seconds). On connection
+    loss: close + reopen + skip the current killmail (idempotent
+    re-ingest on the next pass via the existing `INSERT ... ON
+    DUPLICATE KEY UPDATE` on `killmails` + DELETE/INSERT on
+    `killmail_attackers` / `killmail_items`). On parse or schema
+    errors: log + skip, as before.
+  - **Consistent lock order with the live stream.** Backfill now
+    sorts each day's killmails by `killmail_id ASC` before
+    iterating. R2Z2 delivers in sequence order, which maps roughly
+    to killmail_id order — aligning the two processes' lock
+    acquisition order keeps deadlock probability low even when both
+    are writing the same recent killmails during the recheck window.
+  - **Partial days deliberately don't persist state.** If a day has
+    any failed killmails, `everef` state for that day is NOT
+    written, so the next pass re-downloads + re-ingests. Re-ingest
+    is a no-op for rows already present (idempotent); the only
+    cost is bandwidth + time.
+  - **Stream coroutine side-effect**: `stream.py` had its own
+    `_is_connection_lost` + `_connect` helpers; those are now
+    imports from `db.py`. No behavioural change, just DRY.
+
+  Verified post-rebuild: `killmail_backfill_scheduler` processed
+  day 2025-02-18 cleanly — 13,653 killmails, per-row commit, no
+  cascade, no reconnect triggered (connection stayed healthy for
+  the whole day). 422 days queued in the current pass from
+  accumulated partial state; each one now fully transactional at
+  the killmail level.
+
 - **Standings sync 404s on both corp and alliance contacts.** The
   original corp endpoint path (`/latest/corporations/{id}/contacts/`)
   was wrong — CCP never exposed that under the legacy versioned ESI.

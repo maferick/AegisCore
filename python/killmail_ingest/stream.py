@@ -17,10 +17,8 @@ from __future__ import annotations
 import logging
 import time
 
-import pymysql
-
 from killmail_ingest.config import Config
-from killmail_ingest.db import connect
+from killmail_ingest.db import is_connection_lost, open_connection
 from killmail_ingest.log import get
 from killmail_ingest.outbox import emit_killmail_ingested
 from killmail_ingest.parse import parse_esi_killmail
@@ -36,25 +34,12 @@ from killmail_ingest.state import get_state, set_state
 
 log = get(__name__)
 
-# DB errors that indicate a lost connection — reconnect on these.
-_LOST_CONNECTION_CODES = {0, 2006, 2013, 2014, 2055}
-
-
-def _is_connection_lost(exc: Exception) -> bool:
-    """Check if a pymysql error indicates a dead connection."""
-    if isinstance(exc, pymysql.err.OperationalError) and exc.args:
-        return exc.args[0] in _LOST_CONNECTION_CODES
-    # Generic "(0, '')" also means dead connection.
-    if hasattr(exc, 'args') and exc.args and exc.args[0] in _LOST_CONNECTION_CODES:
-        return True
-    return "Lost connection" in str(exc) or "(0, '')" in str(exc)
-
 
 def run_stream(cfg: Config) -> int:
     """Run the R2Z2 live stream. Blocks indefinitely until interrupted."""
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    conn = _connect(cfg)
+    conn = open_connection(cfg)
     cursor = _init_cursor(cfg, conn)
     if cursor is None:
         return 1
@@ -118,7 +103,7 @@ def run_stream(cfg: Config) -> int:
             except Exception as exc:
                 errors += 1
 
-                if _is_connection_lost(exc):
+                if is_connection_lost(exc):
                     consecutive_db_errors += 1
                     log.warning(
                         "DB connection lost, reconnecting",
@@ -135,7 +120,7 @@ def run_stream(cfg: Config) -> int:
                     time.sleep(backoff)
 
                     try:
-                        conn = _connect(cfg)
+                        conn = open_connection(cfg)
                         log.info("reconnected to MariaDB")
                     except Exception as reconn_exc:
                         log.error("reconnect failed", error=str(reconn_exc))
@@ -170,24 +155,6 @@ def run_stream(cfg: Config) -> int:
         pass
 
     return 0
-
-
-def _connect(cfg: Config) -> pymysql.connections.Connection:
-    """Open a fresh MariaDB connection."""
-    conn = pymysql.connect(
-        host=cfg.db_host,
-        port=cfg.db_port,
-        user=cfg.db_username,
-        password=cfg.db_password,
-        database=cfg.db_database,
-        charset="utf8mb4",
-        autocommit=False,
-        cursorclass=pymysql.cursors.DictCursor,
-        read_timeout=600,
-        write_timeout=600,
-    )
-    log.info("connected to mariadb", host=cfg.db_host, database=cfg.db_database)
-    return conn
 
 
 def _init_cursor(cfg: Config, conn) -> int | None:
