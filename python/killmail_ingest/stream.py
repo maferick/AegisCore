@@ -11,6 +11,7 @@ req/s/IP.
 
 from __future__ import annotations
 
+import logging
 import time
 
 from killmail_ingest.config import Config
@@ -33,6 +34,10 @@ log = get(__name__)
 
 def run_stream(cfg: Config) -> int:
     """Run the R2Z2 live stream. Blocks indefinitely until interrupted."""
+    # Quiet httpx's per-request INFO logs — they're mostly 404s when
+    # caught up and just noise. Warnings and errors still show.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     with connect(cfg) as conn:
         # Resume from last known sequence, or start from current head.
         cursor_str = get_state(conn, "r2z2", "last_sequence")
