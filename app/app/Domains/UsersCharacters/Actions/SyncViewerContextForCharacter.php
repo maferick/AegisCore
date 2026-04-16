@@ -10,6 +10,8 @@ use App\Domains\UsersCharacters\Models\CoalitionRelationshipType;
 use App\Domains\UsersCharacters\Models\ViewerContext;
 use App\Domains\UsersCharacters\Services\ViewerBlocInferenceInput;
 use App\Domains\UsersCharacters\Services\ViewerBlocInferenceService;
+use App\Services\Eve\Esi\EsiClientInterface;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Creates (first time) or refreshes a ViewerContext row for a single
@@ -43,6 +45,7 @@ final class SyncViewerContextForCharacter
 {
     public function __construct(
         private readonly ViewerBlocInferenceService $inference,
+        private readonly EsiClientInterface $esi,
     ) {}
 
     public function handle(Character $character, bool $forceReinfer = false): ViewerContext
@@ -72,6 +75,16 @@ final class SyncViewerContextForCharacter
         // unconfirmed rows. Never on confirmed rows; never on every
         // page render.
         if ($isNew || ($forceReinfer && $context->bloc_unresolved === true)) {
+            // Cold-start guard: SSO login rows initially only have
+            // character_id + name. If affiliation mirroring hasn't run yet,
+            // fetch corporation/alliance once so inference has labels to
+            // match against. Non-fatal: unresolved is still a valid state.
+            if ($character->corporation_id === null) {
+                $this->fetchAndPersistAffiliation($character);
+                $context->viewer_corporation_id = $character->corporation_id;
+                $context->viewer_alliance_id = $character->alliance_id;
+            }
+
             $result = $this->inference->infer($this->buildInput($character));
             $context->bloc_id = $result->blocId;
             $context->bloc_confidence_band = $result->confidenceBand;
@@ -87,6 +100,42 @@ final class SyncViewerContextForCharacter
         }
 
         return $context->refresh();
+    }
+
+    /**
+     * Fetch character affiliation from public ESI and persist it to the
+     * local character row. Best-effort; failures are logged and caller
+     * continues with unresolved inference.
+     */
+    private function fetchAndPersistAffiliation(Character $character): void
+    {
+        try {
+            $base = (string) config('eve.esi.new_base_url', 'https://esi.evetech.net');
+            $url = rtrim($base, '/').'/characters/'.((int) $character->character_id).'/';
+            $compatDate = (string) config('eve.esi.compat_date', '2025-12-16');
+
+            $response = $this->esi->get($url, headers: ['X-Compatibility-Date' => $compatDate]);
+            $body = $response->body ?? [];
+            $corpId = isset($body['corporation_id']) ? (int) $body['corporation_id'] : null;
+            $allianceId = isset($body['alliance_id']) ? (int) $body['alliance_id'] : null;
+
+            if ($corpId !== null) {
+                $character->corporation_id = $corpId;
+                $character->alliance_id = $allianceId;
+                $character->save();
+
+                Log::info('viewer-bloc: character affiliation fetched from ESI', [
+                    'character_id' => $character->character_id,
+                    'corporation_id' => $corpId,
+                    'alliance_id' => $allianceId,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('viewer-bloc: ESI affiliation fetch failed (inference will be unresolved)', [
+                'character_id' => $character->character_id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -10,6 +10,8 @@ use App\Domains\UsersCharacters\Models\EveMarketToken;
 use App\Domains\UsersCharacters\Models\EveServiceToken;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\Eve\Esi\EsiClientInterface;
+use App\Services\Eve\Esi\EsiException;
 use App\Services\Eve\Sso\EveSsoClient;
 use App\Services\Eve\Sso\EveSsoException;
 use App\Services\Eve\Sso\EveSsoToken;
@@ -590,10 +592,20 @@ class EveSsoController extends Controller
      */
     private function upsertCharacterAndUser(EveSsoToken $token): User
     {
-        return DB::transaction(function () use ($token) {
+        $affiliation = $this->fetchCharacterAffiliation($token->characterId);
+
+        return DB::transaction(function () use ($token, $affiliation) {
             /** @var Character $character */
             $character = Character::firstOrNew(['character_id' => $token->characterId]);
             $character->name = $token->characterName;
+
+            // Populate corp/alliance when available so the first
+            // account-settings render has enough context for bloc
+            // inference without waiting for a later sync pass.
+            if ($affiliation['corporation_id'] !== null) {
+                $character->corporation_id = $affiliation['corporation_id'];
+                $character->alliance_id = $affiliation['alliance_id'];
+            }
 
             if ($character->user_id === null) {
                 $user = User::create([
@@ -624,6 +636,49 @@ class EveSsoController extends Controller
 
             return $user;
         });
+    }
+
+    /**
+     * Best-effort affiliation lookup from public ESI for login flow.
+     * Failure is non-fatal; login still succeeds with null affiliation.
+     *
+     * @return array{corporation_id: ?int, alliance_id: ?int}
+     */
+    private function fetchCharacterAffiliation(int $characterId): array
+    {
+        try {
+            /** @var EsiClientInterface $esi */
+            $esi = app(EsiClientInterface::class);
+            $base = (string) config('eve.esi.new_base_url', 'https://esi.evetech.net');
+            $url = rtrim($base, '/').'/characters/'.$characterId.'/';
+            $compatDate = (string) config('eve.esi.compat_date', '2025-12-16');
+
+            $response = $esi->get($url, headers: ['X-Compatibility-Date' => $compatDate]);
+            $body = $response->body ?? [];
+            $corpId = isset($body['corporation_id']) ? (int) $body['corporation_id'] : null;
+            $allianceId = isset($body['alliance_id']) ? (int) $body['alliance_id'] : null;
+
+            return [
+                'corporation_id' => $corpId,
+                'alliance_id' => $allianceId,
+            ];
+        } catch (EsiException $e) {
+            Log::info('EVE SSO login affiliation lookup failed; continuing without affiliation', [
+                'character_id' => $characterId,
+                'status' => $e->status,
+                'error' => $e->getMessage(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('EVE SSO login affiliation lookup errored; continuing without affiliation', [
+                'character_id' => $characterId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return [
+            'corporation_id' => null,
+            'alliance_id' => null,
+        ];
     }
 
     /**
