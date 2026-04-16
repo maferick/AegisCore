@@ -65,24 +65,15 @@ KILLMAIL_MAPPING = {
 
 
 def create_client(cfg: Config) -> OpenSearch:
-    import ssl
-    import urllib3
-
-    # Suppress InsecureRequestWarning for self-signed certs.
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-    # Build a permissive SSL context for self-signed certs.
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
+    # Security plugin is disabled — OpenSearch runs plain HTTP.
+    use_ssl = cfg.opensearch_url.startswith("https")
 
     return OpenSearch(
         hosts=[cfg.opensearch_url],
         http_auth=(cfg.opensearch_username, cfg.opensearch_password),
-        verify_certs=False,
-        ssl_assert_hostname=False,
+        use_ssl=use_ssl,
+        verify_certs=cfg.opensearch_verify_certs if use_ssl else False,
         ssl_show_warn=False,
-        ssl_context=ssl_context,
     )
 
 

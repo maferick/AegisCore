@@ -42,7 +42,7 @@ class Config:
             db_database=env("DB_DATABASE", required=True),
             db_username=env("DB_USERNAME", required=True),
             db_password=env("DB_PASSWORD", required=True),
-            opensearch_url=env("OPENSEARCH_URL", "https://opensearch:9200"),
+            opensearch_url=env("OPENSEARCH_URL", "http://opensearch:9200"),
             opensearch_username=env("OPENSEARCH_USERNAME", "admin"),
             opensearch_password=env("OPENSEARCH_PASSWORD", required=True),
             opensearch_index=env("OPENSEARCH_KILLMAIL_INDEX", "killmails"),

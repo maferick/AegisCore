@@ -982,7 +982,7 @@ services:
       DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
       DB_USERNAME: "${MARIADB_USER:-aegiscore}"
       DB_PASSWORD: "${MARIADB_PASSWORD}"
-      OPENSEARCH_URL: "https://opensearch:9200"
+      OPENSEARCH_URL: "http://opensearch:9200"
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
       OPENSEARCH_KILLMAIL_INDEX: killmails
@@ -1011,7 +1011,7 @@ services:
       DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
       DB_USERNAME: "${MARIADB_USER:-aegiscore}"
       DB_PASSWORD: "${MARIADB_PASSWORD}"
-      OPENSEARCH_URL: "https://opensearch:9200"
+      OPENSEARCH_URL: "http://opensearch:9200"
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
       OPENSEARCH_KILLMAIL_INDEX: killmails
