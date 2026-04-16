@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domains\KillmailsBattleTheaters\Actions;
 
+use App\Domains\KillmailsBattleTheaters\Data\EnrichmentBatchContext;
 use App\Domains\KillmailsBattleTheaters\Data\KillmailEnrichmentResult;
 use App\Domains\KillmailsBattleTheaters\Models\Killmail;
 use App\Domains\KillmailsBattleTheaters\Models\KillmailItem;
@@ -42,19 +43,28 @@ final class EnrichKillmail
      *                              backlog processing to avoid hammering
      *                              ESI — names can be resolved in a
      *                              separate pass later.
+     * @param  EnrichmentBatchContext|null  $ctx  Optional preloaded
+     *     lookup maps for the enclosing batch. When supplied,
+     *     classifyAssets / resolveLocation / valueItems all use the
+     *     map instead of issuing their own SELECT — cutting per-batch
+     *     query count from ~5× chunk_size to ~3 total. Per-killmail
+     *     callers pass null and get the original non-batched behaviour.
      */
-    public function handle(Killmail $killmail, bool $resolveNames = true): KillmailEnrichmentResult
-    {
+    public function handle(
+        Killmail $killmail,
+        bool $resolveNames = true,
+        ?EnrichmentBatchContext $ctx = null,
+    ): KillmailEnrichmentResult {
         $wasAlreadyEnriched = $killmail->isEnriched();
 
         $killmail->loadMissing(['items', 'attackers']);
 
         $itemsValued = 0;
 
-        DB::transaction(function () use ($killmail, &$itemsValued): void {
-            $this->resolveLocation($killmail);
-            $this->classifyAssets($killmail);
-            $itemsValued = $this->valueItems($killmail);
+        DB::transaction(function () use ($killmail, $ctx, &$itemsValued): void {
+            $this->resolveLocation($killmail, $ctx);
+            $this->classifyAssets($killmail, $ctx);
+            $itemsValued = $this->valueItems($killmail, $ctx);
             $this->computeAggregates($killmail);
 
             $killmail->enriched_at = now();
@@ -80,12 +90,31 @@ final class EnrichKillmail
         );
     }
 
-    private function resolveLocation(Killmail $killmail): void
+    private function resolveLocation(Killmail $killmail, ?EnrichmentBatchContext $ctx): void
     {
         if ($killmail->constellation_id && $killmail->region_id) {
             return;
         }
 
+        // Batch path: the chunk-level preload populated $ctx with
+        // every ref_solar_systems row referenced by this batch.
+        if ($ctx !== null) {
+            $row = $ctx->solarSystem((int) $killmail->solar_system_id);
+            if ($row === null) {
+                Log::warning('enrich-killmail: solar system not in ref_solar_systems', [
+                    'killmail_id' => $killmail->killmail_id,
+                    'solar_system_id' => $killmail->solar_system_id,
+                ]);
+
+                return;
+            }
+            $killmail->constellation_id = $row->constellation_id;
+            $killmail->region_id = $row->region_id;
+
+            return;
+        }
+
+        // Non-batched fallback.
         $solarSystem = SolarSystem::find($killmail->solar_system_id);
 
         if ($solarSystem === null) {
@@ -101,7 +130,7 @@ final class EnrichKillmail
         $killmail->region_id = $solarSystem->region_id;
     }
 
-    private function classifyAssets(Killmail $killmail): void
+    private function classifyAssets(Killmail $killmail, ?EnrichmentBatchContext $ctx): void
     {
         $items = $killmail->items;
 
@@ -113,21 +142,27 @@ final class EnrichKillmail
             return;
         }
 
-        $typeMetadata = DB::table('ref_item_types as t')
-            ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
-            ->leftJoin('ref_item_categories as c', 'c.id', '=', 'g.category_id')
-            ->whereIn('t.id', $typeIds)
-            ->get([
-                't.id as type_id',
-                't.name as type_name',
-                't.group_id',
-                'g.name as group_name',
-                'g.category_id',
-                'c.name as category_name',
-                't.meta_group_id',
-                't.meta_level',
-            ])
-            ->keyBy('type_id');
+        if ($ctx !== null) {
+            // Batched path — lookup against the preloaded map rather
+            // than issuing a fresh JOIN per killmail.
+            $typeMetadata = collect($ctx->typeMetadataFor($typeIds));
+        } else {
+            $typeMetadata = DB::table('ref_item_types as t')
+                ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
+                ->leftJoin('ref_item_categories as c', 'c.id', '=', 'g.category_id')
+                ->whereIn('t.id', $typeIds)
+                ->get([
+                    't.id as type_id',
+                    't.name as type_name',
+                    't.group_id',
+                    'g.name as group_name',
+                    'g.category_id',
+                    'c.name as category_name',
+                    't.meta_group_id',
+                    't.meta_level',
+                ])
+                ->keyBy('type_id');
+        }
 
         if ($typeMetadata->isEmpty()) {
             return;
@@ -158,7 +193,7 @@ final class EnrichKillmail
         }
     }
 
-    private function valueItems(Killmail $killmail): int
+    private function valueItems(Killmail $killmail, ?EnrichmentBatchContext $ctx): int
     {
         $items = $killmail->items;
 
@@ -170,7 +205,14 @@ final class EnrichKillmail
             return 0;
         }
 
-        $valuations = $this->valuationService->resolve($typeIds, $killmail->killed_at);
+        if ($ctx !== null) {
+            $valuations = $ctx->valuationsFor(
+                $killmail->killed_at->toDateString(),
+                $typeIds,
+            );
+        } else {
+            $valuations = $this->valuationService->resolve($typeIds, $killmail->killed_at);
+        }
 
         // Build per-item updates in memory, then batch-save.
         $valued = 0;

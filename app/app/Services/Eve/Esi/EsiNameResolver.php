@@ -31,8 +31,16 @@ use Illuminate\Support\Facades\Log;
  */
 class EsiNameResolver
 {
-    private const STALE_AFTER_SECONDS = 604_800;
-
+    /**
+     * Entity names in EVE are effectively immutable for killmail
+     * enrichment — characters, corps, alliances rename rarely enough
+     * that we treat a cached row as valid forever. The docblock above
+     * already promises "no hard TTL"; a prior 7-day stale threshold
+     * was silently re-hitting ESI weekly during backlog drains and
+     * became a major enrichment bottleneck. Keep cached_at for audit
+     * (a batch job can re-resolve specific IDs by passing
+     * forceRefresh=true), but do not invalidate on read.
+     */
     private const ESI_BATCH_LIMIT = 1000;
 
     public function __construct(
@@ -57,13 +65,11 @@ class EsiNameResolver
         $result = [];
         $missing = $ids;
 
-        // 1. Check DB cache (unless force refresh).
+        // 1. Check DB cache (unless force refresh). No TTL filter —
+        // entity names are immutable for enrichment purposes.
         if (! $forceRefresh) {
-            $staleThreshold = Carbon::now()->subSeconds(self::STALE_AFTER_SECONDS);
-
             $cached = EsiEntityName::query()
                 ->whereIn('entity_id', $ids)
-                ->where('cached_at', '>=', $staleThreshold)
                 ->get();
 
             foreach ($cached as $row) {
