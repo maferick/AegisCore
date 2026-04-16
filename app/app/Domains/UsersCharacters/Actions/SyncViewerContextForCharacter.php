@@ -34,10 +34,14 @@ use Illuminate\Support\Facades\Log;
  *     NEVER re-inferred here — the donor's confirmed choice wins.
  *     The only thing this action refreshes on a confirmed row is the
  *     cached viewer_corporation_id / viewer_alliance_id.
- *   - An EXISTING unconfirmed viewer_context is re-inferred ONLY when
- *     `$forceReinfer` is true (i.e. the donor clicked "Re-infer" on
- *     the onboarding UI). Page renders pass `$forceReinfer=false` so
- *     inference doesn't run on every render.
+ *   - An EXISTING unconfirmed viewer_context is re-inferred on EVERY
+ *     call (page render or explicit Re-infer click). Auto-recovery
+ *     is the point: if inference came back empty on the first render
+ *     (cold-start before labels were seeded, post-restore data gap,
+ *     freshly-added corp label), the next render picks up the new
+ *     labels without requiring a manual click. The `$forceReinfer`
+ *     parameter is kept for signature stability but is no longer
+ *     load-bearing on unresolved rows.
  *
  * Return: the persisted ViewerContext instance (fresh from DB).
  */
@@ -71,10 +75,23 @@ final class SyncViewerContextForCharacter
             $context->viewer_alliance_id = $character->alliance_id;
         }
 
-        // Inference runs on creation, or on explicit re-infer for
-        // unconfirmed rows. Never on confirmed rows; never on every
-        // page render.
-        if ($isNew || ($forceReinfer && $context->bloc_unresolved === true)) {
+        // Inference runs on creation, and on every render for an
+        // unconfirmed row. Previously this was gated on $forceReinfer,
+        // so a donor whose first render happened before
+        // CoalitionEntityLabels were seeded (cold-start, data restore,
+        // seeder drift) stayed on "unresolved" until they manually
+        // clicked "Re-infer" — a surprising UX given the suggestion
+        // would have resolved cleanly on any later render. Confirmed
+        // rows (bloc_unresolved=false) are still never touched: the
+        // donor's choice wins over every later label change.
+        //
+        // Cost: one labels-for-(corp,alliance) query + an in-memory
+        // decomposition per render for unresolved donors. Negligible.
+        // The $forceReinfer parameter is now redundant on unresolved
+        // rows (kept in the signature for API stability and for the
+        // "I just clicked Re-infer" intent path) — passing false from
+        // a normal render still triggers inference when unresolved.
+        if ($isNew || $context->bloc_unresolved === true) {
             // Cold-start guard: SSO login rows initially only have
             // character_id + name. If affiliation mirroring hasn't run yet,
             // fetch corporation/alliance once so inference has labels to
