@@ -50,24 +50,20 @@
         border: 1px solid rgba(79, 208, 208, 0.18);
     }
 
-    /* Wider stat widget grids on large screens. Override Filament's
-     * CSS custom properties that control the grid, not the grid
-     * template directly. The --cols-* vars drive grid-cols and the
-     * --col-span-* vars drive each child's span. */
+    /* Wider dashboard layout on large screens. Filament renders the
+     * dashboard page as a single-column widget stack. On wide screens
+     * (4K / ultrawide), lay widgets out in 2 columns so stat groups
+     * sit side by side instead of stacking vertically.
+     *
+     * Each stat widget sets --col-span-lg: 1/-1 (full width) by default.
+     * Override to span 1 column so they share the row. */
     @media (min-width: 1800px) {
-        .fi-wi-stats-overview .fi-grid {
-            --cols-default: repeat(4, minmax(0, 1fr)) !important;
-            --cols-lg: repeat(4, minmax(0, 1fr)) !important;
+        .fi-page-dashboard > .fi-sc > .fi-grid {
+            --cols-default: repeat(2, minmax(0, 1fr)) !important;
         }
-        .fi-wi-stats-overview .fi-grid-col {
-            --col-span-default: span 1 / span 1 !important;
+        .fi-page-dashboard > .fi-sc > .fi-grid > .fi-wi-widget {
             --col-span-lg: span 1 / span 1 !important;
-        }
-    }
-    @media (min-width: 2400px) {
-        .fi-wi-stats-overview .fi-grid {
-            --cols-default: repeat(6, minmax(0, 1fr)) !important;
-            --cols-lg: repeat(6, minmax(0, 1fr)) !important;
+            --col-span-default: span 1 / span 1 !important;
         }
     }
 </style>
