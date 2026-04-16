@@ -172,3 +172,17 @@ Schedule::command('killmails:enrich')
     ->onOneServer()
     ->withoutOverlapping(10)
     ->name('killmails-enrich');
+
+// Entity name resolution — populate esi_entity_names cache from
+// killmail participants independently of the enrichment pipeline.
+//
+// Dispatches ResolveEntityNames which batch-resolves uncached entity
+// IDs via ESI /universe/names/ (rate-limited through the shared ESI
+// client). Self-dispatches until all participant IDs are cached.
+//
+// Runs every 2 minutes; the job is ShouldBeUnique so overlaps are
+// silently skipped.
+Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\ResolveEntityNames)
+    ->everyTwoMinutes()
+    ->onOneServer()
+    ->name('resolve-entity-names');
