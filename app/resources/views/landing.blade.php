@@ -374,6 +374,82 @@
         }
 
 
+        /* ---------- Kill banner (scrolling marquee) ---------- */
+        .kill-banner {
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            background: rgba(17, 17, 19, 0.6);
+            overflow: hidden;
+            position: relative;
+            white-space: nowrap;
+        }
+        .kill-banner-label {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            padding: 0 1rem;
+            background: linear-gradient(90deg, rgba(10,10,11,0.95) 70%, transparent);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--accent);
+        }
+        .kill-banner-track {
+            display: inline-flex;
+            animation: scroll-left 60s linear infinite;
+            padding: 0.6rem 0;
+        }
+        .kill-banner-track:hover { animation-play-state: paused; }
+        @keyframes scroll-left {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+        .kill-card {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-right: 2rem;
+            flex-shrink: 0;
+        }
+        .kill-card-ship {
+            width: 36px; height: 36px;
+            border-radius: 4px;
+            border: 1px solid rgba(79, 208, 208, 0.2);
+        }
+        .kill-card-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.1rem;
+        }
+        .kill-card-ship-name {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .kill-card-victim {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--muted);
+        }
+        .kill-card-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--gold);
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .kill-card-sep {
+            width: 1px;
+            height: 24px;
+            background: var(--border);
+            margin-right: 2rem;
+            flex-shrink: 0;
+        }
+
         /* ---------- Stats ticker ---------- */
         .stats-ticker {
             margin-top: 2.5rem;
@@ -595,7 +671,60 @@
         $kmTotal = \Illuminate\Support\Facades\DB::table('killmails')->count();
         $kmEnriched = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->whereNotNull('enriched_at')->count() : 0;
         $kmLast24h = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->where('ingested_at', '>=', now()->subDay())->count() : 0;
+
+        // Top kills from last 24h for the scrolling banner.
+        $topKills = $kmTotal > 0
+            ? \Illuminate\Support\Facades\DB::table('killmails')
+                ->where('killed_at', '>=', now()->subDay())
+                ->whereNotNull('enriched_at')
+                ->where('total_value', '>', 0)
+                ->orderByDesc('total_value')
+                ->limit(20)
+                ->get(['killmail_id', 'victim_character_id', 'victim_ship_type_id', 'victim_ship_type_name', 'total_value', 'killed_at'])
+            : collect();
+
+        // Resolve victim names for the banner.
+        $bannerVictimIds = $topKills->pluck('victim_character_id')->filter()->unique()->values()->all();
+        $bannerNames = $bannerVictimIds
+            ? \Illuminate\Support\Facades\DB::table('esi_entity_names')
+                ->whereIn('entity_id', $bannerVictimIds)
+                ->pluck('name', 'entity_id')
+            : collect();
+
+        $formatBannerIsk = function (float $v): string {
+            if ($v >= 1e12) return number_format($v / 1e12, 1) . 'T';
+            if ($v >= 1e9)  return number_format($v / 1e9, 1) . 'B';
+            if ($v >= 1e6)  return number_format($v / 1e6, 1) . 'M';
+            if ($v >= 1e3)  return number_format($v / 1e3, 0) . 'K';
+            return number_format($v, 0);
+        };
     @endphp
+
+    @if($topKills->isNotEmpty())
+    <div class="kill-banner">
+        <div class="kill-banner-label">Top Kills 24h</div>
+        <div class="kill-banner-track" style="padding-left: 120px;">
+            {{-- Duplicate the list for seamless infinite scroll --}}
+            @for($loop_i = 0; $loop_i < 2; $loop_i++)
+                @foreach($topKills as $tk)
+                    <div class="kill-card">
+                        <img class="kill-card-ship"
+                             src="https://images.evetech.net/types/{{ $tk->victim_ship_type_id }}/render?size=64"
+                             alt="{{ $tk->victim_ship_type_name ?? '' }}"
+                             referrerpolicy="no-referrer"
+                             loading="lazy">
+                        <div class="kill-card-info">
+                            <span class="kill-card-ship-name">{{ $tk->victim_ship_type_name ?? 'Unknown' }}</span>
+                            <span class="kill-card-victim">{{ $bannerNames[$tk->victim_character_id] ?? 'Unknown pilot' }}</span>
+                        </div>
+                        <span class="kill-card-value">{{ $formatBannerIsk((float) $tk->total_value) }}</span>
+                    </div>
+                    <div class="kill-card-sep"></div>
+                @endforeach
+            @endfor
+        </div>
+    </div>
+    @endif
 
     @if($kmTotal > 0)
     <div class="stats-ticker">
