@@ -29,6 +29,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null               $victim_corporation_id
  * @property int|null               $victim_alliance_id
  * @property int                    $victim_ship_type_id
+ * @property string|null            $victim_ship_type_name
+ * @property int|null               $victim_ship_group_id
+ * @property string|null            $victim_ship_group_name
+ * @property int|null               $victim_ship_category_id
+ * @property string|null            $victim_ship_category_name
  * @property int                    $victim_damage_taken
  * @property string                 $total_value
  * @property string                 $hull_value
@@ -66,6 +71,11 @@ class Killmail extends Model
         'victim_corporation_id',
         'victim_alliance_id',
         'victim_ship_type_id',
+        'victim_ship_type_name',
+        'victim_ship_group_id',
+        'victim_ship_group_name',
+        'victim_ship_category_id',
+        'victim_ship_category_name',
         'victim_damage_taken',
         'total_value',
         'hull_value',
@@ -93,6 +103,8 @@ class Killmail extends Model
             'victim_corporation_id' => 'integer',
             'victim_alliance_id' => 'integer',
             'victim_ship_type_id' => 'integer',
+            'victim_ship_group_id' => 'integer',
+            'victim_ship_category_id' => 'integer',
             'victim_damage_taken' => 'integer',
             'total_value' => 'decimal:2',
             'hull_value' => 'decimal:2',

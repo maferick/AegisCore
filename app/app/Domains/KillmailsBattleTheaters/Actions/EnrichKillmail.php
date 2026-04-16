@@ -10,6 +10,7 @@ use App\Domains\KillmailsBattleTheaters\Models\KillmailItem;
 use App\Domains\KillmailsBattleTheaters\Services\JitaValuationService;
 use App\Reference\Models\SolarSystem;
 use App\Services\Eve\Esi\EsiNameResolver;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -46,6 +47,7 @@ final class EnrichKillmail
 
         DB::transaction(function () use ($killmail, &$itemsValued): void {
             $this->resolveLocation($killmail);
+            $this->classifyAssets($killmail);
             $itemsValued = $this->valueItems($killmail);
             $this->computeAggregates($killmail);
 
@@ -91,6 +93,75 @@ final class EnrichKillmail
 
         $killmail->constellation_id = $solarSystem->constellation_id;
         $killmail->region_id = $solarSystem->region_id;
+    }
+
+    /**
+     * Step 1b: Classify all items + hull from ref_item_types/groups/categories.
+     *
+     * Single batch query joining type → group → category, then writes
+     * resolved metadata to each item row and the hull fields on the
+     * killmail. Gracefully handles missing ref data (SDE not imported).
+     */
+    private function classifyAssets(Killmail $killmail): void
+    {
+        $items = $killmail->items;
+
+        // Collect all unique type_ids: items + hull.
+        $typeIds = $items->pluck('type_id')->all();
+        $typeIds[] = $killmail->victim_ship_type_id;
+        $typeIds = array_values(array_unique(array_filter($typeIds, fn (int $id) => $id > 0)));
+
+        if ($typeIds === []) {
+            return;
+        }
+
+        // Single query: type → group → category + meta info.
+        $typeMetadata = DB::table('ref_item_types as t')
+            ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
+            ->leftJoin('ref_item_categories as c', 'c.id', '=', 'g.category_id')
+            ->whereIn('t.id', $typeIds)
+            ->get([
+                't.id as type_id',
+                't.name as type_name',
+                't.group_id',
+                'g.name as group_name',
+                'g.category_id',
+                'c.name as category_name',
+                't.meta_group_id',
+                't.meta_level',
+            ])
+            ->keyBy('type_id');
+
+        if ($typeMetadata->isEmpty()) {
+            return;
+        }
+
+        // Write metadata to each item row.
+        foreach ($items as $item) {
+            $meta = $typeMetadata->get($item->type_id);
+            if ($meta === null) {
+                continue;
+            }
+
+            $item->type_name = $meta->type_name;
+            $item->group_id = $meta->group_id;
+            $item->group_name = $meta->group_name;
+            $item->category_id = $meta->category_id;
+            $item->category_name = $meta->category_name;
+            $item->meta_group_id = $meta->meta_group_id;
+            $item->meta_level = $meta->meta_level;
+            // Don't save yet — valueItems() will save each item.
+        }
+
+        // Hull classification — write to the killmail directly.
+        $hullMeta = $typeMetadata->get($killmail->victim_ship_type_id);
+        if ($hullMeta !== null) {
+            $killmail->victim_ship_type_name = $hullMeta->type_name;
+            $killmail->victim_ship_group_id = $hullMeta->group_id;
+            $killmail->victim_ship_group_name = $hullMeta->group_name;
+            $killmail->victim_ship_category_id = $hullMeta->category_id;
+            $killmail->victim_ship_category_name = $hullMeta->category_name;
+        }
     }
 
     /**

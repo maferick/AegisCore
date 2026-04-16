@@ -19,6 +19,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int                    $id
  * @property int                    $killmail_id
  * @property int                    $type_id
+ * @property string|null            $type_name
+ * @property int|null               $group_id
+ * @property string|null            $group_name
+ * @property int|null               $category_id
+ * @property string|null            $category_name
+ * @property int|null               $meta_group_id
+ * @property int|null               $meta_level
  * @property int                    $flag
  * @property int                    $quantity_destroyed
  * @property int                    $quantity_dropped
@@ -70,6 +77,13 @@ class KillmailItem extends Model
     protected $fillable = [
         'killmail_id',
         'type_id',
+        'type_name',
+        'group_id',
+        'group_name',
+        'category_id',
+        'category_name',
+        'meta_group_id',
+        'meta_level',
         'flag',
         'quantity_destroyed',
         'quantity_dropped',
@@ -86,6 +100,10 @@ class KillmailItem extends Model
         return [
             'killmail_id' => 'integer',
             'type_id' => 'integer',
+            'group_id' => 'integer',
+            'category_id' => 'integer',
+            'meta_group_id' => 'integer',
+            'meta_level' => 'integer',
             'flag' => 'integer',
             'quantity_destroyed' => 'integer',
             'quantity_dropped' => 'integer',
