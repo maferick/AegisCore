@@ -186,3 +186,15 @@ Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\ResolveEntityNames)
     ->everyTwoMinutes()
     ->onOneServer()
     ->name('resolve-entity-names');
+
+// Character corporation history — fetch full corp membership timelines
+// from ESI for characters observed in killmails. Public endpoint,
+// unauthed, cached 1 day by CCP. Used for event-time affiliation
+// snapshots ("what corp was this pilot in when the killmail happened").
+//
+// Processes 50 characters per dispatch, self-dispatches until caught
+// up. Rate-limited through the shared ESI client.
+Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCharacterCorporationHistory)
+    ->everyFiveMinutes()
+    ->onOneServer()
+    ->name('fetch-corp-history');
