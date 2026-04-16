@@ -10,19 +10,13 @@ use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\ImageColumn;
-use Filament\Tables\Columns\Layout\Split;
-use Filament\Tables\Columns\Layout\Stack;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
-/**
- * Killmails involving the logged-in user's character — as victim or
- * attacker. Browse-only (no create/edit/delete). Shows ship renders,
- * victim portraits, and corp/alliance logos.
- */
 class KillmailResource extends Resource
 {
     protected static ?string $model = Killmail::class;
@@ -64,7 +58,6 @@ class KillmailResource extends Resource
                 });
             })
             ->columns([
-                // Ship render (victim hull).
                 ImageColumn::make('ship_render')
                     ->label('')
                     ->state(fn (Killmail $record): string => "https://images.evetech.net/types/{$record->victim_ship_type_id}/render?size=64")
@@ -84,14 +77,14 @@ class KillmailResource extends Resource
                         $user = auth()->user();
                         $character = $user?->characters()->first();
                         if ($character && $record->victim_character_id === $character->character_id) {
-                            return 'Victim';
+                            return 'Loss';
                         }
 
-                        return 'Attacker';
+                        return 'Kill';
                     })
-                    ->color(fn (string $state): string => $state === 'Victim' ? 'danger' : 'success'),
+                    ->color(fn (string $state): string => $state === 'Loss' ? 'danger' : 'success'),
 
-                // Victim portrait + name.
+                // Victim: portrait + name + corp / alliance.
                 ImageColumn::make('victim_portrait')
                     ->label('')
                     ->state(fn (Killmail $record): ?string => $record->victim_character_id
@@ -101,27 +94,85 @@ class KillmailResource extends Resource
                     ->circular()
                     ->defaultImageUrl('https://images.evetech.net/types/670/icon?size=64'),
 
-                TextColumn::make('victim_name')
+                TextColumn::make('victim_info')
                     ->label('Victim')
                     ->state(function (Killmail $record): string {
                         if (! $record->victim_character_id) {
                             return $record->victim_ship_type_name ?? 'Structure';
                         }
-                        $name = \Illuminate\Support\Facades\DB::table('esi_entity_names')
-                            ->where('entity_id', $record->victim_character_id)
-                            ->value('name');
 
-                        return $name ?? 'Character #'.$record->victim_character_id;
+                        return DB::table('esi_entity_names')
+                            ->where('entity_id', $record->victim_character_id)
+                            ->value('name') ?? 'Pilot #'.$record->victim_character_id;
                     })
                     ->description(function (Killmail $record): string {
-                        if (! $record->victim_corporation_id) {
+                        $parts = [];
+                        if ($record->victim_corporation_id) {
+                            $parts[] = DB::table('esi_entity_names')
+                                ->where('entity_id', $record->victim_corporation_id)
+                                ->value('name') ?? '';
+                        }
+                        if ($record->victim_alliance_id) {
+                            $alliance = DB::table('esi_entity_names')
+                                ->where('entity_id', $record->victim_alliance_id)
+                                ->value('name');
+                            if ($alliance) {
+                                $parts[] = $alliance;
+                            }
+                        }
+
+                        return implode(' / ', array_filter($parts));
+                    }),
+
+                // Final blow: portrait + name + ship.
+                TextColumn::make('final_blow')
+                    ->label('Final Blow')
+                    ->state(function (Killmail $record): string {
+                        $fb = DB::table('killmail_attackers')
+                            ->where('killmail_id', $record->killmail_id)
+                            ->where('is_final_blow', true)
+                            ->first(['character_id', 'corporation_id', 'ship_type_id']);
+
+                        if (! $fb) {
+                            return '—';
+                        }
+
+                        if ($fb->character_id) {
+                            $name = DB::table('esi_entity_names')
+                                ->where('entity_id', $fb->character_id)
+                                ->value('name') ?? 'Pilot #'.$fb->character_id;
+                        } else {
+                            $name = 'NPC';
+                        }
+
+                        return $name;
+                    })
+                    ->description(function (Killmail $record): string {
+                        $fb = DB::table('killmail_attackers')
+                            ->where('killmail_id', $record->killmail_id)
+                            ->where('is_final_blow', true)
+                            ->first(['ship_type_id', 'corporation_id']);
+
+                        if (! $fb) {
                             return '';
                         }
-                        $corpName = \Illuminate\Support\Facades\DB::table('esi_entity_names')
-                            ->where('entity_id', $record->victim_corporation_id)
-                            ->value('name');
 
-                        return $corpName ?? '';
+                        $parts = [];
+                        if ($fb->ship_type_id) {
+                            $parts[] = DB::table('ref_item_types')
+                                ->where('id', $fb->ship_type_id)
+                                ->value('name') ?? '';
+                        }
+                        if ($fb->corporation_id) {
+                            $corp = DB::table('esi_entity_names')
+                                ->where('entity_id', $fb->corporation_id)
+                                ->value('name');
+                            if ($corp) {
+                                $parts[] = $corp;
+                            }
+                        }
+
+                        return implode(' · ', array_filter($parts));
                     }),
 
                 TextColumn::make('total_value')
@@ -151,14 +202,14 @@ class KillmailResource extends Resource
 
                 TextColumn::make('killed_at')
                     ->label('Date')
-                    ->dateTime('M d, Y H:i')
+                    ->dateTime('M d, H:i')
                     ->sortable()
                     ->color('gray'),
             ])
             ->filters([
                 SelectFilter::make('role')
                     ->options([
-                        'victim' => 'Deaths',
+                        'victim' => 'Losses',
                         'attacker' => 'Kills',
                     ])
                     ->query(function (Builder $query, array $data) {
