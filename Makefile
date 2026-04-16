@@ -274,6 +274,21 @@ market-import:
 outbox-relay:
 	$(COMPOSE) --profile tools run --rm --build outbox_relay_oneshot $(OUTBOX_RELAY_ARGS)
 
+# One-shot EVE Ref killmail backfill. Reconciles local state against
+# totals.json and downloads + ingests missing or updated days.
+#
+# Overrides:
+#   KILLMAIL_BACKFILL_ARGS="--dry-run"
+#   KILLMAIL_BACKFILL_ARGS="--only-date=2026-04-01"
+#   KILLMAIL_BACKFILL_ARGS="--from=2025-01-01 --to=2025-12-31"
+killmail-backfill:
+	$(COMPOSE) --profile tools run --rm --build killmail_backfill $(KILLMAIL_BACKFILL_ARGS)
+
+# One-shot R2Z2 live stream (runs until Ctrl-C). For ad-hoc testing.
+# The long-lived `killmail_stream` compose service handles production.
+killmail-stream:
+	$(COMPOSE) --profile tools run --rm --build killmail_backfill stream $(KILLMAIL_STREAM_ARGS)
+
 # Quick read-only check that market data is landing in BOTH planes.
 # Hits MariaDB for raw row counts + date ranges of market_history /
 # market_orders, then InfluxDB for point counts + latest timestamps

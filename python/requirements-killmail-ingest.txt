@@ -1,0 +1,11 @@
+# killmail_ingest deps.
+#
+# Downloads EVE Ref tar.bz2 archives (httpx + stdlib tarfile) and polls
+# R2Z2 live stream (httpx), writes killmails + outbox rows (pymysql),
+# stamps outbox event IDs with ULIDs.
+httpx~=0.27
+pymysql~=1.1
+python-ulid~=3.0
+# python-ulid 3.0.x unconditionally imports Self from typing_extensions
+# but only declares the dep on Python < 3.11.
+typing_extensions>=4.7
