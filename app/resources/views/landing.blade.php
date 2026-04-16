@@ -374,6 +374,48 @@
         }
 
 
+        /* ---------- Stats ticker ---------- */
+        .stats-ticker {
+            margin-top: 2.5rem;
+            padding: 1.2rem 2rem;
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            background: rgba(17, 17, 19, 0.5);
+            backdrop-filter: blur(6px);
+        }
+        .stats-ticker-inner {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+        .ticker-stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.2rem;
+        }
+        .ticker-value {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.02em;
+        }
+        .ticker-label {
+            font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--muted);
+        }
+        .ticker-sep {
+            width: 1px;
+            height: 2rem;
+            background: var(--border);
+        }
+
         /* ---------- Footer ---------- */
         footer {
             padding: 1rem 2rem;
@@ -545,6 +587,33 @@
             --}}
             </div>{{-- /.hero-body --}}
         </div>
+
+        @php
+            $kmTotal = \Illuminate\Support\Facades\DB::table('killmails')->count();
+            $kmEnriched = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->whereNotNull('enriched_at')->count() : 0;
+            $kmLast24h = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->where('ingested_at', '>=', now()->subDay())->count() : 0;
+        @endphp
+
+        @if($kmTotal > 0)
+        <div class="stats-ticker">
+            <div class="stats-ticker-inner">
+                <div class="ticker-stat">
+                    <span class="ticker-value accent">{{ number_format($kmTotal) }}</span>
+                    <span class="ticker-label">killmails tracked</span>
+                </div>
+                <div class="ticker-sep"></div>
+                <div class="ticker-stat">
+                    <span class="ticker-value" style="color: var(--gold)">{{ number_format($kmEnriched) }}</span>
+                    <span class="ticker-label">enriched</span>
+                </div>
+                <div class="ticker-sep"></div>
+                <div class="ticker-stat">
+                    <span class="ticker-value">{{ number_format($kmLast24h) }}</span>
+                    <span class="ticker-label">last 24h</span>
+                </div>
+            </div>
+        </div>
+        @endif
     </main>
 
     <footer>
