@@ -588,33 +588,34 @@
             </div>{{-- /.hero-body --}}
         </div>
 
-        @php
-            $kmTotal = \Illuminate\Support\Facades\DB::table('killmails')->count();
-            $kmEnriched = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->whereNotNull('enriched_at')->count() : 0;
-            $kmLast24h = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->where('ingested_at', '>=', now()->subDay())->count() : 0;
-        @endphp
+    </main>
 
-        @if($kmTotal > 0)
-        <div class="stats-ticker">
-            <div class="stats-ticker-inner">
-                <div class="ticker-stat">
-                    <span class="ticker-value accent">{{ number_format($kmTotal) }}</span>
-                    <span class="ticker-label">killmails tracked</span>
-                </div>
-                <div class="ticker-sep"></div>
-                <div class="ticker-stat">
-                    <span class="ticker-value" style="color: var(--gold)">{{ number_format($kmEnriched) }}</span>
-                    <span class="ticker-label">enriched</span>
-                </div>
-                <div class="ticker-sep"></div>
-                <div class="ticker-stat">
-                    <span class="ticker-value">{{ number_format($kmLast24h) }}</span>
-                    <span class="ticker-label">last 24h</span>
-                </div>
+    @php
+        $kmTotal = \Illuminate\Support\Facades\DB::table('killmails')->count();
+        $kmEnriched = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->whereNotNull('enriched_at')->count() : 0;
+        $kmLast24h = $kmTotal > 0 ? \Illuminate\Support\Facades\DB::table('killmails')->where('ingested_at', '>=', now()->subDay())->count() : 0;
+    @endphp
+
+    @if($kmTotal > 0)
+    <div class="stats-ticker">
+        <div class="stats-ticker-inner">
+            <div class="ticker-stat">
+                <span class="ticker-value accent">{{ number_format($kmTotal) }}</span>
+                <span class="ticker-label">killmails tracked</span>
+            </div>
+            <div class="ticker-sep"></div>
+            <div class="ticker-stat">
+                <span class="ticker-value" style="color: var(--gold)">{{ number_format($kmEnriched) }}</span>
+                <span class="ticker-label">enriched</span>
+            </div>
+            <div class="ticker-sep"></div>
+            <div class="ticker-stat">
+                <span class="ticker-value">{{ number_format($kmLast24h) }}</span>
+                <span class="ticker-label">last 24h</span>
             </div>
         </div>
-        @endif
-    </main>
+    </div>
+    @endif
 
     <footer>
         <span>v0.1.0 &middot; phase 1</span>
