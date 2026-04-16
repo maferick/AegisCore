@@ -50,22 +50,24 @@
         border: 1px solid rgba(79, 208, 208, 0.18);
     }
 
-    /* Wider stat widget grids on large screens. Filament uses
-     * .fi-grid with CSS custom properties for column counts.
-     * Override the grid-template-columns directly on wide viewports. */
+    /* Wider stat widget grids on large screens. Override Filament's
+     * CSS custom properties that control the grid, not the grid
+     * template directly. The --cols-* vars drive grid-cols and the
+     * --col-span-* vars drive each child's span. */
     @media (min-width: 1800px) {
         .fi-wi-stats-overview .fi-grid {
-            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            --cols-default: repeat(4, minmax(0, 1fr)) !important;
+            --cols-lg: repeat(4, minmax(0, 1fr)) !important;
+        }
+        .fi-wi-stats-overview .fi-grid-col {
+            --col-span-default: span 1 / span 1 !important;
+            --col-span-lg: span 1 / span 1 !important;
         }
     }
-    @media (min-width: 2200px) {
+    @media (min-width: 2400px) {
         .fi-wi-stats-overview .fi-grid {
-            grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
-        }
-    }
-    @media (min-width: 2800px) {
-        .fi-wi-stats-overview .fi-grid {
-            grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+            --cols-default: repeat(6, minmax(0, 1fr)) !important;
+            --cols-lg: repeat(6, minmax(0, 1fr)) !important;
         }
     }
 </style>
