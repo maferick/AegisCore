@@ -33,13 +33,13 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    private const CHUNK_SIZE = 1000;
+    private const CHUNK_SIZE = 2000;
 
     public int $tries = 3;
 
     public int $timeout = 300;
 
-    public int $uniqueFor = 300;
+    public int $uniqueFor = 60;
 
     private const NAME_RESOLVE_BACKLOG_THRESHOLD = 1000;
 
@@ -110,9 +110,10 @@ final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
             'batch_size' => $killmails->count(),
         ]);
 
-        // Self-dispatch if more remain in this month.
+        // Self-dispatch immediately if more remain in this month.
+        // No delay — the enrichment is pure DB work, no ESI calls.
         if ($killmails->count() === self::CHUNK_SIZE) {
-            static::dispatch($this->month)->delay(now()->addSeconds(1));
+            static::dispatch($this->month);
         }
     }
 
