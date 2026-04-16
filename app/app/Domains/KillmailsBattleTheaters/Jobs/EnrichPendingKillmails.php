@@ -7,6 +7,7 @@ namespace App\Domains\KillmailsBattleTheaters\Jobs;
 use App\Domains\KillmailsBattleTheaters\Actions\EnrichKillmail;
 use App\Domains\KillmailsBattleTheaters\Models\Killmail;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -21,10 +22,11 @@ use Illuminate\Support\Facades\Log;
  * failure does not block the batch. Self-dispatches with a short delay
  * if more unenriched killmails remain.
  *
- * Scheduling: dispatch from the Laravel scheduler on a cadence, or let
- * the self-dispatch loop drain the queue after bulk ingestion.
+ * Implements ShouldBeUnique so only one instance runs at a time across
+ * all Horizon workers — prevents concurrent workers from grabbing the
+ * same unenriched killmails and racing on item updates.
  */
-final class EnrichPendingKillmails implements ShouldQueue
+final class EnrichPendingKillmails implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;
@@ -37,6 +39,9 @@ final class EnrichPendingKillmails implements ShouldQueue
     public int $tries = 3;
 
     public int $timeout = 300;
+
+    /** Unique lock TTL — release if the job hangs beyond this. */
+    public int $uniqueFor = 600;
 
     public function handle(EnrichKillmail $action): void
     {
