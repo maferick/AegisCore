@@ -965,6 +965,66 @@ services:
       aegiscore:
         ipv4_address: 172.16.238.42
 
+  # ---- Killmail search (OpenSearch indexer) --------------------------------
+
+  # killmail_search — one-shot bulk indexer for enriched killmails → OpenSearch.
+  killmail_search:
+    build:
+      context: ../python
+      dockerfile: killmail_search.Dockerfile
+    image: aegiscore/killmail-search:0.1.0
+    container_name: killmail_search
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      OPENSEARCH_URL: "https://opensearch:9200"
+      OPENSEARCH_USERNAME: admin
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      OPENSEARCH_KILLMAIL_INDEX: killmails
+      OPENSEARCH_VERIFY_CERTS: "false"
+      KILLMAIL_SEARCH_BATCH_SIZE: "${KILLMAIL_SEARCH_BATCH_SIZE:-1000}"
+    command: ["backfill"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.43
+
+  # killmail_search_scheduler — long-lived indexer that loops.
+  killmail_search_scheduler:
+    build:
+      context: ../python
+      dockerfile: killmail_search.Dockerfile
+    image: aegiscore/killmail-search:0.1.0
+    container_name: killmail_search_scheduler
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      OPENSEARCH_URL: "https://opensearch:9200"
+      OPENSEARCH_USERNAME: admin
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      OPENSEARCH_KILLMAIL_INDEX: killmails
+      OPENSEARCH_VERIFY_CERTS: "false"
+      KILLMAIL_SEARCH_BATCH_SIZE: "${KILLMAIL_SEARCH_BATCH_SIZE:-1000}"
+    command: ["backfill", "--interval", "${KILLMAIL_SEARCH_INTERVAL_SECONDS:-300}"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.44
+
 networks:
   aegiscore:
     driver: bridge

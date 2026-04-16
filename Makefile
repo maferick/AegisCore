@@ -289,6 +289,11 @@ killmail-backfill:
 killmail-stream:
 	$(COMPOSE) --profile tools run --rm --build killmail_backfill stream $(KILLMAIL_STREAM_ARGS)
 
+# One-shot OpenSearch killmail index backfill. Indexes all enriched
+# killmails that aren't in the index yet.
+killmail-search:
+	$(COMPOSE) --profile tools run --rm --build killmail_search $(KILLMAIL_SEARCH_ARGS)
+
 # Quick read-only check that market data is landing in BOTH planes.
 # Hits MariaDB for raw row counts + date ranges of market_history /
 # market_orders, then InfluxDB for point counts + latest timestamps
