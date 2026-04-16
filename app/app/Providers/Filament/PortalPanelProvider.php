@@ -56,10 +56,6 @@ class PortalPanelProvider extends PanelProvider
                     ->url('/')
                     ->icon('heroicon-o-arrow-left-on-rectangle')
                     ->sort(999),
-                NavigationItem::make('Account Settings')
-                    ->url(fn () => route('account.settings'))
-                    ->icon('heroicon-o-cog-6-tooth')
-                    ->sort(998),
             ])
             ->userMenuItems([
                 MenuItem::make()
