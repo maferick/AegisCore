@@ -199,6 +199,8 @@ final class EnrichKillmail
                 if ($item->isDirty()) {
                     $rows[] = [
                         'id' => $item->id,
+                        'killmail_id' => $killmail->killmail_id,
+                        'type_id' => $item->type_id,
                         'type_name' => $item->type_name,
                         'group_id' => $item->group_id,
                         'group_name' => $item->group_name,
