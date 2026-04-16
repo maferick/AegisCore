@@ -64,13 +64,20 @@ use RuntimeException;
  *   2. `search()` hits ESI via donor's token, populates `$results`.
  *   3. Operator clicks "Watch" on a result → `addStructure($id)`.
  *   4. We re-validate the ID was in THIS request's search results
- *      (server-side — not just client-side UI), then upsert a row
- *      in `market_watched_locations` with `owner_user_id = auth()->id()`.
+ *      (server-side — not just client-side UI), then upsert the
+ *      canonical hub + watched row + donor collector + self-
+ *      entitlement per ADR-0005 § Registration flow. One polling
+ *      lane per hub; a second donor attaching the same structure
+ *      reuses the hub and adds only a collector + entitlement.
  *
- * Remove flow: `removeStructure($rowId)` deletes one of the
- * authed user's own watched rows. We scope by `owner_user_id` at
- * the query level so a forged POST can't delete another donor's
- * rows.
+ * Remove flow: `removeStructure($rowId)` removes the authed user's
+ * collector + self-entitlement from the target hub. We scope every
+ * mutation to rows the user demonstrably owns (collector on the hub)
+ * so a forged POST can't touch another donor's grants. The watched
+ * row itself is left in place when other collectors remain; when the
+ * last collector leaves, the poller naturally freezes the hub on its
+ * next tick (`market_hubs.disabled_reason = 'no_active_collector'`)
+ * and a fresh donor re-auth un-freezes it.
  */
 class AccountSettings extends Component
 {
@@ -201,8 +208,12 @@ class AccountSettings extends Component
             return collect();
         }
 
+        // Post-ADR-0005: "this user's structures" == "watched rows for
+        // hubs the user is a collector on". A hub with several
+        // collectors (multiple donors with docking rights to the same
+        // structure) surfaces once in each collector's view.
         return MarketWatchedLocation::query()
-            ->where('owner_user_id', $user->id)
+            ->forCollector($user->id)
             ->orderBy('name')
             ->get();
     }
@@ -622,7 +633,11 @@ class AccountSettings extends Component
             //    (location_type, location_id) so a second donor adding
             //    the same structure finds the existing row and becomes
             //    an additional collector rather than forking a parallel
-            //    polling lane (ADR-0005 § Registration flow).
+            //    polling lane (ADR-0005 § Registration flow). If the
+            //    hub was previously frozen (all prior collectors
+            //    failed out → `disabled_reason = 'no_active_collector'`),
+            //    clear that now so the poller picks it up on the next
+            //    tick without an admin having to toggle anything.
             $hub = MarketHub::query()->firstOrCreate(
                 [
                     'location_type' => MarketHub::LOCATION_TYPE_PLAYER_STRUCTURE,
@@ -637,20 +652,27 @@ class AccountSettings extends Component
                 ],
             );
 
-            // 2. Watched-locations driver row, pointed at the hub.
+            if ($hub->disabled_reason !== null || $hub->is_active === false) {
+                $hub->forceFill([
+                    'disabled_reason' => null,
+                    'is_active' => true,
+                ])->save();
+            }
+
+            // 2. Watched-locations driver row — one polling lane per
+            //    hub, keyed on `hub_id` (ADR-0005 § One polling lane
+            //    per physical market). A pre-existing row is reused;
+            //    `updateOrCreate` resets enabled + clears any
+            //    failure bookkeeping so a donor re-adding after an
+            //    auto-disable gets a clean slate.
             MarketWatchedLocation::query()->updateOrCreate(
-                [
-                    'owner_user_id' => $user->id,
-                    'location_id' => $structureId,
-                ],
+                ['hub_id' => $hub->id],
                 [
                     'location_type' => MarketWatchedLocation::LOCATION_TYPE_PLAYER_STRUCTURE,
                     'region_id' => (int) $candidate['region_id'],
+                    'location_id' => $structureId,
                     'name' => (string) $candidate['name'],
-                    'hub_id' => $hub->id,
                     'enabled' => true,
-                    // Reset failure bookkeeping if this is a re-add of a
-                    // previously auto-disabled row.
                     'consecutive_failure_count' => 0,
                     'last_error' => null,
                     'last_error_at' => null,
@@ -658,13 +680,14 @@ class AccountSettings extends Component
                 ],
             );
 
-            // 3. Attach the donor as a collector if they already have a
-            //    market token (the picker uses it, so the row exists in
-            //    practice; the null-guard is for the rare cross-hub
-            //    re-add case where the token was revoked between flows).
-            //    First collector on a fresh hub becomes primary; subsequent
-            //    attaches from the same donor upsert by (hub_id,
-            //    character_id) and keep whatever is_primary they had.
+            // 3. Attach the donor as a collector. The picker flow
+            //    guarantees a market token exists — the ESI search it
+            //    drives is authed against that very token. Null-guard
+            //    the rare cross-request race (token revoked between
+            //    search and add). First collector on a fresh hub
+            //    becomes primary; subsequent attaches from the same
+            //    donor upsert by (hub_id, character_id) and keep
+            //    whatever `is_primary` they had.
             $token = EveMarketToken::query()
                 ->where('user_id', $user->id)
                 ->orderByDesc('id')
@@ -1059,9 +1082,25 @@ class AccountSettings extends Component
     }
 
     /**
-     * Remove one of the donor's own watched structures. We scope by
-     * `owner_user_id` at the query level so a forged POST can't
-     * delete another user's rows even if they guessed the row id.
+     * Remove the donor from one of their watched structures. Post-
+     * ADR-0005 this is not a row delete — it's "stop contributing to
+     * this hub":
+     *
+     *   1. Delete this donor's collector on the hub. The poller
+     *      stops using their token on the next tick.
+     *   2. Delete this donor's self-entitlement. The hub drops out
+     *      of their visible list.
+     *   3. Leave the watched row + the hub in place. If other donors
+     *      are still collectors, polling continues normally for
+     *      everyone. If this was the last collector, the poller
+     *      freezes the hub on its next tick
+     *      (`disabled_reason = 'no_active_collector'`) — a future
+     *      donor re-auth naturally un-freezes it.
+     *
+     * Authorisation: we load the row, derive the hub, and look up
+     * the collector keyed on `(hub_id, user_id)`. A missing collector
+     * means this donor never had one → 404, which also covers the
+     * forged-POST case where another donor's rowId is guessed.
      */
     public function removeStructure(int $rowId): void
     {
@@ -1073,18 +1112,35 @@ class AccountSettings extends Component
             abort(403);
         }
 
-        $row = MarketWatchedLocation::query()
-            ->where('id', $rowId)
-            ->where('owner_user_id', $user->id)
-            ->first();
-        if ($row === null) {
+        $row = MarketWatchedLocation::query()->find($rowId);
+        if ($row === null || $row->hub_id === null) {
             $this->error = 'Watched structure not found.';
 
             return;
         }
 
+        $collector = MarketHubCollector::query()
+            ->where('hub_id', $row->hub_id)
+            ->where('user_id', $user->id)
+            ->first();
+        if ($collector === null) {
+            // Either a row the user was never attached to, or a
+            // forged POST — same response either way.
+            $this->error = 'Watched structure not found.';
+
+            return;
+        }
+
+        DB::transaction(function () use ($row, $user, $collector): void {
+            $collector->delete();
+            MarketHubEntitlement::query()
+                ->where('hub_id', $row->hub_id)
+                ->where('subject_type', MarketHubEntitlement::SUBJECT_TYPE_USER)
+                ->where('subject_id', $user->id)
+                ->delete();
+        });
+
         $name = $row->name ?? "#{$row->location_id}";
-        $row->delete();
         $this->status = "Removed {$name} from your watched structures.";
     }
 }

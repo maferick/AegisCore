@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Domains\Markets;
 
+use App\Domains\Markets\Models\MarketHub;
 use App\Domains\Markets\Models\MarketWatchedLocation;
 use DomainException;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
@@ -11,7 +12,10 @@ use Tests\TestCase;
 
 /**
  * Smoke tests for the MarketWatchedLocation model's belt-and-braces
- * guards.
+ * guards, updated for ADR-0005 (canonical hub overlay + retired
+ * `owner_user_id`). Classification now lives on
+ * `market_hubs.is_public_reference`; the Jita guard keys on
+ * `(region_id, location_id)` alone.
  *
  * The Filament resource already protects the Jita row by hiding the
  * delete buttons; these tests verify the model-level `deleting()`
@@ -21,14 +25,14 @@ use Tests\TestCase;
 final class MarketWatchedLocationTest extends TestCase
 {
     // DatabaseMigrations (not RefreshDatabase) so the seeded Jita row
-    // from `2026_04_14_000009_seed_jita_market_watched_location.php`
-    // lands in the DB exactly the way it would in production.
+    // + hub from the migration chain land in the DB exactly the way
+    // they would in production.
     use DatabaseMigrations;
 
     public function test_jita_baseline_row_is_seeded_by_migration(): void
     {
         $jita = MarketWatchedLocation::query()
-            ->whereNull('owner_user_id')
+            ->where('region_id', MarketWatchedLocation::JITA_REGION_ID)
             ->where('location_id', MarketWatchedLocation::JITA_LOCATION_ID)
             ->first();
 
@@ -39,12 +43,21 @@ final class MarketWatchedLocationTest extends TestCase
         self::assertTrue($jita->isJita());
         self::assertTrue($jita->isNpcStation());
         self::assertFalse($jita->isPlayerStructure());
+
+        // Post-ADR-0005 the watched row is backed by a canonical hub
+        // with `is_public_reference = true`. Assert the linkage so a
+        // future migration that forgets to attach the hub is caught
+        // here instead of at runtime.
+        self::assertNotNull($jita->hub_id, 'Jita watched row must reference a canonical hub');
+        $hub = $jita->hub;
+        self::assertNotNull($hub);
+        self::assertTrue($hub->is_public_reference);
     }
 
     public function test_deleting_jita_row_throws(): void
     {
         $jita = MarketWatchedLocation::query()
-            ->whereNull('owner_user_id')
+            ->where('region_id', MarketWatchedLocation::JITA_REGION_ID)
             ->where('location_id', MarketWatchedLocation::JITA_LOCATION_ID)
             ->sole();
 
@@ -56,10 +69,19 @@ final class MarketWatchedLocationTest extends TestCase
 
     public function test_deleting_non_jita_row_succeeds(): void
     {
+        $hub = MarketHub::query()->create([
+            'location_type' => MarketHub::LOCATION_TYPE_NPC_STATION,
+            'location_id' => 60_011_866, // Dodixie IX - Moon 20 - FedMart
+            'region_id' => 10_000_032,   // Sinq Laison
+            'is_public_reference' => true,
+            'is_active' => true,
+        ]);
+
         $row = MarketWatchedLocation::query()->create([
             'location_type' => MarketWatchedLocation::LOCATION_TYPE_NPC_STATION,
-            'region_id' => 10_000_032,   // Sinq Laison
-            'location_id' => 60_011_866, // Dodixie IX - Moon 20 - FedMart
+            'region_id' => 10_000_032,
+            'location_id' => 60_011_866,
+            'hub_id' => $hub->id,
             'name' => 'Dodixie',
             'enabled' => true,
         ]);
@@ -74,37 +96,21 @@ final class MarketWatchedLocationTest extends TestCase
         );
     }
 
-    public function test_deleting_row_with_matching_ids_but_donor_owned_succeeds(): void
-    {
-        // Defensive: the Jita guard keys on `owner_user_id IS NULL`.
-        // A donor-owned row that happens to share the Jita location_id
-        // (wouldn't happen in practice — structures use 13-digit IDs
-        // — but belt-and-braces) should not be protected.
-        $user = \App\Models\User::query()->create([
-            'name' => 'Test Donor',
-            'email' => 'donor@example.test',
-            'password' => 'x',
-        ]);
-
-        $row = MarketWatchedLocation::query()->create([
-            'location_type' => MarketWatchedLocation::LOCATION_TYPE_NPC_STATION,
-            'region_id' => MarketWatchedLocation::JITA_REGION_ID,
-            'location_id' => MarketWatchedLocation::JITA_LOCATION_ID,
-            'name' => 'Not really Jita',
-            'owner_user_id' => $user->id,
-            'enabled' => false,
-        ]);
-
-        self::assertFalse($row->isJita(), 'Donor-owned row is not the platform Jita row');
-        self::assertTrue($row->delete());
-    }
-
     public function test_casts_boolean_and_integer_columns(): void
     {
+        $hub = MarketHub::query()->create([
+            'location_type' => MarketHub::LOCATION_TYPE_PLAYER_STRUCTURE,
+            'location_id' => 1_000_000_000_000,
+            'region_id' => 10_000_002,
+            'is_public_reference' => true,
+            'is_active' => true,
+        ]);
+
         $row = MarketWatchedLocation::query()->create([
             'location_type' => MarketWatchedLocation::LOCATION_TYPE_PLAYER_STRUCTURE,
             'region_id' => 10_000_002,
             'location_id' => 1_000_000_000_000,
+            'hub_id' => $hub->id,
             'name' => 'Some Keepstar',
             'enabled' => true,
             'consecutive_failure_count' => 0,
@@ -115,6 +121,7 @@ final class MarketWatchedLocationTest extends TestCase
         self::assertIsBool($row->enabled);
         self::assertIsInt($row->region_id);
         self::assertIsInt($row->location_id);
+        self::assertIsInt($row->hub_id);
         self::assertIsInt($row->consecutive_failure_count);
     }
 }

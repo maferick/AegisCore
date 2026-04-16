@@ -4,55 +4,60 @@ declare(strict_types=1);
 
 namespace App\Domains\Markets\Models;
 
-use App\Models\User;
 use App\Reference\Models\Region;
 use Carbon\CarbonInterface;
 use DomainException;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Driver-table row for the Python market poller.
  *
- * Each row is one place we're polling orders from. Two flavours of
- * ownership per ADR-0004:
- *
- *   - `owner_user_id = null`  → platform default, admin-managed from
- *                               /admin/market-watched-locations. Jita
- *                               is seeded here and is undeletable (see
- *                               `booted()` below).
- *   - `owner_user_id = <id>`  → donor-owned, managed from
- *                               /account/settings. Deferred to the
- *                               donor self-service rollout step.
+ * Each row is one polling lane — one physical market we pull orders
+ * from. Post-ADR-0005, every row points at a canonical
+ * {@see MarketHub} row, and classification (platform-default vs
+ * donor-registered) lives on the hub rather than on this table.
  *
  * Two `location_type` values per the migration's ENUM:
  *
  *   - `npc_station`       → region endpoint + location_id client-side
  *                           filter, no auth.
- *   - `player_structure`  → structure endpoint with service-token
- *                           auth (admin-owned) or donor-token auth
- *                           (donor-owned). Admin path is live in the
- *                           Python poller as of step 4a.
+ *   - `player_structure`  → structure endpoint with either the admin
+ *                           service token (public-reference hubs) or
+ *                           a donor collector's token (private hubs,
+ *                           via `market_hub_collectors`).
+ *
+ * Ownership / viewing rules now go through the hub overlay:
+ *
+ *   - "Platform default" == `hub.is_public_reference = true`. Polled
+ *     by the service token (player_structure) or unauth'd (NPC).
+ *   - "Donor-registered" == `hub.is_public_reference = false`. Polled
+ *     by walking `market_hub_collectors` with within-tick failover.
+ *   - "This donor's structures" is derived from the collector join —
+ *     see {@see self::scopeForCollector()}. A hub may have several
+ *     collectors (one per donor with docking rights) but only one
+ *     watched row.
  *
  * Writes here trigger work on the next Python poller tick — the poller
- * reads `enabled = 1` rows only and does its own work via
- * `market_orders` + `outbox`. This model is pure Laravel-side
+ * reads `enabled = 1` rows with non-frozen hubs only, does its own
+ * work via `market_orders` + `outbox`. This model is pure Laravel-side
  * read/write for the admin UI; it never touches ESI directly.
  *
- * @property int             $id
- * @property string          $location_type  'npc_station' | 'player_structure'
- * @property int             $region_id
- * @property int             $location_id
- * @property string|null     $name
- * @property int|null        $owner_user_id
- * @property bool            $enabled
+ * @property int                  $id
+ * @property string               $location_type  'npc_station' | 'player_structure'
+ * @property int                  $region_id
+ * @property int                  $location_id
+ * @property int                  $hub_id
+ * @property string|null          $name
+ * @property bool                 $enabled
  * @property CarbonInterface|null $last_polled_at
- * @property int             $consecutive_failure_count
- * @property string|null     $last_error
+ * @property int                  $consecutive_failure_count
+ * @property string|null          $last_error
  * @property CarbonInterface|null $last_error_at
- * @property string|null     $disabled_reason
- * @property CarbonInterface $created_at
- * @property CarbonInterface $updated_at
+ * @property string|null          $disabled_reason
+ * @property CarbonInterface      $created_at
+ * @property CarbonInterface      $updated_at
  */
 class MarketWatchedLocation extends Model
 {
@@ -71,8 +76,8 @@ class MarketWatchedLocation extends Model
         'location_type',
         'region_id',
         'location_id',
+        'hub_id',
         'name',
-        'owner_user_id',
         'enabled',
         'last_polled_at',
         'consecutive_failure_count',
@@ -86,7 +91,7 @@ class MarketWatchedLocation extends Model
         return [
             'region_id' => 'integer',
             'location_id' => 'integer',
-            'owner_user_id' => 'integer',
+            'hub_id' => 'integer',
             'enabled' => 'boolean',
             'last_polled_at' => 'datetime',
             'consecutive_failure_count' => 'integer',
@@ -100,17 +105,17 @@ class MarketWatchedLocation extends Model
      * the canonical price feed until re-seeded, which is not the kind
      * of mistake a Filament "Delete" button should be able to cause.
      *
-     * Guarding in the model means a tinker, artisan, or other code path
-     * that bypasses the resource's UI-level protection still can't
-     * delete the row — it has to go out of its way by using
-     * `withoutEvents()` or a raw query.
+     * Guarding at the model means a tinker, artisan, or other code
+     * path that bypasses the resource's UI-level protection still
+     * can't delete the row — it has to go out of its way by using
+     * `withoutEvents()` or a raw query. The Jita hub row itself has
+     * the same guard in {@see MarketHub::booted()}.
      */
     protected static function booted(): void
     {
         static::deleting(function (self $model): void {
             if (
-                $model->owner_user_id === null
-                && (int) $model->region_id === self::JITA_REGION_ID
+                (int) $model->region_id === self::JITA_REGION_ID
                 && (int) $model->location_id === self::JITA_LOCATION_ID
             ) {
                 throw new DomainException(
@@ -124,13 +129,12 @@ class MarketWatchedLocation extends Model
     // -- relations --------------------------------------------------------
 
     /**
-     * The admin user who originally added the row, if any. NULL means
-     * "platform default" — admin-managed rows don't track an
-     * individual owner because they survive admin turnover.
+     * Canonical hub this watched row drives. Carries the
+     * public-reference flag + collector / entitlement tables.
      */
-    public function owner(): BelongsTo
+    public function hub(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'owner_user_id');
+        return $this->belongsTo(MarketHub::class, 'hub_id');
     }
 
     /**
@@ -146,24 +150,39 @@ class MarketWatchedLocation extends Model
 
     // -- scopes -----------------------------------------------------------
 
-    /** Platform-default (admin-managed) rows only. */
-    public function scopePlatformOwned($query)
+    /** Rows whose hub is a public-reference (NPC / admin baseline) hub. */
+    public function scopePublicReference(Builder $query): Builder
     {
-        return $query->whereNull('owner_user_id');
+        return $query->whereHas('hub', fn (Builder $q) => $q->where('is_public_reference', true));
     }
 
-    /** Donor-owned rows only. */
-    public function scopeDonorOwned($query)
+    /** Rows whose hub is a private (donor-registered) hub. */
+    public function scopePrivate(Builder $query): Builder
     {
-        return $query->whereNotNull('owner_user_id');
+        return $query->whereHas('hub', fn (Builder $q) => $q->where('is_public_reference', false));
+    }
+
+    /**
+     * Watched rows attributable to a given donor — any hub the user is
+     * a collector for. Replaces the pre-ADR-0005 "owner_user_id = X"
+     * scoping used by /account/settings for listing + row-level
+     * authorisation on remove.
+     *
+     * Users with no collector rows get an empty result set.
+     */
+    public function scopeForCollector(Builder $query, int $userId): Builder
+    {
+        return $query->whereHas(
+            'hub.collectors',
+            fn (Builder $q) => $q->where('user_id', $userId),
+        );
     }
 
     // -- predicates -------------------------------------------------------
 
     public function isJita(): bool
     {
-        return $this->owner_user_id === null
-            && (int) $this->region_id === self::JITA_REGION_ID
+        return (int) $this->region_id === self::JITA_REGION_ID
             && (int) $this->location_id === self::JITA_LOCATION_ID;
     }
 

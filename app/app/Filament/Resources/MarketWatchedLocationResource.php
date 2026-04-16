@@ -38,11 +38,13 @@ use UnitEnum;
 /**
  * /admin/market-watched-locations — admin surface for the market poller's driver table.
  *
- * ADR-0004 § Filament / frontend split. This resource covers the
- * **platform-default** (admin-managed, `owner_user_id = NULL`) slice
- * of `market_watched_locations`. Donor-owned rows appear read-only in
- * the list (operators may want to spot-check activity) but their
- * create/edit flow lives at `/account/settings`, not here.
+ * ADR-0004 § Filament / frontend split, updated for ADR-0005 §
+ * Canonical hub model. This resource covers **platform-default**
+ * (public-reference) rows — hub-backed, admin-managed. Private
+ * (donor-registered) rows appear in the list for visibility
+ * (classification badge + filter) but their create/edit flow lives
+ * at `/account/settings`, not here. Classification is derived from
+ * `market_hubs.is_public_reference`, not an owner column.
  *
  * Phase 4b scope:
  *
@@ -304,13 +306,11 @@ class MarketWatchedLocationResource extends Resource
                     ->searchable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
-                TextColumn::make('owner_user_id')
-                    ->label('Owner')
-                    ->formatStateUsing(fn ($state, MarketWatchedLocation $record): string => $record->owner?->name
-                        ?? ($state === null ? 'Platform' : '#'.$state)
-                    )
+                TextColumn::make('hub.is_public_reference')
+                    ->label('Classification')
+                    ->formatStateUsing(fn ($state): string => $state ? 'Platform' : 'Private hub')
                     ->badge()
-                    ->color(fn (MarketWatchedLocation $record): string => $record->owner_user_id === null ? 'success' : 'warning'),
+                    ->color(fn ($state): string => $state ? 'success' : 'warning'),
 
                 IconColumn::make('enabled')
                     ->label('On')
@@ -352,14 +352,14 @@ class MarketWatchedLocationResource extends Resource
                     ->placeholder('All')
                     ->trueLabel('Enabled only')
                     ->falseLabel('Disabled only'),
-                TernaryFilter::make('owner')
-                    ->label('Owner')
+                TernaryFilter::make('classification')
+                    ->label('Classification')
                     ->placeholder('All')
                     ->trueLabel('Platform')
-                    ->falseLabel('Donor-owned')
+                    ->falseLabel('Private hub')
                     ->queries(
-                        true: fn ($query) => $query->whereNull('owner_user_id'),
-                        false: fn ($query) => $query->whereNotNull('owner_user_id'),
+                        true: fn ($query) => $query->publicReference(),
+                        false: fn ($query) => $query->private(),
                         blank: fn ($query) => $query,
                     ),
             ])

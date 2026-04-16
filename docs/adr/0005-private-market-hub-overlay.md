@@ -232,11 +232,25 @@ misconfiguration can silently broadcast a private hub.
 ## Follow-ups
 
 1. Livewire self-service page (`/account/market-hubs`): register,
-   set default, revoke.
+   set default, revoke. Note: `/account/settings` already handles
+   register (via the extended `addStructure()`) + revoke (via the
+   rewritten `removeStructure()` that removes the donor's collector
+   + self-entitlement without tearing down the watched row). A
+   dedicated `/account/market-hubs` page would only add set-default
+   (`users.default_private_market_hub_id`) and a richer multi-hub
+   list view.
 2. Filament admin resource for cross-hub audit + grant issuance.
-3. Python poller update: pick collectors via
+3. ~~Python poller update: pick collectors via
    `market_hub_collectors` with failover; retire
-   `market_watched_locations.owner_user_id`.
+   `market_watched_locations.owner_user_id`.~~ **Done.** Poller
+   rewrite landed in PR `feat(markets): poller picks tokens via
+   market_hub_collectors (ADR-0005 #3)`. Column retirement landed
+   in the follow-up: model + Livewire + Filament + admin create
+   page refactored off the column; migration
+   `2026_04_16_600000_retire_market_watched_locations_owner_user_id`
+   dropped the column, promoted `hub_id` to NOT NULL, and added
+   `UNIQUE(hub_id)` so the "one polling lane per physical market"
+   invariant is DB-enforced.
 4. Market page "context switch" UX (Jita only / Jita vs private /
    private only) + comparison panel backed by one Flux query.
 5. Phase-2: character → corp / alliance resolver + group-sharing UX.

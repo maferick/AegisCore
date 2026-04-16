@@ -8,6 +8,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Retired `market_watched_locations.owner_user_id` (closes ADR-0005
+  Follow-up #3).** The poller stopped reading the column two commits
+  ago; this pass refactors every remaining reader/writer and drops
+  the column from the schema. Classification ("platform default" vs
+  "donor-registered") now lives exclusively on
+  `market_hubs.is_public_reference`; donor ownership is derived from
+  `market_hub_collectors.user_id`. Changes:
+  - **`MarketWatchedLocation` model.** Dropped `owner_user_id` from
+    `$fillable` + casts + `owner()` relation. Added `hub()` belongsTo
+    + new scopes `publicReference()` / `private()` / `forCollector($userId)`
+    that replace `scopePlatformOwned` / `scopeDonorOwned`. Jita
+    delete-guard + `isJita()` now key on `(region_id, location_id)`
+    alone — the owner-null check was a belt-and-braces line that
+    couldn't actually catch anything ADR-0005's hub-level guard
+    doesn't already prevent.
+  - **`AccountSettings` Livewire component.** `watchedStructures()`
+    uses the new `forCollector` scope (hub → collector join).
+    `addStructure()` upserts the watched row by `hub_id` (one
+    polling lane per hub, per ADR-0005 § Registration flow) and
+    clears any prior `disabled_reason` / `is_active = false` on the
+    hub so a donor re-auth naturally un-freezes a
+    `'no_active_collector'` hub. `removeStructure()` changes
+    semantics: it deletes the donor's collector + self-entitlement
+    on the target hub rather than deleting the watched row — if
+    other donors still collect, polling continues for them; if this
+    was the last collector, the poller naturally freezes the hub on
+    its next tick.
+  - **Filament admin surface.** `MarketWatchedLocationResource`
+    swaps the owner column + owner filter for a classification
+    badge / filter sourced from `hub.is_public_reference`. The
+    `CreateMarketWatchedLocation` page now `firstOrCreate`s a
+    public-reference hub for the entered `(location_type,
+    location_id)` and points the new watched row at it — closes
+    the same "admin create leaves hub_id NULL" gap the donor flow
+    had before this PR.
+  - **Migration `2026_04_16_600000`.** Deduplicates any hub with
+    multiple watched rows (no-op in current prod; safety net for
+    other envs), drops the legacy `uniq_watched_owner_location`
+    + owner FK + column, promotes `hub_id` to NOT NULL, adds
+    `UNIQUE(hub_id)` so the "one polling lane per physical
+    market" invariant is DB-enforced. Fully idempotent — each
+    step checks current state via `information_schema` and
+    skips if already applied. Incidentally fixed a latent bug in
+    migration `2026_04_14_000013`'s `down()` that tried to drop
+    `idx_watched_hub` before `dropConstrainedForeignId('hub_id')`
+    (would have failed with SQLSTATE HY000/1553 on any rollback
+    exercise).
+  - **Unit tests.** `MarketWatchedLocationTest` updated to match
+    the new model — removed the "donor-owned row sharing Jita's
+    location_id" test (physically impossible post-migration: one
+    hub per `(location_type, location_id)`; Jita's hub is
+    public-reference by seed).
+  - **Docstring drift.** `EveMarketToken` + `python/market_poller/config.py`
+    docstrings updated to point at `market_hub_collectors.user_id`
+    as the ownership invariant.
+
+  Verified live: migration ran cleanly against the production DB
+  (`owner_user_id` column dropped, `UNIQUE(hub_id)` in place);
+  scheduler continues polling both Jita and the WinterCo private
+  hub without a restart needed (the poller already stopped reading
+  the column in the previous commit).
+
 - **Market poller picks tokens via `market_hub_collectors` instead of
   `market_watched_locations.owner_user_id` (ADR-0005 § Follow-up 3).**
   Closes the shared-trust gap ADR-0005 opened the canonical-hub model

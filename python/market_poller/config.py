@@ -19,11 +19,12 @@ from dataclasses import dataclass, field, replace
 #
 #   - npc_station:     region endpoint + client-side location filter,
 #                      no auth.
-#   - player_structure: admin-owned (owner_user_id IS NULL) paths use
-#                      the eve_service_tokens service character; donor-
-#                      owned (owner_user_id = <user>) paths use
-#                      eve_market_tokens and land in the next rollout
-#                      step (ADR-0004 § donor self-service).
+#   - player_structure: classification comes from the hub the watched
+#                      row points at (ADR-0005). Public-reference hubs
+#                      (`market_hubs.is_public_reference = true`) use
+#                      the admin `eve_service_tokens` singleton;
+#                      private hubs walk `market_hub_collectors` with
+#                      failover (donor tokens in `eve_market_tokens`).
 SUPPORTED_LOCATION_TYPES: frozenset[str] = frozenset({"npc_station", "player_structure"})
 
 

@@ -57,7 +57,10 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('market_watched_locations', function (Blueprint $table) {
-            $table->dropIndex('idx_watched_hub');
+            // Drop FK + column first; MariaDB auto-drops
+            // `idx_watched_hub` with the column. Dropping the index
+            // before the FK fails with SQLSTATE HY000/1553 because
+            // `idx_watched_hub` is the FK's supporting index.
             $table->dropConstrainedForeignId('hub_id');
         });
     }

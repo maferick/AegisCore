@@ -43,9 +43,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *                     embodies. UNIQUE so re-auth upserts in place.
  *
  * Before every ESI call, the Python poller asserts
- * `token.user_id == market_watched_location.owner_user_id` AND
- * `token.character_id ∈ user.characters`. Mismatch is a security
- * violation: immediate row disable, not routine error handling.
+ * `token.user_id == market_hub_collector.user_id` AND
+ * `token.character_id ∈ user.characters` (ADR-0005). Mismatch is a
+ * security violation: immediate collector disable, not routine
+ * error handling.
  *
  * Access/refresh tokens ride Laravel's `'encrypted'` cast. APP_KEY is
  * the encryption key; a SELECT * leak is ciphertext. The Python
