@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Pages;
 
+use App\Filament\Widgets\EnrichmentTrendChart;
+use App\Filament\Widgets\IngestThroughputChart;
 use App\Filament\Widgets\PipelineHealthWidget;
+use App\Filament\Widgets\TheaterRateChart;
 use Filament\Pages\Page;
 
 /**
@@ -44,5 +47,26 @@ class PipelineHealth extends Page
     public function getHeaderWidgetsColumns(): int|array
     {
         return 1;
+    }
+
+    /**
+     * Charts render below the stat cards. Two-column layout so
+     * ingest-throughput + theater-rate sit side by side, and the
+     * enrichment-trend bar gets the full width underneath.
+     *
+     * @return array<int, class-string>
+     */
+    protected function getFooterWidgets(): array
+    {
+        return [
+            IngestThroughputChart::class,
+            TheaterRateChart::class,
+            EnrichmentTrendChart::class,
+        ];
+    }
+
+    public function getFooterWidgetsColumns(): int|array
+    {
+        return 2;
     }
 }
