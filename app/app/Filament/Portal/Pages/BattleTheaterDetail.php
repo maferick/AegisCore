@@ -118,8 +118,6 @@ class BattleTheaterDetail extends Page
             ->whereIn('entity_id', $charIds->merge($corpIds)->merge($allIds)->unique()->values()->all())
             ->pluck('name', 'entity_id');
 
-        $sideTotals = $this->computeSideTotals($participants, $sides);
-
         $allianceRows = $this->buildAllianceRollup($participants, $names, $sides);
 
         $killmailIds = DB::table('battle_theater_killmails')
@@ -128,6 +126,15 @@ class BattleTheaterDetail extends Page
             ->all();
 
         $shipsByCharacter = $this->buildShipRollup($killmailIds);
+
+        // ISK destroyed per side is computed by attacker-side
+        // attribution across killmails (zkillboard-style): if a Side A
+        // pilot appears on a killmail, that kill's total_value rolls
+        // into Side A's destroyed total. Double-attribution on mixed
+        // fights is accepted — it matches the mental model users
+        // already have from zkb.
+        $iskDestroyedBySide = $this->buildIskDestroyedBySide($killmailIds, $sides);
+        $sideTotals = $this->computeSideTotals($participants, $sides, $iskDestroyedBySide);
 
         // Gather every ship type id referenced across pilot hulls,
         // composition, kill feed, etc., and hydrate name + group in
@@ -283,7 +290,7 @@ class BattleTheaterDetail extends Page
      * @param  Collection<int, \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant>  $participants
      * @return array<string, array<string, int|float>>
      */
-    private function computeSideTotals(Collection $participants, BattleTheaterSideResolution $sides): array
+    private function computeSideTotals(Collection $participants, BattleTheaterSideResolution $sides, array $iskDestroyedBySide): array
     {
         $zero = [
             'pilots' => 0,
@@ -311,11 +318,55 @@ class BattleTheaterDetail extends Page
             $totals[$side]['isk_lost'] += (float) $p->isk_lost;
         }
 
-        $totals[BattleTheaterSideResolver::SIDE_A]['isk_killed'] = $totals[BattleTheaterSideResolver::SIDE_B]['isk_lost'];
-        $totals[BattleTheaterSideResolver::SIDE_B]['isk_killed'] = $totals[BattleTheaterSideResolver::SIDE_A]['isk_lost'];
-        $totals[BattleTheaterSideResolver::SIDE_C]['isk_killed'] = 0.0;
+        foreach ([BattleTheaterSideResolver::SIDE_A, BattleTheaterSideResolver::SIDE_B, BattleTheaterSideResolver::SIDE_C] as $s) {
+            $totals[$s]['isk_killed'] = (float) ($iskDestroyedBySide[$s] ?? 0.0);
+        }
 
         return $totals;
+    }
+
+    /**
+     * Attacker-side ISK attribution. For each killmail, sum its
+     * total_value into every side that had an attacker present.
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<string, float>
+     */
+    private function buildIskDestroyedBySide(array $killmailIds, BattleTheaterSideResolution $sides): array
+    {
+        $out = [
+            BattleTheaterSideResolver::SIDE_A => 0.0,
+            BattleTheaterSideResolver::SIDE_B => 0.0,
+            BattleTheaterSideResolver::SIDE_C => 0.0,
+        ];
+        if ($killmailIds === []) {
+            return $out;
+        }
+
+        $values = DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->pluck('total_value', 'killmail_id');
+
+        // killmail_id -> set of sides that had an attacker on it.
+        $sidesPerKm = [];
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('character_id')
+            ->select(['killmail_id', 'character_id'])
+            ->get()
+            ->each(function ($row) use (&$sidesPerKm, $sides): void {
+                $side = $sides->sideByCharacterId[(int) $row->character_id] ?? BattleTheaterSideResolver::SIDE_C;
+                $sidesPerKm[(int) $row->killmail_id][$side] = true;
+            });
+
+        foreach ($sidesPerKm as $kmId => $sideSet) {
+            $value = (float) ($values[$kmId] ?? 0);
+            foreach (array_keys($sideSet) as $s) {
+                $out[$s] += $value;
+            }
+        }
+
+        return $out;
     }
 
     /**

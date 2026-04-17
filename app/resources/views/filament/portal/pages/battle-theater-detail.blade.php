@@ -22,17 +22,23 @@
     /** @var array $flagship_logos */
     /** @var array $header_stats */
 
-    $sideALabel = $sides->sideABlocId ? ($blocs[$sides->sideABlocId]->display_name ?? 'Side A') : 'Side A';
-    $sideBLabel = $sides->sideBBlocId ? ($blocs[$sides->sideBBlocId]->display_name ?? 'Side B') : 'No opposing bloc';
+    $sideBloc = fn (?int $blocId): ?string => $blocId ? ($blocs[$blocId]->display_name ?? null) : null;
+    $blocA = $sideBloc($sides->sideABlocId);
+    $blocB = $sideBloc($sides->sideBBlocId);
+    $flagA = $flagship_logos[S::SIDE_A] ?? null;
+    $flagB = $flagship_logos[S::SIDE_B] ?? null;
 
-    // EVE image server helpers. CCP CDN, no auth, public cache.
+    // Banner headline = biggest alliance on the side. Bloc name (e.g.
+    // "WinterCo") becomes a subtitle — the alliance is what people
+    // recognise on an actual battle report.
+    $sideAHeadline = $flagA['alliance_name'] ?? $blocA ?? 'Side A';
+    $sideBHeadline = $flagB['alliance_name'] ?? $blocB ?? 'No opposing side';
+
     $charImg     = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/characters/{$id}/portrait?size={$size}" : null;
     $allianceImg = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/alliances/{$id}/logo?size={$size}" : null;
-    $corpImg     = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/corporations/{$id}/logo?size={$size}" : null;
     $typeImg     = fn (?int $id, int $size = 32): ?string => $id ? "https://images.evetech.net/types/{$id}/icon?size={$size}" : null;
     $typeRender  = fn (?int $id, int $size = 128): ?string => $id ? "https://images.evetech.net/types/{$id}/render?size={$size}" : null;
 
-    // Pick the pilot's primary hull (most appearances inside theater).
     $primaryShipOf = function (int $characterId) use ($ships_by_character, $ship_names): array {
         $rows = $ships_by_character[$characterId] ?? [];
         if ($rows === []) return ['type_id' => null, 'name' => '—'];
@@ -41,22 +47,29 @@
         return ['type_id' => $tid, 'name' => $ship_names[$tid] ?? ('#' . $tid)];
     };
 
-    $sideBadgeCss = fn (string $s): string => match ($s) {
-        'A'     => 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-200',
-        'B'     => 'bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-200',
-        default => 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+    // Side → Filament semantic colour (for x-filament::badge).
+    $sideColor = fn (string $s): string => match ($s) {
+        'A' => 'info',
+        'B' => 'danger',
+        default => 'gray',
     };
 
-    // ISK efficiency split — Side A % / Side B %. Together they sum
-    // to 100 whenever any ISK was traded. Drives the big bar under
-    // the VS banner.
+    // Side → concrete Tailwind palette (for bare utility classes —
+    // Tailwind JIT only ships the colours it sees as literals).
+    $sideTone = fn (string $s): string => match ($s) {
+        'A' => 'blue',
+        'B' => 'red',
+        default => 'gray',
+    };
+
     $tA = $side_totals[S::SIDE_A];
     $tB = $side_totals[S::SIDE_B];
-    $iskTraded = (float) ($tA['isk_killed'] + $tA['isk_lost']);
-    $effA = $iskTraded > 0 ? round($tA['isk_killed'] / $iskTraded * 100, 1) : 50.0;
-    $effB = $iskTraded > 0 ? round($tB['isk_killed'] / $iskTraded * 100, 1) : 50.0;
+    $effA = ($tA['isk_killed'] + $tA['isk_lost']) > 0 ? round($tA['isk_killed'] / ($tA['isk_killed'] + $tA['isk_lost']) * 100, 1) : 50.0;
+    $effB = ($tB['isk_killed'] + $tB['isk_lost']) > 0 ? round($tB['isk_killed'] / ($tB['isk_killed'] + $tB['isk_lost']) * 100, 1) : 50.0;
+    $abDestroyed = (float) ($tA['isk_killed'] + $tB['isk_killed']);
+    $barA = $abDestroyed > 0 ? round($tA['isk_killed'] / $abDestroyed * 100, 1) : 50.0;
+    $barB = 100 - $barA;
 
-    // Security colour for the system label.
     $sysSec = (float) ($theater->primarySystem?->security_status ?? 0.0);
     $sysSecClass = match (true) {
         $sysSec >= 0.5  => 'text-green-600 dark:text-green-400',
@@ -65,47 +78,34 @@
     };
     $sysSecLabel = number_format($sysSec, 1);
 
-    // Pretty duration HH:MM:SS.
     $dur = $theater->durationSeconds();
     $durFmt = sprintf('%02d:%02d:%02d', intdiv($dur, 3600), intdiv($dur % 3600, 60), $dur % 60);
-
-    $flagA = $flagship_logos[S::SIDE_A] ?? null;
-    $flagB = $flagship_logos[S::SIDE_B] ?? null;
 @endphp
 
 <x-filament-panels::page>
 
     {{-- =====================================================
-         HEADER — system, region, time, top-line counts
+         HEADER — system + top-line counts
          ===================================================== --}}
-    <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6 mb-6">
-        <div class="flex flex-wrap items-baseline justify-between gap-4 mb-4">
-            <div class="min-w-0">
-                <h2 class="text-xl font-bold truncate">
-                    Battle in
-                    <span class="{{ $sysSecClass }}">{{ $theater->primarySystem?->name ?? '#'.$theater->primary_system_id }}</span>
-                </h2>
-                <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 flex flex-wrap items-center gap-2">
-                    <span class="{{ $sysSecClass }} font-mono">{{ $sysSecLabel }}</span>
-                    <span>·</span>
-                    <span>{{ $theater->region?->name ?? '—' }}</span>
-                    <span>·</span>
-                    <span class="font-mono">{{ $theater->start_time?->format('Y-m-d H:i') }} → {{ $theater->end_time?->format('H:i') }} EVE</span>
-                    <span>·</span>
-                    <span class="font-mono">{{ $durFmt }}</span>
-                </div>
-            </div>
-            <div>
-                @if ($theater->locked_at)
-                    <span class="px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs font-medium">Locked</span>
-                @else
-                    <span class="px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 text-xs font-medium">Live</span>
-                @endif
-            </div>
-        </div>
+    <x-filament::section icon="heroicon-o-information-circle">
+        <x-slot name="heading">
+            <span class="{{ $sysSecClass }} font-mono mr-1">{{ $sysSecLabel }}</span>
+            {{ $theater->primarySystem?->name ?? '#'.$theater->primary_system_id }}
+        </x-slot>
+        <x-slot name="description">
+            {{ $theater->region?->name ?? '—' }} ·
+            {{ $theater->start_time?->format('Y-m-d H:i') }} → {{ $theater->end_time?->format('H:i') }} EVE ·
+            {{ $durFmt }}
+        </x-slot>
+        <x-slot name="headerEnd">
+            @if ($theater->locked_at)
+                <x-filament::badge color="gray">Locked</x-filament::badge>
+            @else
+                <x-filament::badge color="success">Live</x-filament::badge>
+            @endif
+        </x-slot>
 
-        {{-- Top-line metric strip --}}
-        <dl class="grid grid-cols-2 md:grid-cols-6 gap-4 border-t border-gray-100 dark:border-gray-800 pt-4">
+        <dl class="grid grid-cols-2 md:grid-cols-6 gap-4">
             <div>
                 <dt class="text-xs uppercase tracking-wider text-gray-400">ISK destroyed</dt>
                 <dd class="text-lg font-mono font-bold text-red-600 dark:text-red-400">{{ Battles::formatIsk((float) $theater->total_isk_lost) }}</dd>
@@ -131,30 +131,34 @@
                 <dd class="text-lg font-mono font-bold">{{ number_format($header_stats['alliances']) }}</dd>
             </div>
         </dl>
-    </div>
+    </x-filament::section>
 
     {{-- =====================================================
-         VS BANNER + EFFICIENCY SPLIT
+         VS BANNER — big alliance logos, efficiency split
+         (custom markup; Filament has no banner primitive)
          ===================================================== --}}
-    <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6 mb-6">
+    <x-filament::section>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-            {{-- Side A banner --}}
+            {{-- Side A --}}
             <div class="flex items-center gap-4 min-w-0">
                 @if ($flagA)
-                    <img src="{{ $allianceImg($flagA['alliance_id'], 128) }}" alt="" class="w-20 h-20 rounded-lg flex-shrink-0 ring-2 ring-blue-500/40" loading="lazy" />
+                    <x-filament::avatar src="{{ $allianceImg($flagA['alliance_id'], 128) }}" :circular="false" class="w-20 h-20 ring-2 ring-blue-500/40" />
                 @else
                     <div class="w-20 h-20 rounded-lg flex-shrink-0 bg-gradient-to-br from-blue-400/20 to-blue-600/20 ring-2 ring-blue-500/40 flex items-center justify-center">
                         <span class="text-blue-600 dark:text-blue-400 text-2xl font-black">A</span>
                     </div>
                 @endif
                 <div class="min-w-0">
-                    <div class="text-xs font-medium text-blue-500 uppercase tracking-wider">Side A</div>
-                    <div class="text-lg md:text-xl font-bold text-blue-600 dark:text-blue-400 truncate">{{ $sideALabel }}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ $tA['pilots'] }} pilots · {{ $tA['kills'] }} kills · {{ Battles::formatIsk($tA['isk_lost']) }} lost</div>
+                    <x-filament::badge color="info" size="xs">Side A</x-filament::badge>
+                    <div class="text-lg md:text-xl font-bold text-blue-600 dark:text-blue-400 truncate mt-1">{{ $sideAHeadline }}</div>
+                    @if ($blocA && $blocA !== $sideAHeadline)
+                        <div class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ $blocA }} bloc</div>
+                    @endif
+                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{{ $tA['pilots'] }}p · {{ $tA['kills'] }}k · {{ Battles::formatIsk($tA['isk_lost']) }} lost</div>
                 </div>
             </div>
 
-            {{-- Versus divider --}}
+            {{-- VS --}}
             <div class="text-center">
                 <div class="text-sm font-black tracking-[0.4em] text-gray-300 dark:text-gray-600">VS</div>
                 <div class="mt-2 text-xs text-gray-400 dark:text-gray-500">ISK efficiency</div>
@@ -165,27 +169,29 @@
                 </div>
             </div>
 
-            {{-- Side B banner --}}
+            {{-- Side B --}}
             <div class="flex items-center gap-4 min-w-0 md:flex-row-reverse md:text-right">
                 @if ($flagB)
-                    <img src="{{ $allianceImg($flagB['alliance_id'], 128) }}" alt="" class="w-20 h-20 rounded-lg flex-shrink-0 ring-2 ring-red-500/40" loading="lazy" />
+                    <x-filament::avatar src="{{ $allianceImg($flagB['alliance_id'], 128) }}" :circular="false" class="w-20 h-20 ring-2 ring-red-500/40" />
                 @else
                     <div class="w-20 h-20 rounded-lg flex-shrink-0 bg-gradient-to-br from-red-400/20 to-red-600/20 ring-2 ring-red-500/40 flex items-center justify-center">
                         <span class="text-red-600 dark:text-red-400 text-2xl font-black">B</span>
                     </div>
                 @endif
                 <div class="min-w-0">
-                    <div class="text-xs font-medium text-red-500 uppercase tracking-wider">Side B</div>
-                    <div class="text-lg md:text-xl font-bold text-red-600 dark:text-red-400 truncate">{{ $sideBLabel }}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ $tB['pilots'] }} pilots · {{ $tB['kills'] }} kills · {{ Battles::formatIsk($tB['isk_lost']) }} lost</div>
+                    <x-filament::badge color="danger" size="xs">Side B</x-filament::badge>
+                    <div class="text-lg md:text-xl font-bold text-red-600 dark:text-red-400 truncate mt-1">{{ $sideBHeadline }}</div>
+                    @if ($blocB && $blocB !== $sideBHeadline)
+                        <div class="text-xs text-gray-500 dark:text-gray-400 truncate">{{ $blocB }} bloc</div>
+                    @endif
+                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{{ $tB['pilots'] }}p · {{ $tB['kills'] }}k · {{ Battles::formatIsk($tB['isk_lost']) }} lost</div>
                 </div>
             </div>
         </div>
 
-        {{-- Efficiency split bar --}}
         <div class="mt-6 flex h-3 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800">
-            <div class="bg-blue-500" style="width: {{ $effA }}%"></div>
-            <div class="bg-red-500" style="width: {{ $effB }}%"></div>
+            <div class="bg-blue-500" style="width: {{ $barA }}%"></div>
+            <div class="bg-red-500" style="width: {{ $barB }}%"></div>
         </div>
 
         @if ($viewer === null || $viewer->bloc_unresolved)
@@ -194,39 +200,39 @@
                 <a href="/portal/account-settings" class="underline hover:text-gray-600 dark:hover:text-gray-300">Set your coalition</a> for viewer-relative sides.
             </p>
         @endif
-    </div>
+    </x-filament::section>
 
     {{-- =====================================================
-         SIDE STAT CARDS — kills / losses / ISK
+         SIDE STAT CARDS
          ===================================================== --}}
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         @foreach ([
-            S::SIDE_A => [$sideALabel, 'blue'],
-            S::SIDE_B => [$sideBLabel, 'red'],
-            S::SIDE_C => ['Other / third parties', 'gray'],
+            S::SIDE_A => [$sideAHeadline, 'info', $blocA],
+            S::SIDE_B => [$sideBHeadline, 'danger', $blocB],
+            S::SIDE_C => ['Other / third parties', 'gray', null],
         ] as $sideKey => $meta)
             @php
-                [$label, $tone] = $meta;
+                [$label, $color, $sub] = $meta;
+                $tone = $color === 'info' ? 'blue' : ($color === 'danger' ? 'red' : 'gray');
                 $t    = $side_totals[$sideKey];
                 $traded = (float) ($t['isk_killed'] + $t['isk_lost']);
                 $eff  = $traded > 0 ? round($t['isk_killed'] / $traded * 100, 1) : null;
-
-                $cardBorder  = match ($tone) { 'blue' => 'border-t-4 border-blue-500', 'red' => 'border-t-4 border-red-500', default => 'border-t-4 border-gray-300 dark:border-gray-600' };
-                $labelColor  = match ($tone) { 'blue' => 'text-blue-600 dark:text-blue-400', 'red' => 'text-red-600 dark:text-red-400', default => 'text-gray-600 dark:text-gray-400' };
             @endphp
-            <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 {{ $cardBorder }} p-5">
-                <div class="flex justify-between items-start mb-4">
-                    <div class="min-w-0 flex-1">
-                        <div class="text-xs font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">Side {{ $sideKey }}</div>
-                        <div class="text-base font-bold {{ $labelColor }} truncate mt-0.5">{{ $label }}</div>
+            <x-filament::section>
+                <x-slot name="heading">
+                    <div class="flex items-center gap-2">
+                        <x-filament::badge :color="$color" size="xs">Side {{ $sideKey }}</x-filament::badge>
+                        <span class="text-{{ $tone }}-600 dark:text-{{ $tone }}-400">{{ $label }}</span>
                     </div>
-                    @if ($eff !== null)
-                        <div class="text-right ml-3 flex-shrink-0">
-                            <div class="text-xs text-gray-400 dark:text-gray-500">Efficiency</div>
-                            <div class="text-sm font-mono font-bold {{ $labelColor }}">{{ $eff }}%</div>
-                        </div>
-                    @endif
-                </div>
+                </x-slot>
+                @if ($sub && $sub !== $label)
+                    <x-slot name="description">{{ $sub }} bloc</x-slot>
+                @endif
+                @if ($eff !== null)
+                    <x-slot name="headerEnd">
+                        <x-filament::badge :color="$color">{{ $eff }}% eff</x-filament::badge>
+                    </x-slot>
+                @endif
 
                 <dl class="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
                     <dt class="text-gray-500 dark:text-gray-400">Pilots</dt>
@@ -254,35 +260,34 @@
                     <dt class="text-gray-500 dark:text-gray-400">Damage done</dt>
                     <dd class="text-right font-mono font-medium">{{ number_format($t['damage_done']) }}</dd>
                 </dl>
-            </div>
+            </x-filament::section>
         @endforeach
     </div>
 
     {{-- =====================================================
-         MOST VALUABLE KILLS (per side)
+         MOST VALUABLE KILLS per side
          ===================================================== --}}
     @if (!empty($most_valuable_kills[S::SIDE_A]) || !empty($most_valuable_kills[S::SIDE_B]))
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         @foreach ([
-            S::SIDE_A => ['Side A — top kills', 'blue', $sideALabel],
-            S::SIDE_B => ['Side B — top kills', 'red', $sideBLabel],
+            S::SIDE_A => ['Top kills — Side A', 'info', $sideAHeadline],
+            S::SIDE_B => ['Top kills — Side B', 'danger', $sideBHeadline],
         ] as $sideKey => $meta)
             @php
-                [$title, $tone, $labelFor] = $meta;
+                [$title, $color, $labelFor] = $meta;
+                $tone = $color === 'info' ? 'blue' : ($color === 'danger' ? 'red' : 'gray');
                 $rows = $most_valuable_kills[$sideKey] ?? [];
-                $ringColor = $tone === 'blue' ? 'ring-blue-500/30' : 'ring-red-500/30';
-                $titleColor = $tone === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-red-600 dark:text-red-400';
             @endphp
-            <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-5">
-                <h3 class="text-sm font-semibold mb-1 {{ $titleColor }}">{{ $title }}</h3>
-                <div class="text-xs text-gray-400 dark:text-gray-500 mb-3 truncate">Kills by {{ $labelFor }}</div>
+            <x-filament::section icon="heroicon-o-trophy" :icon-color="$color">
+                <x-slot name="heading">{{ $title }}</x-slot>
+                <x-slot name="description">Kills by {{ $labelFor }}</x-slot>
                 @if ($rows === [])
                     <p class="text-sm text-gray-400 dark:text-gray-500 italic">No kills credited to this side.</p>
                 @else
                     <ul class="space-y-2">
                         @foreach ($rows as $km)
-                            <li class="flex items-center gap-3 p-2 rounded-lg bg-gray-50 dark:bg-gray-800/40 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                                <img src="{{ $typeRender($km['ship_type_id'], 64) }}" alt="" class="w-12 h-12 rounded flex-shrink-0 ring-1 {{ $ringColor }}" loading="lazy" />
+                            <li class="flex items-center gap-3 p-2 rounded-lg bg-gray-50 dark:bg-gray-800/40">
+                                <x-filament::avatar src="{{ $typeRender($km['ship_type_id'], 64) }}" :circular="false" class="w-12 h-12 ring-1 ring-{{ $tone }}-500/30" />
                                 <div class="min-w-0 flex-1">
                                     <div class="font-medium truncate">{{ $km['ship_name'] }}</div>
                                     <div class="text-xs text-gray-500 dark:text-gray-400 truncate">
@@ -300,7 +305,7 @@
                         @endforeach
                     </ul>
                 @endif
-            </div>
+            </x-filament::section>
         @endforeach
     </div>
     @endif
@@ -308,22 +313,21 @@
     {{-- =====================================================
          SHIP COMPOSITION per side
          ===================================================== --}}
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         @foreach ([
-            S::SIDE_A => ['Side A composition', 'blue', $sideALabel],
-            S::SIDE_B => ['Side B composition', 'red', $sideBLabel],
+            S::SIDE_A => ['Composition — Side A', 'info', $sideAHeadline],
+            S::SIDE_B => ['Composition — Side B', 'danger', $sideBHeadline],
         ] as $sideKey => $meta)
             @php
-                [$title, $tone, $labelFor] = $meta;
+                [$title, $color, $labelFor] = $meta;
+                $tone = $color === 'info' ? 'blue' : ($color === 'danger' ? 'red' : 'gray');
                 $rows = $composition[$sideKey] ?? [];
-                $titleColor = $tone === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-red-600 dark:text-red-400';
-                $barColor = $tone === 'blue' ? 'bg-blue-500' : 'bg-red-500';
                 $max = 0;
                 foreach ($rows as $r) { if ($r['count'] > $max) $max = $r['count']; }
             @endphp
-            <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-5">
-                <h3 class="text-sm font-semibold mb-1 {{ $titleColor }}">{{ $title }}</h3>
-                <div class="text-xs text-gray-400 dark:text-gray-500 mb-3 truncate">{{ $labelFor }}</div>
+            <x-filament::section icon="heroicon-o-squares-2x2" :icon-color="$color">
+                <x-slot name="heading">{{ $title }}</x-slot>
+                <x-slot name="description">{{ $labelFor }}</x-slot>
                 @if ($rows === [])
                     <p class="text-sm text-gray-400 dark:text-gray-500 italic">No ships flown for this side.</p>
                 @else
@@ -331,38 +335,37 @@
                         @foreach ($rows as $r)
                             @php $pct = $max > 0 ? round($r['count'] / $max * 100) : 0; @endphp
                             <li class="flex items-center gap-2 text-sm">
-                                <img src="{{ $typeImg($r['sample_type_id'], 32) }}" alt="" class="w-6 h-6 flex-shrink-0 rounded" loading="lazy" />
+                                <x-filament::avatar src="{{ $typeImg($r['sample_type_id'], 32) }}" :circular="false" size="sm" />
                                 <span class="truncate flex-shrink min-w-0">{{ $r['class'] }}</span>
                                 <div class="flex-1 h-1.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                                    <div class="h-1.5 rounded-full {{ $barColor }}" style="width: {{ $pct }}%"></div>
+                                    <div class="h-1.5 rounded-full bg-{{ $tone }}-500" style="width: {{ $pct }}%"></div>
                                 </div>
                                 <span class="font-mono font-semibold tabular-nums w-8 text-right">{{ $r['count'] }}</span>
                             </li>
                         @endforeach
                     </ul>
                 @endif
-            </div>
+            </x-filament::section>
         @endforeach
     </div>
 
     {{-- =====================================================
          TOP DAMAGE DEALERS per side
          ===================================================== --}}
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         @foreach ([
-            S::SIDE_A => ['Top damage — Side A', 'blue'],
-            S::SIDE_B => ['Top damage — Side B', 'red'],
+            S::SIDE_A => ['Top damage — Side A', 'info'],
+            S::SIDE_B => ['Top damage — Side B', 'danger'],
         ] as $sideKey => $meta)
             @php
-                [$title, $tone] = $meta;
+                [$title, $color] = $meta;
+                $tone = $color === 'info' ? 'blue' : ($color === 'danger' ? 'red' : 'gray');
                 $rows = $top_damage[$sideKey] ?? [];
-                $titleColor = $tone === 'blue' ? 'text-blue-600 dark:text-blue-400' : 'text-red-600 dark:text-red-400';
-                $barColor = $tone === 'blue' ? 'bg-blue-500' : 'bg-red-500';
                 $max = 0;
                 foreach ($rows as $r) { if ($r['damage_done'] > $max) $max = $r['damage_done']; }
             @endphp
-            <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-5">
-                <h3 class="text-sm font-semibold mb-3 {{ $titleColor }}">{{ $title }}</h3>
+            <x-filament::section icon="heroicon-o-bolt" :icon-color="$color">
+                <x-slot name="heading">{{ $title }}</x-slot>
                 @if ($rows === [])
                     <p class="text-sm text-gray-400 dark:text-gray-500 italic">No damage recorded.</p>
                 @else
@@ -370,9 +373,9 @@
                         @foreach ($rows as $r)
                             @php $pct = $max > 0 ? round($r['damage_done'] / $max * 100) : 0; @endphp
                             <li class="flex items-center gap-2 text-sm">
-                                <img src="{{ $charImg($r['character_id'], 32) }}" alt="" class="w-7 h-7 rounded flex-shrink-0" loading="lazy" />
+                                <x-filament::avatar src="{{ $charImg($r['character_id'], 32) }}" size="sm" />
                                 @if ($r['ship_type_id'])
-                                    <img src="{{ $typeImg($r['ship_type_id'], 32) }}" alt="" class="w-6 h-6 flex-shrink-0" loading="lazy" />
+                                    <x-filament::avatar src="{{ $typeImg($r['ship_type_id'], 32) }}" :circular="false" size="sm" />
                                 @endif
                                 <div class="min-w-0 flex-1">
                                     <div class="truncate font-medium">{{ $r['character_name'] }}</div>
@@ -385,7 +388,7 @@
                                 </div>
                                 <div class="flex items-center gap-2 flex-shrink-0">
                                     <div class="w-20 h-1.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                                        <div class="h-1.5 rounded-full {{ $barColor }}" style="width: {{ $pct }}%"></div>
+                                        <div class="h-1.5 rounded-full bg-{{ $tone }}-500" style="width: {{ $pct }}%"></div>
                                     </div>
                                     <span class="font-mono font-semibold tabular-nums text-xs w-14 text-right">{{ number_format($r['damage_done']) }}</span>
                                 </div>
@@ -393,29 +396,26 @@
                         @endforeach
                     </ul>
                 @endif
-            </div>
+            </x-filament::section>
         @endforeach
     </div>
 
     {{-- =====================================================
-         ROSTER BY SIDE — alliances per side
+         ROSTER BY SIDE
          ===================================================== --}}
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         @foreach ([
-            S::SIDE_A => ['Roster — Side A', 'blue'],
-            S::SIDE_B => ['Roster — Side B', 'red'],
+            S::SIDE_A => ['Roster — Side A', 'info'],
+            S::SIDE_B => ['Roster — Side B', 'danger'],
             S::SIDE_C => ['Third parties', 'gray'],
         ] as $sideKey => $meta)
             @php
-                [$title, $tone] = $meta;
+                [$title, $color] = $meta;
                 $rows = $roster_by_side[$sideKey] ?? collect();
-                $titleColor = $tone === 'blue' ? 'text-blue-600 dark:text-blue-400' : ($tone === 'red' ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400');
             @endphp
-            <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-5">
-                <h3 class="text-sm font-semibold mb-3 {{ $titleColor }}">
-                    {{ $title }}
-                    <span class="text-gray-400 dark:text-gray-500 font-normal text-xs ml-1">({{ $rows->count() }})</span>
-                </h3>
+            <x-filament::section icon="heroicon-o-user-group" :icon-color="$color">
+                <x-slot name="heading">{{ $title }}</x-slot>
+                <x-slot name="description">{{ $rows->count() }} alliance(s)</x-slot>
                 @if ($rows->isEmpty())
                     <p class="text-sm text-gray-400 dark:text-gray-500 italic">No alliances on this side.</p>
                 @else
@@ -423,7 +423,7 @@
                         @foreach ($rows as $row)
                             <li class="flex items-center gap-2 pb-2 border-b border-gray-50 dark:border-gray-800/60 last:border-0">
                                 @if ($row['alliance_id'] > 0)
-                                    <img src="{{ $allianceImg($row['alliance_id'], 32) }}" alt="" class="w-7 h-7 flex-shrink-0 rounded" loading="lazy" />
+                                    <x-filament::avatar src="{{ $allianceImg($row['alliance_id'], 32) }}" :circular="false" size="sm" />
                                 @else
                                     <div class="w-7 h-7 flex-shrink-0 rounded bg-gray-100 dark:bg-gray-800"></div>
                                 @endif
@@ -440,217 +440,169 @@
                         @endforeach
                     </ul>
                 @endif
-            </div>
+            </x-filament::section>
         @endforeach
     </div>
 
     {{-- =====================================================
-         KILL FEED — timeline (colored by victim side)
+         KILL FEED — narrative stack
          ===================================================== --}}
-    <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6 mb-6">
-        <h3 class="text-base font-semibold mb-4">
-            Kill feed
-            <span class="text-gray-400 dark:text-gray-500 font-normal text-sm ml-1">({{ count($kill_feed) }})</span>
-        </h3>
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="border-b border-gray-100 dark:border-gray-800">
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide w-20">Time</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Victim</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Ship</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Final blow</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">Inv.</th>
-                        <th class="py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">ISK</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach ($kill_feed as $km)
-                        @php
-                            $victimSide  = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? 'C') : 'C';
-                            $isHighValue = $km['total_value'] >= 1_000_000_000;
-                            $isMidValue  = $km['total_value'] >= 100_000_000 && ! $isHighValue;
-                            $sideBorderCss = match ($victimSide) {
-                                'A'     => 'border-l-4 border-blue-400',
-                                'B'     => 'border-l-4 border-red-400',
-                                default => 'border-l-4 border-gray-200 dark:border-gray-700',
-                            };
-                            $rowBg = $isHighValue
-                                ? 'bg-amber-50 dark:bg-amber-950/20'
-                                : ($isMidValue ? 'bg-amber-50/40 dark:bg-amber-950/10' : 'hover:bg-gray-50 dark:hover:bg-gray-800/40');
-                        @endphp
-                        <tr class="{{ $rowBg }} transition-colors">
-                            <td class="py-2.5 pr-3 font-mono text-xs text-gray-500 whitespace-nowrap {{ $sideBorderCss }} pl-2">
-                                {{ \Carbon\Carbon::parse($km['killed_at'])->format('H:i:s') }}
-                            </td>
-                            <td class="py-2.5 pr-3">
-                                <div class="flex items-center gap-2 min-w-0">
-                                    @if ($km['victim_id'])
-                                        <img src="{{ $charImg($km['victim_id'], 32) }}" alt="" class="w-7 h-7 rounded flex-shrink-0" loading="lazy" />
-                                    @endif
-                                    <div class="min-w-0">
-                                        <div class="truncate font-medium">{{ $km['victim_name'] }}</div>
-                                        @if ($km['victim_alliance_id'])
-                                            <div class="flex items-center gap-1 text-xs text-gray-400">
-                                                <img src="{{ $allianceImg($km['victim_alliance_id'], 16) }}" alt="" class="w-3 h-3 flex-shrink-0" loading="lazy" />
-                                                <span class="truncate">{{ $names[$km['victim_alliance_id']] ?? '#'.$km['victim_alliance_id'] }}</span>
-                                            </div>
-                                        @endif
-                                    </div>
-                                </div>
-                            </td>
-                            <td class="py-2.5 pr-3">
-                                <div class="flex items-center gap-2 min-w-0">
-                                    @if ($km['ship_type_id'] > 0)
-                                        <img src="{{ $typeImg($km['ship_type_id'], 32) }}" alt="" class="w-7 h-7 flex-shrink-0" loading="lazy" />
-                                    @endif
-                                    <span class="truncate">{{ $km['ship_name'] }}</span>
-                                </div>
-                            </td>
-                            <td class="py-2.5 pr-3">
-                                @if ($km['final_blow_char_id'])
-                                    <div class="flex items-center gap-2 min-w-0">
-                                        <img src="{{ $charImg($km['final_blow_char_id'], 32) }}" alt="" class="w-7 h-7 rounded flex-shrink-0" loading="lazy" />
-                                        <div class="min-w-0">
-                                            <div class="truncate">{{ $km['final_blow_name'] }}</div>
-                                            @if ($km['final_blow_ship_id'])
-                                                <div class="text-xs text-gray-400 truncate">{{ $ship_names[$km['final_blow_ship_id']] ?? '#'.$km['final_blow_ship_id'] }}</div>
-                                            @endif
-                                        </div>
-                                    </div>
-                                @else
-                                    <span class="text-gray-300 dark:text-gray-600">—</span>
-                                @endif
-                            </td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ $km['attacker_count'] }}</td>
-                            <td class="py-2.5 text-right font-mono {{ $isHighValue ? 'font-bold text-amber-700 dark:text-amber-400' : '' }}">
-                                {{ Battles::formatIsk($km['total_value']) }}
-                            </td>
-                        </tr>
-                    @endforeach
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <x-filament::section icon="heroicon-o-fire" collapsible>
+        <x-slot name="heading">Kill feed</x-slot>
+        <x-slot name="description">{{ count($kill_feed) }} killmails, ordered by time</x-slot>
+
+        <ol class="space-y-2">
+            @foreach ($kill_feed as $km)
+                @php
+                    $victimSide  = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? 'C') : 'C';
+                    $sideColorVictim = $sideColor($victimSide);
+                    $sideToneVictim  = $sideTone($victimSide);
+                    $isHighValue = $km['total_value'] >= 1_000_000_000;
+                    $isMidValue  = $km['total_value'] >= 100_000_000 && ! $isHighValue;
+                    $rowBg = $isHighValue
+                        ? 'bg-amber-50 dark:bg-amber-950/20'
+                        : ($isMidValue ? 'bg-amber-50/40 dark:bg-amber-950/10' : 'bg-gray-50 dark:bg-gray-800/40 hover:bg-gray-100 dark:hover:bg-gray-800');
+                @endphp
+                <li class="flex items-center gap-3 p-3 rounded-lg {{ $rowBg }} border-l-4 border-{{ $sideToneVictim }}-400 transition-colors">
+                    <div class="font-mono text-xs text-gray-500 whitespace-nowrap w-16 flex-shrink-0">{{ \Carbon\Carbon::parse($km['killed_at'])->format('H:i:s') }}</div>
+
+                    @if ($km['victim_id'])
+                        <x-filament::avatar src="{{ $charImg($km['victim_id'], 32) }}" size="sm" />
+                    @endif
+                    @if ($km['ship_type_id'] > 0)
+                        <x-filament::avatar src="{{ $typeImg($km['ship_type_id'], 32) }}" :circular="false" size="sm" />
+                    @endif
+
+                    <div class="min-w-0 flex-1 text-sm leading-snug">
+                        <span class="font-medium">{{ $km['victim_name'] }}</span>
+                        @if ($km['victim_alliance_id'])
+                            <span class="text-gray-500 dark:text-gray-400">({{ $names[$km['victim_alliance_id']] ?? '#'.$km['victim_alliance_id'] }})</span>
+                        @endif
+                        <span class="text-gray-400">lost a</span>
+                        <span class="font-medium">{{ $km['ship_name'] }}</span>
+                        @if ($km['final_blow_name'])
+                            <span class="text-gray-400">to</span>
+                            <span class="font-medium">{{ $km['final_blow_name'] }}</span>
+                            @if ($km['final_blow_alliance_id'])
+                                <span class="text-gray-500 dark:text-gray-400">({{ $names[$km['final_blow_alliance_id']] ?? '#'.$km['final_blow_alliance_id'] }})</span>
+                            @endif
+                            @if ($km['final_blow_ship_id'])
+                                <span class="text-gray-400">flying a {{ $ship_names[$km['final_blow_ship_id']] ?? '#'.$km['final_blow_ship_id'] }}</span>
+                            @endif
+                        @endif
+                        <span class="text-gray-400 font-mono text-xs ml-1">· {{ $km['attacker_count'] }} involved</span>
+                    </div>
+
+                    @if ($km['final_blow_char_id'])
+                        <x-filament::avatar src="{{ $charImg($km['final_blow_char_id'], 32) }}" size="sm" />
+                    @endif
+
+                    <div class="font-mono text-sm text-right flex-shrink-0 w-20 {{ $isHighValue ? 'font-bold text-amber-700 dark:text-amber-400' : ($km['total_value'] > 0 ? '' : 'text-gray-400') }}">
+                        {{ $km['total_value'] > 0 ? Battles::formatIsk($km['total_value']) : '—' }}
+                    </div>
+                </li>
+            @endforeach
+        </ol>
+    </x-filament::section>
 
     {{-- =====================================================
-         PILOT TABLE
+         PILOTS — three parallel lists, no table
          ===================================================== --}}
-    <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6 mb-6">
-        <h3 class="text-base font-semibold mb-4">
-            Pilots
-            <span class="text-gray-400 dark:text-gray-500 font-normal text-sm ml-1">({{ $participants->count() }})</span>
-        </h3>
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="border-b border-gray-100 dark:border-gray-800">
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Side</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Pilot</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Ship</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Alliance</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">Kills</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">FB</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">Dmg done</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">Dmg taken</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">Deaths</th>
-                        <th class="py-2 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">ISK lost</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach ($participants as $p)
-                        @php
-                            $cid         = (int) $p->character_id;
-                            $side        = $sides->sideByCharacterId[$cid] ?? 'C';
-                            $charName    = $names[$cid] ?? 'Character #'.$cid;
-                            $allianceName = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : '—';
-                            $ship        = $primaryShipOf($cid);
-                        @endphp
-                        <tr class="border-b border-gray-50 dark:border-gray-800/60 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
-                            <td class="py-2.5 pr-3">
-                                <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold {{ $sideBadgeCss($side) }}">
-                                    {{ $side }}
-                                </span>
-                            </td>
-                            <td class="py-2.5 pr-3">
-                                <div class="flex items-center gap-2 min-w-0">
-                                    <img src="{{ $charImg($cid, 32) }}" alt="" class="w-7 h-7 rounded flex-shrink-0" loading="lazy" />
-                                    <span class="truncate font-medium">{{ $charName }}</span>
-                                </div>
-                            </td>
-                            <td class="py-2.5 pr-3">
-                                <div class="flex items-center gap-2 min-w-0">
+    <x-filament::section icon="heroicon-o-users" collapsible>
+        <x-slot name="heading">Pilots</x-slot>
+        <x-slot name="description">{{ $participants->count() }} participants</x-slot>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            @foreach ([
+                S::SIDE_A => ['Side A', 'info', $sideAHeadline],
+                S::SIDE_B => ['Side B', 'danger', $sideBHeadline],
+                S::SIDE_C => ['Other', 'gray', null],
+            ] as $sideKey => $meta)
+                @php
+                    [$title, $color, $sub] = $meta;
+                    $tone = $color === 'info' ? 'blue' : ($color === 'danger' ? 'red' : 'gray');
+                    $sidePilots = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $sideKey)->values();
+                @endphp
+                <div>
+                    <div class="mb-3 flex items-center gap-2">
+                        <x-filament::badge :color="$color" size="xs">{{ $title }}</x-filament::badge>
+                        <span class="text-sm font-bold text-{{ $tone }}-600 dark:text-{{ $tone }}-400 truncate">{{ $sub ?: $title }}</span>
+                        <span class="text-xs text-gray-400 font-mono ml-auto flex-shrink-0">{{ $sidePilots->count() }}</span>
+                    </div>
+                    @if ($sidePilots->isEmpty())
+                        <p class="text-sm text-gray-400 dark:text-gray-500 italic">No pilots.</p>
+                    @else
+                        <ul class="space-y-1.5">
+                            @foreach ($sidePilots as $p)
+                                @php
+                                    $cid  = (int) $p->character_id;
+                                    $name = $names[$cid] ?? 'Character #'.$cid;
+                                    $ship = $primaryShipOf($cid);
+                                    $alliance = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : null;
+                                @endphp
+                                <li class="flex items-center gap-2 text-sm py-1">
+                                    <x-filament::avatar src="{{ $charImg($cid, 32) }}" size="sm" class="ring-1 ring-{{ $tone }}-400/40" />
                                     @if ($ship['type_id'])
-                                        <img src="{{ $typeImg($ship['type_id'], 32) }}" alt="" class="w-7 h-7 flex-shrink-0" loading="lazy" />
+                                        <x-filament::avatar src="{{ $typeImg($ship['type_id'], 32) }}" :circular="false" size="sm" />
                                     @endif
-                                    <span class="truncate">{{ $ship['name'] }}</span>
-                                </div>
-                            </td>
-                            <td class="py-2.5 pr-3">
-                                <div class="flex items-center gap-2 min-w-0 text-gray-500">
-                                    @if ($p->alliance_id)
-                                        <img src="{{ $allianceImg((int) $p->alliance_id, 20) }}" alt="" class="w-4 h-4 flex-shrink-0" loading="lazy" />
-                                    @endif
-                                    <span class="truncate">{{ $allianceName }}</span>
-                                </div>
-                            </td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ $p->kills }}</td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ $p->final_blows }}</td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ number_format($p->damage_done) }}</td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ number_format($p->damage_taken) }}</td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ $p->deaths }}</td>
-                            <td class="py-2.5 text-right font-mono {{ $p->isk_lost > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
-                                {{ Battles::formatIsk((float) $p->isk_lost) }}
-                            </td>
-                        </tr>
-                    @endforeach
-                </tbody>
-            </table>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="truncate font-medium leading-tight">{{ $name }}</div>
+                                        <div class="text-xs text-gray-400 truncate leading-tight">
+                                            {{ $ship['name'] }}@if ($alliance) · {{ $alliance }}@endif
+                                        </div>
+                                    </div>
+                                    <div class="text-right text-xs font-mono flex-shrink-0 leading-tight">
+                                        @if ($p->kills > 0 || $p->final_blows > 0)
+                                            <div class="text-green-600 dark:text-green-400">
+                                                {{ $p->kills }}k
+                                                @if ($p->final_blows > 0)
+                                                    / {{ $p->final_blows }}fb
+                                                @endif
+                                            </div>
+                                        @endif
+                                        @if ($p->deaths > 0)
+                                            <div class="text-red-600 dark:text-red-400">{{ Battles::formatIsk((float) $p->isk_lost) }}</div>
+                                        @endif
+                                        @if ($p->damage_done > 0)
+                                            <div class="text-gray-400">{{ number_format($p->damage_done) }} dmg</div>
+                                        @endif
+                                    </div>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </div>
+            @endforeach
         </div>
-    </div>
+    </x-filament::section>
 
     {{-- =====================================================
          SYSTEMS
          ===================================================== --}}
-    <div class="fi-section bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6">
-        <h3 class="text-base font-semibold mb-4">Systems</h3>
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="border-b border-gray-100 dark:border-gray-800">
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">System</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">Kills</th>
-                        <th class="py-2 pr-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wide">ISK lost</th>
-                        <th class="py-2 pr-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">First kill</th>
-                        <th class="py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wide">Last kill</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach ($systems as $s)
-                        @php
-                            $sysSecS = (float) ($s->solarSystem?->security_status ?? 0.0);
-                            $sysSecSCls = match (true) {
-                                $sysSecS >= 0.5  => 'text-green-600 dark:text-green-400',
-                                $sysSecS >= 0.0  => 'text-amber-600 dark:text-amber-400',
-                                default          => 'text-red-600 dark:text-red-400',
-                            };
-                        @endphp
-                        <tr class="border-b border-gray-50 dark:border-gray-800/60 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
-                            <td class="py-2.5 pr-3 font-medium">
-                                <span class="{{ $sysSecSCls }} font-mono text-xs mr-1">{{ number_format($sysSecS, 1) }}</span>
-                                {{ $s->solarSystem?->name ?? '#'.$s->solar_system_id }}
-                            </td>
-                            <td class="py-2.5 pr-3 text-right font-mono">{{ $s->kill_count }}</td>
-                            <td class="py-2.5 pr-3 text-right font-mono {{ $s->isk_lost > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
-                                {{ Battles::formatIsk((float) $s->isk_lost) }}
-                            </td>
-                            <td class="py-2.5 pr-3 text-gray-500 font-mono text-xs">{{ $s->first_kill_at?->format('Y-m-d H:i') }}</td>
-                            <td class="py-2.5 text-gray-500 font-mono text-xs">{{ $s->last_kill_at?->format('Y-m-d H:i') }}</td>
-                        </tr>
-                    @endforeach
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <x-filament::section icon="heroicon-o-map">
+        <x-slot name="heading">Systems</x-slot>
+        <x-slot name="description">Where the fighting happened</x-slot>
+
+        <ul class="space-y-2">
+            @foreach ($systems as $s)
+                @php
+                    $sysSecS = (float) ($s->solarSystem?->security_status ?? 0.0);
+                    $sysSecSCls = match (true) {
+                        $sysSecS >= 0.5  => 'text-green-600 dark:text-green-400',
+                        $sysSecS >= 0.0  => 'text-amber-600 dark:text-amber-400',
+                        default          => 'text-red-600 dark:text-red-400',
+                    };
+                @endphp
+                <li class="flex items-center gap-3 text-sm">
+                    <span class="{{ $sysSecSCls }} font-mono font-semibold w-10 flex-shrink-0">{{ number_format($sysSecS, 1) }}</span>
+                    <span class="font-medium flex-shrink-0">{{ $s->solarSystem?->name ?? '#'.$s->solar_system_id }}</span>
+                    <span class="text-gray-400 font-mono text-xs">{{ $s->kill_count }} kills</span>
+                    <span class="flex-1"></span>
+                    <span class="font-mono {{ $s->isk_lost > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400' }}">{{ Battles::formatIsk((float) $s->isk_lost) }}</span>
+                    <span class="text-gray-400 font-mono text-xs hidden md:inline">{{ $s->first_kill_at?->format('H:i') }} → {{ $s->last_kill_at?->format('H:i') }}</span>
+                </li>
+            @endforeach
+        </ul>
+    </x-filament::section>
 
 </x-filament-panels::page>
