@@ -77,18 +77,44 @@ def fetch_killmail(cfg: Config, sequence_id: int) -> dict | None:
 def extract_esi_killmail(r2z2_payload: dict) -> tuple[dict, str]:
     """Extract the ESI killmail body and hash from an R2Z2 response.
 
-    R2Z2 wraps the ESI killmail in an envelope with a ``zkb`` block.
+    Current R2Z2 format (as of 2026-04):
+
+        {
+          "killmail_id": 134802399,
+          "hash": "ee59e793…",
+          "esi": { … full ESI body: victim, attackers, killmail_time, solar_system_id … },
+          "zkb": { … }
+        }
+
+    The ESI killmail body lives under ``esi``. Older docs claimed the
+    ESI fields were flattened alongside ``zkb`` at top level; that's
+    no longer (or never was) true, and assuming it silently wrote
+    shell killmail rows with attacker_count=0 into the DB. See
+    incident 2026-04-17 — 2192 empty rows across Apr 16-17.
+
     Returns (esi_killmail_dict, killmail_hash).
     """
-    zkb = r2z2_payload.get("zkb") or {}
-    killmail_hash = zkb.get("hash", "")
+    # ``hash`` is at top level; ``zkb.hash`` is the same value in older
+    # samples but not always present today.
+    killmail_hash = (
+        r2z2_payload.get("hash")
+        or (r2z2_payload.get("zkb") or {}).get("hash")
+        or ""
+    )
 
-    # The ESI killmail fields are at the top level alongside zkb.
-    # Build a clean ESI-only dict by excluding R2Z2-specific keys.
-    esi_keys = {
-        "killmail_id", "killmail_time", "solar_system_id",
-        "victim", "attackers", "war_id",
-    }
-    esi_payload = {k: v for k, v in r2z2_payload.items() if k in esi_keys}
+    esi_payload = r2z2_payload.get("esi") or {}
+
+    # Older top-level-flat shape — if somebody re-serves the legacy
+    # format, keep parsing it rather than silently failing.
+    if not esi_payload and "victim" in r2z2_payload and "attackers" in r2z2_payload:
+        esi_keys = {
+            "killmail_id", "killmail_time", "solar_system_id",
+            "victim", "attackers", "war_id",
+        }
+        esi_payload = {k: v for k, v in r2z2_payload.items() if k in esi_keys}
+
+    # Carry top-level killmail_id through in case ``esi`` lacks it.
+    if "killmail_id" not in esi_payload and "killmail_id" in r2z2_payload:
+        esi_payload["killmail_id"] = r2z2_payload["killmail_id"]
 
     return esi_payload, killmail_hash

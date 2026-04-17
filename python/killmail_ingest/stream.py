@@ -88,6 +88,14 @@ def run_stream(cfg: Config) -> int:
     errors = 0
     consecutive_db_errors = 0
 
+    # Tracks consecutive 404s on fetch_killmail. If we drift past the
+    # feed's head (seen 2026-04-17: cursor ran 375 ahead of head for
+    # hours with no ingestion), refetch the head sequence and clamp
+    # the cursor back. HEAD_RESYNC_AFTER_404S is how many empty
+    # sequences we tolerate before suspecting overshoot.
+    consecutive_404s = 0
+    HEAD_RESYNC_AFTER_404S = 20
+
     # Shared tick timestamp — the watchdog reads it, the main loop
     # writes it at the top of every iteration. Using a one-element
     # list instead of a module-level global keeps the state per
@@ -126,9 +134,33 @@ def run_stream(cfg: Config) -> int:
                 continue
 
             if data is None:
+                consecutive_404s += 1
                 time.sleep(cfg.r2z2_poll_interval_seconds)
                 cursor += 1
+
+                # Overshoot detection: if we've been 404-ing for a
+                # while, we may have run past the head of the feed.
+                # Refetch the head and clamp cursor back if so. This
+                # also re-syncs saved cursor state so a restart
+                # doesn't pick up the bogus position.
+                if consecutive_404s >= HEAD_RESYNC_AFTER_404S:
+                    try:
+                        head = fetch_latest_sequence(cfg)
+                    except R2z2Transient:
+                        head = None
+                    if head is not None and cursor > head:
+                        log.warning(
+                            "cursor past head — resyncing",
+                            cursor=cursor,
+                            head=head,
+                        )
+                        cursor = head + 1
+                        set_state(conn, "r2z2", "last_sequence", str(cursor - 1))
+                        conn.commit()
+                    consecutive_404s = 0
                 continue
+
+            consecutive_404s = 0
 
             try:
                 esi_payload, killmail_hash = extract_esi_killmail(data)
