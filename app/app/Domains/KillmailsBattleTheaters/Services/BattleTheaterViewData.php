@@ -59,7 +59,11 @@ final class BattleTheaterViewData
         $synthetic = $this->hydrateCapsuleAndStructureKills($theater, $participants);
         $structureNames = $synthetic['structure_names']; // char_id → display name
 
-        $sides = $this->sideResolver->resolve($theater, $viewer);
+        // Pass the hydrated participant collection — the resolver
+        // otherwise re-queries the DB and misses the patched
+        // alliance_ids (small alliances whose clustering-time
+        // affiliations were null end up on the wrong side).
+        $sides = $this->sideResolver->resolve($theater, $viewer, $participants);
 
         // Overlay operator overrides on top of the auto-resolver.
         // Precedence: character > corporation > alliance > auto. A

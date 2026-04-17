@@ -49,11 +49,26 @@ final class BattleTheaterSideResolver
      * Result: for each participant (keyed by character_id), the side
      * they belong to for this render. Includes the bloc labels used
      * so the UI can show "Side A: WinterCo (12 pilots)".
+     *
+     * Pass ``$participants`` when the caller has already hydrated the
+     * collection (patched alliance_id from killmail truth, pushed
+     * synthetic structure rows, etc.) — otherwise the resolver
+     * re-queries the DB and sees pre-hydration zeros, which placed
+     * correctly-hydrated pilots on the wrong side because
+     * buildAllianceRollup pins an alliance's side to the first-
+     * encountered pilot (2026-04-17 incident).
+     *
+     * @param  Collection<int, BattleTheaterParticipant>|null  $participants
      */
-    public function resolve(BattleTheater $theater, ?ViewerContext $viewer): BattleTheaterSideResolution
-    {
-        /** @var Collection<int, BattleTheaterParticipant> $participants */
-        $participants = $theater->participants()->get();
+    public function resolve(
+        BattleTheater $theater,
+        ?ViewerContext $viewer,
+        ?Collection $participants = null,
+    ): BattleTheaterSideResolution {
+        if ($participants === null) {
+            /** @var Collection<int, BattleTheaterParticipant> $participants */
+            $participants = $theater->participants()->get();
+        }
         if ($participants->isEmpty()) {
             return BattleTheaterSideResolution::empty();
         }
