@@ -102,19 +102,15 @@ final class BattleTheaterSideResolver
             ? (int) $viewer->bloc_id
             : null;
 
-        // Viewer-with-bloc path. Old behaviour: hard bloc-match = A,
-        // single largest opposing bloc by ISK = B, everyone else = C.
-        // Problem: the viewer's real-world allies that aren't tagged
-        // in coalition_entity_labels, and alliances labelled to a
-        // smaller hostile bloc, all land in C — which is exactly what
-        // operators complain about ("my friend's alliance shows as
-        // third party"). Per-alliance affinity scoring folds in
-        // character_standings (viewer's own ESI contacts) and the
-        // Neo4j allegiance graph alongside the bloc label, so an
-        // alliance can land on A or B even without a coalition
-        // label as long as one of the stronger signals agrees.
+        // Viewer-with-bloc path. Corp + alliance standings are the
+        // operator's own curated "who's blue/red" answer, so they
+        // decide first. Everything unlabelled by standings (or with
+        // a neutral ±5 window) falls through to kill graph + Neo4j
+        // so the resolver can still place blobby third parties even
+        // when the operator hasn't explicitly tagged them.
         if ($viewerBlocId !== null) {
             return $this->resolveByViewerAffinity(
+                theater: $theater,
                 participants: $participants,
                 allianceToBloc: $allianceToBloc,
                 iskPerBloc: $iskPerBloc,
@@ -503,27 +499,36 @@ final class BattleTheaterSideResolver
     }
 
     /**
-     * Per-alliance affinity scoring for the viewer-with-bloc path.
+     * Viewer-with-bloc side resolution.
      *
-     * Signals, in descending weight:
+     * Ordering — standings are gospel, everything else is fill-in:
      *
-     *   +1000   alliance_id === viewer_alliance_id           (hard pin)
-     *   ±100    character_standings contact_type=alliance    (±5 threshold)
-     *   ±50     coalition_entity_labels bloc membership      (viewer's bloc = +,
-     *                                                         any other bloc = -)
-     *   ±30cap  Neo4j allegiance score vs (viewer anchor, opposing anchor)
+     *   1. alliance_id === viewer_alliance_id → Side A   (self-match)
+     *   2. character_standings owner ∈ {viewer alliance, viewer corp},
+     *      contact_type = alliance:
+     *         standing >= +5 → Side A
+     *         standing <= -5 → Side B
+     *         neutral        → skip (falls through to kill graph + Neo4j)
+     *   3. Alliances still unassigned: kill-graph classification
+     *      anchored to (viewer_alliance_id, largest standings-enemy
+     *      alliance on the field). Same "≥3 events, 2× spread"
+     *      thresholds as the anon path.
+     *   4. Still unassigned: Neo4j allegiance scoreFor against the
+     *      same anchors, same thresholds. Neo4j down / no prior
+     *      signal → stays Side C.
      *
-     * Threshold ±25 sends an alliance to Side A or Side B; below that
-     * it stays Side C. A single bloc match or a single standings
-     * entry is enough to cross; Neo4j alone is not (capped at 30,
-     * and it needs a clear spread). This keeps Neo4j in the role of
-     * disambiguator, not override.
+     * Bloc labels (coalition_entity_labels) deliberately don't enter
+     * the scoring. Operators explicitly maintain standings for the
+     * blue/red call and don't want a stale bloc tag outvoting their
+     * contacts. Bloc IDs are still returned on the resolution for
+     * the report UI's Side-A / Side-B titles.
      *
      * @param  Collection<int, BattleTheaterParticipant>  $participants
      * @param  array<int, int>  $allianceToBloc
      * @param  array<int, float>  $iskPerBloc
      */
     private function resolveByViewerAffinity(
+        BattleTheater $theater,
         Collection $participants,
         array $allianceToBloc,
         array $iskPerBloc,
@@ -540,89 +545,107 @@ final class BattleTheaterSideResolver
         $viewerAllianceId = (int) ($viewer->viewer_alliance_id ?? 0);
         $viewerCorpId = (int) ($viewer->viewer_corporation_id ?? 0);
 
-        $opposingBlocId = $this->pickOpposingBloc($iskPerBloc, excludeBlocId: $viewerBlocId);
-
-        // Neo4j anchors. Anchor A = viewer's alliance, or the
-        // flagship (biggest-ISK-lost) same-bloc alliance on the field
-        // if the viewer is solo / in an NPC corp. Anchor B = flagship
-        // of the largest opposing bloc. Missing either anchor skips
-        // the Neo4j step — we can score standings + bloc alone.
-        $anchorA = $viewerAllianceId > 0
-            ? $viewerAllianceId
-            : $this->flagshipOfBloc($participants, $allianceToBloc, $viewerBlocId);
-        $anchorB = $opposingBlocId !== null
-            ? $this->flagshipOfBloc($participants, $allianceToBloc, $opposingBlocId)
-            : null;
-
         $standings = $this->loadViewerAllianceStandings(
             viewerAllianceId: $viewerAllianceId,
             viewerCorpId: $viewerCorpId,
             allianceIds: $allianceIds,
         );
 
-        $scoreByAlliance = [];
+        // Step 1 + 2: standings + self-match fix assignments.
+        $allianceSide = [];
         foreach ($allianceIds as $aid) {
             if ($aid === $viewerAllianceId && $aid > 0) {
-                $scoreByAlliance[$aid] = 1000;
+                $allianceSide[$aid] = self::SIDE_A;
                 continue;
             }
-
-            $score = 0;
-
-            // 1. Standings (viewer's own ESI contacts — strongest
-            //    signal after self-alliance match).
-            $standingValue = $standings[$aid] ?? null;
-            if ($standingValue !== null) {
-                if ($standingValue >= 5.0) {
-                    $score += 100;
-                } elseif ($standingValue <= -5.0) {
-                    $score -= 100;
-                }
+            $s = $standings[$aid] ?? null;
+            if ($s === null) {
+                continue;
             }
-
-            // 2. Bloc label. Same bloc as viewer = ally. Any other
-            //    labelled bloc in this fight is presumed opposing —
-            //    if it were friendly it'd be sharing a bloc.
-            $bloc = $allianceToBloc[$aid] ?? null;
-            if ($bloc !== null) {
-                if ($bloc === $viewerBlocId) {
-                    $score += 50;
-                } else {
-                    $score -= 50;
-                }
+            if ($s >= 5.0) {
+                $allianceSide[$aid] = self::SIDE_A;
+            } elseif ($s <= -5.0) {
+                $allianceSide[$aid] = self::SIDE_B;
             }
-
-            // 3. Neo4j historical allegiance (capped).
-            if ($this->allegiance !== null
-                && $anchorA !== null && $anchorA > 0
-                && $anchorB !== null && $anchorB > 0
-                && $anchorA !== $anchorB
-                && $aid !== $anchorA && $aid !== $anchorB
-            ) {
-                $ng = $this->allegiance->scoreFor($aid, $anchorA, $anchorB);
-                if ($ng !== null) {
-                    $net = ($ng['a_ally'] + $ng['b_oppose'])
-                         - ($ng['b_ally'] + $ng['a_oppose']);
-                    $score += max(-30, min(30, $net));
-                }
-            }
-
-            $scoreByAlliance[$aid] = $score;
+            // neutral standing (|s|<5): fall through
         }
 
-        $threshold = 25;
+        // Pick anchors for kill-graph / Neo4j classification of the
+        // remainder. Anchor A = viewer's alliance when on field;
+        // otherwise largest A-assigned alliance by pilot count.
+        // Anchor B = largest B-assigned alliance (i.e. biggest
+        // standings-hostile presence on the field).
+        $anchorA = ($viewerAllianceId > 0 && in_array($viewerAllianceId, $allianceIds, true))
+            ? $viewerAllianceId
+            : $this->largestByPilots(
+                $this->alliancesWithSide($allianceSide, self::SIDE_A),
+                $participants,
+            );
+        $anchorB = $this->largestByPilots(
+            $this->alliancesWithSide($allianceSide, self::SIDE_B),
+            $participants,
+        );
+
+        // Step 3: kill-graph classification for the remaining
+        // alliances. Runs only when both anchors exist — otherwise
+        // there's no "this side" to compare against.
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theater->id)
+            ->pluck('killmail_id')
+            ->all();
+
+        $kills = [];
+        if ($killmailIds !== [] && $anchorA !== null && $anchorB !== null) {
+            $kills = $this->loadAllianceKillGraph($killmailIds);
+
+            foreach ($allianceIds as $aid) {
+                if (isset($allianceSide[$aid])) {
+                    continue;
+                }
+                $supportsA = ($kills[$aid][$anchorB] ?? 0) + ($kills[$anchorB][$aid] ?? 0);
+                $supportsB = ($kills[$aid][$anchorA] ?? 0) + ($kills[$anchorA][$aid] ?? 0);
+                if ($supportsA >= 3 && $supportsA > 2 * $supportsB) {
+                    $allianceSide[$aid] = self::SIDE_A;
+                } elseif ($supportsB >= 3 && $supportsB > 2 * $supportsA) {
+                    $allianceSide[$aid] = self::SIDE_B;
+                }
+            }
+        }
+
+        // Step 4: Neo4j historical allegiance as final tiebreaker.
+        if ($this->allegiance !== null
+            && $anchorA !== null && $anchorB !== null
+            && $anchorA !== $anchorB
+        ) {
+            foreach ($allianceIds as $aid) {
+                if (isset($allianceSide[$aid])) {
+                    continue;
+                }
+                $score = $this->allegiance->scoreFor($aid, $anchorA, $anchorB);
+                if ($score === null) {
+                    continue;
+                }
+                $supportsA = $score['a_ally'] + $score['b_oppose'];
+                $supportsB = $score['b_ally'] + $score['a_oppose'];
+                if ($supportsA >= 3 && $supportsA > 2 * $supportsB) {
+                    $allianceSide[$aid] = self::SIDE_A;
+                } elseif ($supportsB >= 3 && $supportsB > 2 * $supportsA) {
+                    $allianceSide[$aid] = self::SIDE_B;
+                }
+            }
+        }
+
         $sideByChar = [];
         foreach ($participants as $p) {
             $aid = (int) ($p->alliance_id ?? 0);
-            $score = $scoreByAlliance[$aid] ?? 0;
-            if ($score >= $threshold) {
-                $sideByChar[(int) $p->character_id] = self::SIDE_A;
-            } elseif ($score <= -$threshold) {
-                $sideByChar[(int) $p->character_id] = self::SIDE_B;
-            } else {
-                $sideByChar[(int) $p->character_id] = self::SIDE_C;
-            }
+            $sideByChar[(int) $p->character_id] = $allianceSide[$aid] ?? self::SIDE_C;
         }
+
+        // Keep the largest-opposing-bloc label for the Side B
+        // headline in the UI (operators expect "SideB: Goons bloc"
+        // even when a standings-hostile alliance outside Goons is
+        // leading the fight).
+        $opposingBlocId = $this->pickOpposingBloc($iskPerBloc, excludeBlocId: $viewerBlocId);
 
         return new BattleTheaterSideResolution(
             sideByCharacterId: $sideByChar,
@@ -633,34 +656,68 @@ final class BattleTheaterSideResolver
     }
 
     /**
-     * Largest on-field alliance (by ISK lost) whose coalition label
-     * maps to the given bloc. Used as a Neo4j anchor. Returns null
-     * when the bloc has no labelled on-field presence.
-     *
-     * @param  Collection<int, BattleTheaterParticipant>  $participants
-     * @param  array<int, int>  $allianceToBloc
+     * @param  array<int, string>  $allianceSide  alliance_id → side
+     * @return list<int>
      */
-    private function flagshipOfBloc(Collection $participants, array $allianceToBloc, ?int $blocId): ?int
+    private function alliancesWithSide(array $allianceSide, string $side): array
     {
-        if ($blocId === null) {
+        return array_values(array_keys(array_filter($allianceSide, fn ($s) => $s === $side)));
+    }
+
+    /**
+     * Largest alliance from $candidates by on-field pilot count.
+     * Returns null when the candidate list is empty or no
+     * candidate has on-field pilots.
+     *
+     * @param  list<int>  $candidates
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     */
+    private function largestByPilots(array $candidates, Collection $participants): ?int
+    {
+        if ($candidates === []) {
             return null;
         }
-        $iskByAlliance = [];
+        $pilotsByAlliance = [];
         foreach ($participants as $p) {
             $aid = (int) ($p->alliance_id ?? 0);
-            if ($aid === 0) {
+            if (! in_array($aid, $candidates, true)) {
                 continue;
             }
-            if (($allianceToBloc[$aid] ?? null) !== $blocId) {
-                continue;
-            }
-            $iskByAlliance[$aid] = ($iskByAlliance[$aid] ?? 0.0) + (float) $p->isk_lost;
+            $pilotsByAlliance[$aid] = ($pilotsByAlliance[$aid] ?? 0) + 1;
         }
-        if ($iskByAlliance === []) {
+        if ($pilotsByAlliance === []) {
             return null;
         }
-        arsort($iskByAlliance);
-        return (int) array_key_first($iskByAlliance);
+        arsort($pilotsByAlliance);
+        return (int) array_key_first($pilotsByAlliance);
+    }
+
+    /**
+     * kills[attacker_alliance_id][victim_alliance_id] = count.
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<int, array<int, int>>
+     */
+    private function loadAllianceKillGraph(array $killmailIds): array
+    {
+        if ($killmailIds === []) {
+            return [];
+        }
+        $kills = [];
+        DB::table('killmail_attackers as a')
+            ->join('killmails as k', 'k.killmail_id', '=', 'a.killmail_id')
+            ->whereIn('a.killmail_id', $killmailIds)
+            ->whereNotNull('a.alliance_id')
+            ->whereNotNull('k.victim_alliance_id')
+            ->where('a.alliance_id', '!=', DB::raw('k.victim_alliance_id'))
+            ->select('a.alliance_id as att', 'k.victim_alliance_id as vic')
+            ->get()
+            ->each(function ($r) use (&$kills): void {
+                $att = (int) $r->att;
+                $vic = (int) $r->vic;
+                $kills[$att][$vic] = ($kills[$att][$vic] ?? 0) + 1;
+            });
+        return $kills;
     }
 
     /**
