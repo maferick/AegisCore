@@ -721,23 +721,26 @@
 {{-- ================================================================
      PILOTS — grouped by side, km-attacker rows
      ================================================================ --}}
-<div class="km-card" style="margin-bottom: 1.5rem;">
-    <h3>Pilots <span class="muted">· {{ $participants->count() }}</span></h3>
-
-    @foreach ([
+@php
+    $pilotSides = [
         S::SIDE_A => ['Side A', 'a', $sideAHeadline],
         S::SIDE_B => ['Side B', 'b', $sideBHeadline],
-        S::SIDE_C => ['Other / third parties', 'c', null],
-    ] as $sideKey => $meta)
+    ];
+    $pilotsByCSide = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === S::SIDE_C);
+    if ($hasSideC || $pilotsByCSide->isNotEmpty()) {
+        $pilotSides[S::SIDE_C] = ['Third parties', 'c', $sideCHeadline];
+    }
+@endphp
+<div class="{{ count($pilotSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
+    @foreach ($pilotSides as $sideKey => $meta)
         @php
             [$label, $toneClass, $sub] = $meta;
             $sidePilots = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $sideKey)->values();
         @endphp
-        <div style="margin-top: 1rem;">
+        <div class="km-card">
+            <h3>Pilots — {{ $label }} <span class="muted">· {{ $sidePilots->count() }}</span></h3>
             <div class="bt-pilot-group-head {{ $toneClass }}">
-                {{ $label }}
                 @if ($sub) <span style="color:#e5e5e7;font-weight:600;letter-spacing:0.05em;text-transform:none;">{{ $sub }}</span> @endif
-                <span class="bt-pilot-group-count">{{ $sidePilots->count() }}</span>
             </div>
             @if ($sidePilots->isEmpty())
                 <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No pilots.</div>
