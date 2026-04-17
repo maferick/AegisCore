@@ -246,6 +246,11 @@
     .bt-killfeed[open] > summary::before { transform: rotate(90deg); }
     .bt-killfeed-hint { font-size: 0.7rem; color: #7a7a82; font-style: italic; }
     .bt-killfeed[open] .bt-killfeed-hint { display: none; }
+
+    .bt-pilot-link { display: block; text-decoration: none; color: inherit; }
+    .bt-pilot-clickable { cursor: pointer; transition: background 0.1s ease; }
+    .bt-pilot-link:hover .bt-pilot-clickable { background: rgba(255,56,56,0.06); }
+    .bt-pilot-link:hover .km-attacker-name { color: #ff8080; }
     .bt-pilot-group-count { margin-left: auto; color: #7a7a82; font-weight: 400; letter-spacing: 0; text-transform: none; }
 </style>
 
@@ -748,6 +753,24 @@
     if ($hasSideC || $pilotsByCSide->isNotEmpty()) {
         $pilotSides[S::SIDE_C] = ['Third parties', 'c', $sideCHeadline];
     }
+
+    // Build character_id => killmail_id lookup from the kill feed so
+    // pilots with a loss in this theater get a clickable row. Last
+    // kill wins when a pilot died more than once (usually means they
+    // reshipped).
+    $lossKmByChar = [];
+    foreach ($kill_feed as $km) {
+        if (! empty($km['victim_id'])) {
+            $lossKmByChar[(int) $km['victim_id']] = (int) $km['killmail_id'];
+        }
+    }
+    $killmailUrl = function (int $kmId) use ($hide_bloc_names): string {
+        // Public viewers → zkillboard (no auth wall). Portal viewers
+        // → internal killmail detail page with full item breakdown.
+        return $hide_bloc_names
+            ? "https://zkillboard.com/kill/{$kmId}/"
+            : "/portal/killmails/{$kmId}";
+    };
 @endphp
 <div class="{{ count($pilotSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
     @foreach ($pilotSides as $sideKey => $meta)
@@ -770,8 +793,12 @@
                         $aName     = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : null;
                         $ship      = $primaryShipOf($cid);
                         $isFB      = $p->final_blows > 0;
+                        $lossKm    = $lossKmByChar[$cid] ?? null;
                     @endphp
-                    <div class="km-attacker {{ $isFB ? 'km-final-blow' : '' }}">
+                    @if ($lossKm)
+                    <a href="{{ $killmailUrl($lossKm) }}" {{ $hide_bloc_names ? 'target=_blank rel=noopener' : '' }} class="bt-pilot-link">
+                    @endif
+                    <div class="km-attacker {{ $isFB ? 'km-final-blow' : '' }} {{ $lossKm ? 'bt-pilot-clickable' : '' }}">
                         <img src="https://images.evetech.net/characters/{{ $cid }}/portrait?size=64"
                              referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
                         <div class="km-attacker-info">
@@ -800,6 +827,9 @@
                             @endif
                         </div>
                     </div>
+                    @if ($lossKm)
+                    </a>
+                    @endif
                 @endforeach
             @endif
         </div>
