@@ -115,7 +115,16 @@ class IntelCopilotServer:
                     "error": "no heuristic template matched",
                     "hint": "set use_llm=true to fall back to Claude",
                 }
-            plan = self._llm_plan(question)
+            try:
+                plan = self._llm_plan(question)
+            except PlanError as exc:
+                # LLM emitted a plan that fails validation — surface as
+                # a user-readable 422 rather than a 500. The broker
+                # already logged the raw plan via LLMPlanParser.
+                return HTTPStatus.UNPROCESSABLE_ENTITY, {
+                    "error": f"LLM produced an invalid plan: {exc}",
+                    "hint": "rephrase the question or try the Claude provider",
+                }
             parser_used = "llm"
 
         if dry_run:

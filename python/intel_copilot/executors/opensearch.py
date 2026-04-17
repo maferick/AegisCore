@@ -165,6 +165,22 @@ class OpenSearchExecutor:
             else:
                 must.append(clause)
 
+        # COUNT / LIST have no grouping dimension, so their subject (if
+        # the LLM emitted one) is effectively another filter. Small
+        # models regularly put "Nyx" in subject rather than filters on
+        # "how many nyx killed?" — coercing here keeps the answer
+        # correct without a prompt tweak landing in every request.
+        if (
+            plan.intent in (Intent.COUNT, Intent.LIST)
+            and plan.subject is not None
+            and plan.subject.has_value()
+        ):
+            clause = self._filter_clause(plan.subject)
+            if plan.subject.operator is Operator.NE:
+                must_not.append(clause)
+            else:
+                must.append(clause)
+
         bool_q: dict[str, Any] = {}
         if must:
             bool_q["must"] = must

@@ -120,9 +120,19 @@ class HeuristicPlanParser:
             limit=10,
         )
 
+    # "how many <noun> killed/kills …" — if <noun> is a bare kills token
+    # the heuristic owns the question; anything else (a ship name, an
+    # alliance name, etc.) should fall through to the LLM so the filter
+    # actually lands on the plan. Previous version matched any "how
+    # many…kill" and swallowed the noun, returning a useless full count.
+    _COUNT_BARE_RE = re.compile(
+        r"how\s+many\s+(?:kills?|killmails?|ships?\s+(?:destroyed|lost))\b",
+        re.I,
+    )
+
     def _try_count_kills(self, q: str) -> QueryPlan | None:
-        """Match 'how many kills' style — bare total."""
-        if "how many" not in q or "kill" not in q:
+        """Match 'how many kills' style — bare total only."""
+        if not self._COUNT_BARE_RE.search(q):
             return None
         return QueryPlan(
             intent=Intent.COUNT,

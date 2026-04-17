@@ -164,11 +164,12 @@ class QueryPlan:
                 raise PlanError("trend requires group_by.time_interval (e.g. '1d')")
 
         if self.intent is Intent.COUNT and self.metric is not Metric.COUNT:
-            # A COUNT plan asking for SUM_ISK is really a different intent.
-            raise PlanError(
-                "count intent only supports metric=count; "
-                "use top_n or trend with metric=sum_isk instead"
-            )
+            # COUNT only answers "how many" — the metric is implicitly
+            # document count. Small LLMs sometimes emit metric=sum_isk
+            # on count plans by mistake; silently coerce instead of
+            # rejecting so a user-visible error isn't the outcome of a
+            # model hallucination on an otherwise-valid question.
+            object.__setattr__(self, "metric", Metric.COUNT)
 
         if self.intent is Intent.PATH:
             if self.subject is None or self.subject.entity_type is not EntityType.SYSTEM:

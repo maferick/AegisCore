@@ -32,6 +32,25 @@ class TestHeuristicParser(unittest.TestCase):
         self.assertEqual(plan.intent, Intent.COUNT)
         self.assertEqual(plan.time_window.from_, "now-24h")
 
+    def test_how_many_specific_ship_falls_through_to_llm(self) -> None:
+        """'how many nyx killed last 30 days' is NOT a bare total —
+        there's a ship filter in the question. The heuristic must
+        return None so the LLM (which knows the full ship catalog)
+        handles it, rather than quietly dropping the filter and
+        returning every kill."""
+        self.assertIsNone(
+            HeuristicPlanParser().parse("how many nyx killed in the last 30 days")
+        )
+        self.assertIsNone(
+            HeuristicPlanParser().parse("how many freighters died this week")
+        )
+
+    def test_how_many_killmails_still_matches(self) -> None:
+        """Bare synonym — 'killmails' is not a specific filter."""
+        plan = HeuristicPlanParser().parse("how many killmails last 7 days")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.intent, Intent.COUNT)
+
     def test_unmatched_question_returns_none(self) -> None:
         self.assertIsNone(HeuristicPlanParser().parse("explain the universe"))
 

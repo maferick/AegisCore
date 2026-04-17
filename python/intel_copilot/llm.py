@@ -175,6 +175,22 @@ A plan has:
 * If the user says "last 30 days", emit `time_window={{"from":"now-30d","to":"now"}}`.
 * Never invent an entity the user did not mention. If you cannot tell what
   role a filter belongs to, pick the most common interpretation, not both.
+* "how many X" where X is anything other than "kills" / "killmails" is a
+  `count` intent with X as a VICTIM filter. Pick `entity_type` based on X:
+  - specific hull (Catalyst, Nyx, Rifter, Maelstrom, Avatar, Machariel,
+    Providence, Charon, Revelation, Apocalypse, Ishtar, Stabber …) → `ship_type`
+  - ship class (Frigate, Cruiser, Battleship, Titan, Dreadnought, Carrier,
+    Freighter, Supercarrier, Destroyer, Battlecruiser, Interceptor,
+    Interdictor, Logistics, Heavy Assault Cruiser, Stealth Bomber,
+    Recon Ship, Strategic Cruiser) → `ship_group`
+  - faction / ship family (Amarr ships, Caldari ships, pirate ships) → `ship_category`
+  - a person (Ninja69, lellebel, Sin Rader) → `character`
+  - a corp / alliance (Fraternity., Goonswarm, The Initiative.) → `corporation`
+    or `alliance`
+  - a solar system (Jita, Amarr, M-MD31, 4-HWWF) → `system`
+  - a region (Delve, Fountain, Pure Blind, Vale of the Silent) → `region`
+  If unsure whether a proper noun is a ship or a system, prefer `ship_type` —
+  ship names appear far more often in combat questions than system names.
 * If the question is nonsense or outside the combat-data domain, still call
   the tool with an empty `count` plan (`intent=count`, no subject,
   `time_window={{"from":"now-7d","to":"now"}}`) — the broker will return a
@@ -190,6 +206,18 @@ Q: "what is the most used ship to kill freighters in the last 30 days?"
 Q: "how many kills in Delve yesterday?"
 → intent=count, filters=[{{role:any, entity_type:region, value:"Delve"}}],
   time_window={{from:"now-1d/d", to:"now/d"}}.
+
+Q: "how many nyx are killed in the last 30 days?"
+→ intent=count,
+  filters=[{{role:victim, entity_type:ship_type, value:"Nyx"}}],
+  time_window={{from:"now-30d", to:"now"}}.
+  (Nyx is a ship type. "how many <hull>" is always a count with a
+  victim ship_type filter — not top_n, not a system filter.)
+
+Q: "how many freighters were killed last week?"
+→ intent=count,
+  filters=[{{role:victim, entity_type:ship_group, value:"Freighter"}}],
+  time_window={{from:"now-7d", to:"now"}}.
 
 Q: "which alliances lost the most isk last week?"
 → intent=top_n, metric=sum_isk,

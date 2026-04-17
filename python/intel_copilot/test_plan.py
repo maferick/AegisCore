@@ -44,10 +44,14 @@ class TestPlanValidation(unittest.TestCase):
         with self.assertRaisesRegex(PlanError, "time_interval"):
             plan.validate()
 
-    def test_count_rejects_non_count_metric(self) -> None:
+    def test_count_with_non_count_metric_is_coerced(self) -> None:
+        """Previous behaviour: raise PlanError. Current behaviour:
+        silently coerce metric to COUNT. Small LLMs drift into
+        sum_isk on count plans often enough that rejection cost more
+        than the bug it prevents. Coercion keeps the plan answerable."""
         plan = QueryPlan(intent=Intent.COUNT, metric=Metric.SUM_ISK)
-        with self.assertRaisesRegex(PlanError, "count intent"):
-            plan.validate()
+        plan.validate()
+        self.assertIs(plan.metric, Metric.COUNT)
 
     def test_filter_without_value_rejected(self) -> None:
         plan = QueryPlan(
