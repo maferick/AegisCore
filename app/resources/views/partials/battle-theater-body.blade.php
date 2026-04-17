@@ -79,9 +79,16 @@
     $effB = ($tB['isk_killed'] + $tB['isk_lost']) > 0
         ? round($tB['isk_killed'] / ($tB['isk_killed'] + $tB['isk_lost']) * 100, 1)
         : 50.0;
-    $abDestroyed = (float) ($tA['isk_killed'] + $tB['isk_killed']);
-    $barA = $abDestroyed > 0 ? round($tA['isk_killed'] / $abDestroyed * 100, 1) : 50.0;
-    $barB = 100 - $barA;
+    $effC = ($tC['isk_killed'] + $tC['isk_lost']) > 0
+        ? round($tC['isk_killed'] / ($tC['isk_killed'] + $tC['isk_lost']) * 100, 1)
+        : null;
+
+    // Three-way destroyed-share split bar. Widths proportional to
+    // each side's isk_killed (FB attribution per spec § 2.1).
+    $totalDestroyed = (float) ($tA['isk_killed'] + $tB['isk_killed'] + $tC['isk_killed']);
+    $barA = $totalDestroyed > 0 ? round($tA['isk_killed'] / $totalDestroyed * 100, 2) : 50.0;
+    $barB = $totalDestroyed > 0 ? round($tB['isk_killed'] / $totalDestroyed * 100, 2) : 50.0;
+    $barC = $totalDestroyed > 0 ? round($tC['isk_killed'] / $totalDestroyed * 100, 2) : 0.0;
 
     $sysSec = (float) ($theater->primarySystem?->security_status ?? 0.0);
     $sysSecColor = $sysSec >= 0.5 ? '#4ade80' : ($sysSec >= 0.0 ? '#e5a900' : '#ff3838');
@@ -170,6 +177,11 @@
     .bt-bar { height: 8px; border-radius: 4px; overflow: hidden; display: flex; background: #1a1a1e; margin-top: 1rem; }
     .bt-bar-a { background: #4fd0d0; }
     .bt-bar-b { background: #ff3838; }
+    .bt-bar-c { background: #7a7a82; }
+    .bt-bar-legend { display: flex; justify-content: space-between; margin-top: 0.35rem; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: #7a7a82; }
+    .bt-bar-legend .a { color: #4fd0d0; }
+    .bt-bar-legend .b { color: #ff3838; }
+    .bt-bar-legend .c { color: #7a7a82; }
 
     .bt-section-head {
         display: flex; justify-content: space-between; align-items: baseline;
@@ -326,9 +338,24 @@
         </div>
     </div>
 
+    {{-- 3-side share-of-ISK-destroyed bar. Width per side =
+         isk_killed / total_isk_killed. Legend below shows each
+         side's efficiency % (isk_killed / (isk_killed + isk_lost))
+         so operators see both "who destroyed how much" (the bar)
+         and "how well they traded" (the percentages). --}}
     <div class="bt-bar">
         <div class="bt-bar-a" style="width: {{ $barA }}%"></div>
         <div class="bt-bar-b" style="width: {{ $barB }}%"></div>
+        <div class="bt-bar-c" style="width: {{ $barC }}%"></div>
+    </div>
+    <div class="bt-bar-legend">
+        <span class="a">Side A · {{ $effA }}% eff · {{ $barA }}% of destroyed</span>
+        <span class="b">Side B · {{ $effB }}% eff · {{ $barB }}% of destroyed</span>
+        <span class="c">
+            Third parties
+            · {{ $effC !== null ? $effC.'% eff' : '—' }}
+            · {{ $barC }}% of destroyed
+        </span>
     </div>
 
     {{-- Public surface suppresses the "Set your coalition" nag —

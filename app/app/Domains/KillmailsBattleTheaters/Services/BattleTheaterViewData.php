@@ -664,27 +664,91 @@ final class BattleTheaterViewData
             return $out;
         }
 
-        // km → totalValue lookup.
-        $valuePerKm = DB::table('killmails')
-            ->whereIn('killmail_id', $killmailIds)
-            ->pluck('total_value', 'killmail_id')
-            ->all();
+        // Load killmail meta (victim, time, ship group) + totalValue
+        // so we can both credit by FB and rescue capsule kills that
+        // have no character FB by linking them back to the parent
+        // ship kill.
+        $kmMeta = DB::table('killmails as k')
+            ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->whereIn('k.killmail_id', $killmailIds)
+            ->select([
+                'k.killmail_id',
+                'k.killed_at',
+                'k.victim_character_id',
+                'k.total_value',
+                't.group_id as ship_group_id',
+            ])
+            ->get()
+            ->keyBy('killmail_id');
 
-        // FB attacker per km → pick side from the character's
-        // resolved side. Structures / NPC FBs (null character_id)
-        // don't credit any side — their ISK becomes orphan value.
+        // Map km → FB character id (only rows with a named FB).
+        $fbCharByKm = [];
         DB::table('killmail_attackers')
             ->whereIn('killmail_id', $killmailIds)
             ->where('is_final_blow', true)
             ->whereNotNull('character_id')
             ->select(['killmail_id', 'character_id'])
             ->get()
-            ->each(function ($r) use (&$out, $valuePerKm, $sides): void {
-                $kmId = (int) $r->killmail_id;
-                $side = $sides->sideByCharacterId[(int) $r->character_id] ?? BattleTheaterSideResolver::SIDE_C;
-                $out['isk'][$side] += (float) ($valuePerKm[$kmId] ?? 0);
-                $out['kills'][$side] += 1;
+            ->each(function ($r) use (&$fbCharByKm): void {
+                $fbCharByKm[(int) $r->killmail_id] = (int) $r->character_id;
             });
+
+        // For capsule kills that lack a character-id FB (NPC /
+        // unenriched), link back to the same pilot's ship kill in
+        // this theater within 120s and inherit that ship's FB side
+        // — spec § 5.1 capsule-follows-ship. ref_item_groups.id 29
+        // is the Capsule family.
+        $capsuleLinked = [];
+        foreach ($kmMeta as $kmId => $row) {
+            $kmId = (int) $kmId;
+            if (isset($fbCharByKm[$kmId])) {
+                continue;
+            }
+            if ((int) ($row->ship_group_id ?? 0) !== 29) {
+                continue;
+            }
+            if (! $row->victim_character_id) {
+                continue;
+            }
+            $pilotId = (int) $row->victim_character_id;
+            $capsuleAt = strtotime((string) $row->killed_at);
+            // Find the most-recent ship kill (ship_group_id != 29)
+            // for the same pilot within 120s before the capsule.
+            foreach ($kmMeta as $otherId => $other) {
+                $otherId = (int) $otherId;
+                if ($otherId === $kmId) {
+                    continue;
+                }
+                if ((int) ($other->ship_group_id ?? 0) === 29) {
+                    continue;
+                }
+                if ((int) ($other->victim_character_id ?? 0) !== $pilotId) {
+                    continue;
+                }
+                $delta = $capsuleAt - strtotime((string) $other->killed_at);
+                if ($delta < 0 || $delta > 120) {
+                    continue;
+                }
+                $parentFb = $fbCharByKm[$otherId] ?? null;
+                if ($parentFb !== null) {
+                    $capsuleLinked[$kmId] = $parentFb;
+                    break;
+                }
+            }
+        }
+
+        // Credit each side. FB character first; capsule-linked
+        // parent FB as fallback for the pod kms.
+        foreach ($kmMeta as $kmId => $row) {
+            $kmId = (int) $kmId;
+            $charId = $fbCharByKm[$kmId] ?? $capsuleLinked[$kmId] ?? null;
+            if ($charId === null) {
+                continue; // orphan — no named attacker / no linked parent
+            }
+            $side = $sides->sideByCharacterId[$charId] ?? BattleTheaterSideResolver::SIDE_C;
+            $out['isk'][$side] += (float) $row->total_value;
+            $out['kills'][$side] += 1;
+        }
 
         return $out;
     }
