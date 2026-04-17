@@ -6,3 +6,7 @@ pymysql~=1.1
 # question through the Claude planner. Pinned loosely so SDK security
 # fixes land without manual bumps.
 anthropic~=0.39
+# Redis result cache — optional at runtime (broker works without it)
+# but the image always ships the client so operators can enable the
+# cache via env without rebuilding.
+redis~=5.0

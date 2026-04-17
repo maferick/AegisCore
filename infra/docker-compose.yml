@@ -1101,10 +1101,19 @@ services:
       DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
       DB_USERNAME: "${MARIADB_USER:-aegiscore}"
       DB_PASSWORD: "${MARIADB_PASSWORD}"
+      # Result cache — reuses the stack Redis. DB 1 keeps entries
+      # isolated from the Laravel queue / cache / sessions that live
+      # in DB 0. Set INTEL_COPILOT_REDIS_DB to move them.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      INTEL_COPILOT_REDIS_DB: "${INTEL_COPILOT_REDIS_DB:-1}"
     depends_on:
       opensearch:
         condition: service_healthy
       mariadb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       aegiscore:

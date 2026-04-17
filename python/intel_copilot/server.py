@@ -43,6 +43,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
+from intel_copilot.cache import ResultCache
 from intel_copilot.config import Config
 from intel_copilot.contracts import Backend, RoutingError
 from intel_copilot.log import get, setup
@@ -73,11 +74,13 @@ class IntelCopilotServer:
         *,
         llm_planner_factory: Callable[[], Any] | None = None,
         api_token: str | None = None,
+        cache: ResultCache | None = None,
     ) -> None:
         self._router = router
         self._llm_planner_factory = llm_planner_factory
         self._api_token = api_token or os.environ.get(TOKEN_ENV) or None
         self._llm_parser: Any = None  # lazy — don't dial Anthropic on boot
+        self._cache = cache or ResultCache(None)
 
     # ------------------------------------------------------------------ #
     # Request handlers — return (status, body_dict). The handler class
@@ -89,6 +92,7 @@ class IntelCopilotServer:
             "ok": True,
             "backends": [b.value for b in self._router.backends()],
             "llm": self._llm_planner_factory is not None,
+            "cache": self._cache.enabled,
         }
 
     def handle_ask(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -98,6 +102,9 @@ class IntelCopilotServer:
 
         dry_run = bool(body.get("dry_run"))
         use_llm = bool(body.get("use_llm"))
+        # ``use_cache`` defaults true — callers opt out per-request when
+        # they want a fresh computation (debug, "refresh" button).
+        use_cache = body.get("use_cache", True) is not False
 
         plan = HeuristicPlanParser().parse(question)
         parser_used = "heuristic"
@@ -118,7 +125,7 @@ class IntelCopilotServer:
                 "result": None,
             }
 
-        return self._execute(plan, parser_used)
+        return self._execute(plan, parser_used, use_cache=use_cache)
 
     def handle_plan(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         try:
@@ -126,26 +133,49 @@ class IntelCopilotServer:
         except PlanError as exc:
             return HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"invalid plan: {exc}"}
         dry_run = bool(body.get("dry_run"))
+        use_cache = body.get("use_cache", True) is not False
         if dry_run:
             return HTTPStatus.OK, {"parser": "dict", "plan": plan.to_dict(), "result": None}
-        return self._execute(plan, "dict")
+        return self._execute(plan, "dict", use_cache=use_cache)
 
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
 
-    def _execute(self, plan: QueryPlan, parser_used: str) -> tuple[int, dict[str, Any]]:
+    def _execute(
+        self,
+        plan: QueryPlan,
+        parser_used: str,
+        *,
+        use_cache: bool = True,
+    ) -> tuple[int, dict[str, Any]]:
+        # Cache read is keyed by the plan only — the parser that produced
+        # it (heuristic vs llm vs dict) can't change the answer and would
+        # only cause cache misses. The parser field is stamped on the
+        # cached payload before store so the UI still reflects how the
+        # plan got built when a hit serves it.
+        if use_cache:
+            cached = self._cache.get(plan)
+            if cached is not None:
+                cached["cache"] = "hit"
+                return HTTPStatus.OK, cached
+
         try:
             result = self._router.execute(plan)
         except RoutingError as exc:
             return HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc), "plan": plan.to_dict()}
         except PlanError as exc:
             return HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc), "plan": plan.to_dict()}
-        return HTTPStatus.OK, {
+
+        payload = {
             "parser": parser_used,
             "plan": plan.to_dict(),
             "result": _result_to_dict(result),
+            "cache": "miss" if use_cache else "bypass",
         }
+        if use_cache:
+            self._cache.put(plan, payload)
+        return HTTPStatus.OK, payload
 
     def _llm_plan(self, question: str) -> QueryPlan:
         """Lazy-build the LLM parser so the broker boots without
@@ -294,9 +324,12 @@ def build_production_server(cfg: Config | None = None) -> IntelCopilotServer:
     """
     cfg = cfg or Config.from_env()
     router = _build_router(cfg)
+    from intel_copilot.cache import from_env as cache_from_env
+
     return IntelCopilotServer(
         router,
         llm_planner_factory=_build_llm_factory(),
+        cache=cache_from_env(),
     )
 
 
