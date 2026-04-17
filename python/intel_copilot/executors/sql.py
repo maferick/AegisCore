@@ -1,15 +1,22 @@
-"""SQL (MariaDB) executor — stub for lookups + temporal-truth queries.
+"""SQL (MariaDB) executor — narrow lookup against the canonical names table.
 
-The OpenSearch executor handles denormalized aggregations. This one is for
-questions that need the canonical source: temporal character/corp/alliance
-history, valuation provenance, outbox state, anything where the index would
-lie because it was written at a different time than the truth.
+OpenSearch handles denormalized aggregations. This one is for questions that
+need the canonical source: "who / what is this ID?" (and, once phase 2
+needs it, temporal character/corp/alliance affiliation history, valuation
+provenance, outbox state — anywhere the index would lie because it was
+written at a different time than the truth).
 
 Phase-1 scope is explicitly narrow. ``LOOKUP`` is the only intent wired up,
 and only for the ``CHARACTER`` / ``CORPORATION`` / ``ALLIANCE`` entity
-types. Anything broader is deferred until we know what the Laravel side
-actually wants to ask — designing speculative SQL surface area here would
-just invite drift.
+types.
+
+Names source is ``esi_entity_names(entity_id, name, category, cached_at)``
+— a unified cache populated by ``EsiNameResolver`` on the Laravel side.
+No separate ``corporations`` / ``alliances`` tables exist; ``characters``
+is scoped to SSO-linked user characters only, so it's the wrong store for
+arbitrary-pilot lookups. Using ``esi_entity_names`` with a
+``category`` filter keeps the executor correct for every EVE entity the
+platform has ever touched.
 """
 
 from __future__ import annotations
@@ -23,6 +30,16 @@ from intel_copilot.log import get
 from intel_copilot.plan import EntityType, Intent, PlanError, QueryPlan
 
 log = get(__name__)
+
+
+# EntityType → category value stored in esi_entity_names.category.
+# Additions to this map are the only thing needed to widen LOOKUP support
+# to a new entity kind; the rest of the builder is category-agnostic.
+_CATEGORY_FOR: dict[EntityType, str] = {
+    EntityType.CHARACTER: "character",
+    EntityType.CORPORATION: "corporation",
+    EntityType.ALLIANCE: "alliance",
+}
 
 
 class SQLExecutor:
@@ -71,36 +88,41 @@ class SQLExecutor:
     # ------------------------------------------------------------------ #
 
     def _build_sql(self, plan: QueryPlan) -> tuple[str, tuple[Any, ...]]:
+        """Assemble a parameterised SELECT against ``esi_entity_names``.
+
+        Both shapes — lookup by id or by name — resolve to the same table
+        + same column set. ``category`` is always bound so that a name
+        collision across categories (rare but real: alliance named the
+        same as a character) cannot leak.
+        """
         assert plan.subject is not None
         et = plan.subject.entity_type
 
-        # Table + id column per entity type. Adding a new entity type means
-        # adding a row here — there is no auto-discovery on purpose, to
-        # keep the blast radius of this executor small and auditable.
-        table_for: dict[EntityType, tuple[str, str, str]] = {
-            EntityType.CHARACTER: ("characters", "character_id", "name"),
-            EntityType.CORPORATION: ("corporations", "corporation_id", "name"),
-            EntityType.ALLIANCE: ("alliances", "alliance_id", "name"),
-        }
-        if et not in table_for:
+        if et not in _CATEGORY_FOR:
             raise PlanError(f"SQL lookup does not handle entity_type={et.value}")
 
-        table, id_col, name_col = table_for[et]
+        category = _CATEGORY_FOR[et]
 
-        # Identifiers come from the closed ``table_for`` map, never from
-        # user input — safe to interpolate. Values are always parameterized.
+        # Identifier comes from the closed map above — safe literal.
+        # Values are always bound as parameters.
         if plan.subject.value_id is not None:
-            where = f"`{id_col}` = %s"
-            params: tuple[Any, ...] = (plan.subject.value_id,)
+            id_values = plan.subject.value_id if isinstance(plan.subject.value_id, list) else [plan.subject.value_id]
+            placeholders = ",".join(["%s"] * len(id_values))
+            where = f"`entity_id` IN ({placeholders})"
+            params: tuple[Any, ...] = (category, *id_values)
         elif plan.subject.value is not None:
-            where = f"`{name_col}` = %s"
-            params = (plan.subject.value,)
+            name_values = plan.subject.value if isinstance(plan.subject.value, list) else [plan.subject.value]
+            placeholders = ",".join(["%s"] * len(name_values))
+            where = f"`name` IN ({placeholders})"
+            params = (category, *name_values)
         else:
             raise PlanError("lookup subject must carry value or value_id")
 
         sql = (
-            f"SELECT `{id_col}` AS id, `{name_col}` AS name "
-            f"FROM `{table}` WHERE {where} LIMIT %s"
+            "SELECT `entity_id` AS id, `name`, `category` "
+            "FROM `esi_entity_names` "
+            f"WHERE `category` = %s AND {where} "
+            "LIMIT %s"
         )
         return sql, params + (plan.limit,)
 
@@ -108,11 +130,17 @@ class SQLExecutor:
 def _row_label(row: Any) -> str:
     if isinstance(row, dict):
         return str(row.get("name") or row.get("id"))
-    # Tuple cursor — (id, name)
-    return str(row[1] if len(row) > 1 else row[0])
+    # Tuple cursor — column order matches the SELECT: (id, name, category)
+    if len(row) >= 2 and row[1] is not None:
+        return str(row[1])
+    return str(row[0])
 
 
 def _row_meta(row: Any) -> dict[str, Any]:
     if isinstance(row, dict):
         return dict(row)
-    return {"id": row[0], "name": row[1] if len(row) > 1 else None}
+    return {
+        "id": row[0],
+        "name": row[1] if len(row) > 1 else None,
+        "category": row[2] if len(row) > 2 else None,
+    }
