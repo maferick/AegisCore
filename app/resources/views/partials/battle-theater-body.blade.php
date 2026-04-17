@@ -441,16 +441,16 @@
      MOST VALUABLE KILLS per side
      ================================================================ --}}
 @if (!empty($most_valuable_kills[S::SIDE_A]) || !empty($most_valuable_kills[S::SIDE_B]) || !empty($most_valuable_kills[S::SIDE_C]))
-<div class="km-grid" style="margin-bottom: 1.5rem;">
-    @php
-        $mvkSides = [
-            S::SIDE_A => ['Top kills — Side A', 'a', $sideAHeadline],
-            S::SIDE_B => ['Top kills — Side B', 'b', $sideBHeadline],
-        ];
-        if ($hasSideC || !empty($most_valuable_kills[S::SIDE_C])) {
-            $mvkSides[S::SIDE_C] = ['Top kills — Third parties', 'c', $sideCHeadline];
-        }
-    @endphp
+@php
+    $mvkSides = [
+        S::SIDE_A => ['Top kills — Side A', 'a', $sideAHeadline],
+        S::SIDE_B => ['Top kills — Side B', 'b', $sideBHeadline],
+    ];
+    if ($hasSideC || !empty($most_valuable_kills[S::SIDE_C])) {
+        $mvkSides[S::SIDE_C] = ['Top kills — Third parties', 'c', $sideCHeadline];
+    }
+@endphp
+<div class="{{ count($mvkSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
     @foreach ($mvkSides as $sideKey => $meta)
         @php [$title, $toneClass, $labelFor] = $meta; $rows = $most_valuable_kills[$sideKey] ?? []; @endphp
         <div class="km-card">
@@ -486,16 +486,16 @@
 {{-- ================================================================
      SHIP COMPOSITION per side
      ================================================================ --}}
-<div class="km-grid" style="margin-bottom: 1.5rem;">
-    @php
-        $compSides = [
-            S::SIDE_A => ['Composition — Side A', 'a', $sideAHeadline],
-            S::SIDE_B => ['Composition — Side B', 'b', $sideBHeadline],
-        ];
-        if ($hasSideC || !empty($composition[S::SIDE_C])) {
-            $compSides[S::SIDE_C] = ['Composition — Third parties', 'c', $sideCHeadline];
-        }
-    @endphp
+@php
+    $compSides = [
+        S::SIDE_A => ['Composition — Side A', 'a', $sideAHeadline],
+        S::SIDE_B => ['Composition — Side B', 'b', $sideBHeadline],
+    ];
+    if ($hasSideC || !empty($composition[S::SIDE_C])) {
+        $compSides[S::SIDE_C] = ['Composition — Third parties', 'c', $sideCHeadline];
+    }
+@endphp
+<div class="{{ count($compSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
     @foreach ($compSides as $sideKey => $meta)
         @php
             [$title, $toneClass, $labelFor] = $meta;
@@ -527,16 +527,16 @@
 {{-- ================================================================
      TOP DAMAGE per side
      ================================================================ --}}
-<div class="km-grid" style="margin-bottom: 1.5rem;">
-    @php
-        $dmgSides = [
-            S::SIDE_A => ['Top damage — Side A', 'a'],
-            S::SIDE_B => ['Top damage — Side B', 'b'],
-        ];
-        if ($hasSideC || !empty($top_damage[S::SIDE_C])) {
-            $dmgSides[S::SIDE_C] = ['Top damage — Third parties', 'c'];
-        }
-    @endphp
+@php
+    $dmgSides = [
+        S::SIDE_A => ['Top damage — Side A', 'a'],
+        S::SIDE_B => ['Top damage — Side B', 'b'],
+    ];
+    if ($hasSideC || !empty($top_damage[S::SIDE_C])) {
+        $dmgSides[S::SIDE_C] = ['Top damage — Third parties', 'c'];
+    }
+@endphp
+<div class="{{ count($dmgSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
     @foreach ($dmgSides as $sideKey => $meta)
         @php [$title, $toneClass] = $meta; $rows = $top_damage[$sideKey] ?? []; @endphp
         <div class="km-card">
