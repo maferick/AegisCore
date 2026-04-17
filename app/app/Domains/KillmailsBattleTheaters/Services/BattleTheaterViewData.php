@@ -121,18 +121,22 @@ final class BattleTheaterViewData
 
         $shipsByCharacter = $this->buildShipRollup($killmailIds);
 
-        // Per the domain spec (ADR-0006 § 2): ISK Killed is the
-        // mirror of the opposing side's ISK Lost — one number, two
-        // perspectives. No attacker-attribution, no proportional
-        // splitting. Previous impl did zkb-style attacker-side
-        // attribution which double-counted on mixed fights.
-        $sideTotals = $this->computeSideTotals($participants, $sides);
+        // Per updated domain spec § 2.1 (N-side attacker-participation
+        // model): a side's ISK Killed = sum(totalValue) over killmails
+        // where the victim is NOT on the side AND the side has ≥1
+        // attacker on the mail. Shared kills credit every
+        // participating non-victim side the full value (no pie-
+        // splitting). sum(isk_killed across sides) ≥ sum(isk_lost)
+        // when sides overlap on attacker lists, which is correct.
+        $iskKilledBySide = $this->buildIskKilledBySide($killmailIds, $sides);
+        $sideTotals = $this->computeSideTotals($participants, $sides, $iskKilledBySide);
 
         // Alliance-level kill involvements = COUNT(DISTINCT killmail_id)
         // where any member of the alliance is on the attacker list
-        // (spec § 5.4). Sum of per-pilot kills inflates by fleet size;
-        // this query returns the true distinct-km count per alliance.
-        $allianceKillInvolvements = $this->buildAllianceKillInvolvements($killmailIds);
+        // AND the victim is NOT on this alliance's side (spec § 5.4 +
+        // § 8 alliance summary). Sum of per-pilot kills inflates by
+        // fleet size; this query returns the true distinct-km count.
+        $allianceKillInvolvements = $this->buildAllianceKillInvolvements($killmailIds, $sides);
 
         $allianceRows = $this->buildAllianceRollup($participants, $names, $sides, $allianceKillInvolvements);
 
@@ -551,39 +555,32 @@ final class BattleTheaterViewData
     }
 
     /**
-     * Side-level totals. Per ADR-0006 § 2, generalised across all
-     * sides (including third parties):
+     * Side-level totals. Per domain spec § 2.1 (N-side
+     * attacker-participation model):
      *
-     *   isk_lost(S)    = sum(totalValue) over killmails where victim ∈ S
-     *   isk_killed(S)  = total_theater_isk_lost − isk_lost(S)
-     *                    i.e. the sum of every OTHER side's losses,
-     *                    viewed as "ships side S is collectively
-     *                    credited with destroying".
+     *   isk_lost(S)   = sum(totalValue) over killmails where victim ∈ S
+     *   isk_killed(S) = sum(totalValue) over killmails where victim ∉ S
+     *                   AND at least one attacker ∈ S
+     *                   (precomputed by buildIskKilledBySide)
+     *   kills         = sum of per-pilot kill involvements on the side
+     *   final_blows   = sum of per-pilot final_blows
+     *                   (FB is unique per km, so this equals the
+     *                    distinct-km count for the side)
      *
-     * Mirror still holds pairwise on two-side fights (Side A's
-     * isk_killed = Side B's isk_lost + 0 = Side B's isk_lost), but
-     * on theaters with a meaningful Side C (third parties), those
-     * losses aren't orphaned — each side picks up credit for the
-     * portion it wasn't the victim of. Tradeoff: sum(isk_killed)
-     * exceeds theater_total because each loss gets mirrored by
-     * every non-victim side. That's acceptable UX for a "who
-     * destroyed what" number — the balance that MUST hold is on
-     * isk_lost, not isk_killed.
-     *
-     * Other fields:
-     *   kills       = sum of per-pilot kill involvements
-     *                 (rolled up for the header card; alliance
-     *                  roster uses COUNT(DISTINCT km) to avoid
-     *                  fleet-size inflation, § 5.4)
-     *   final_blows = sum of per-pilot final_blows
-     *                 (FB is unique per km, so this equals the
-     *                  distinct-km count for the side)
+     * Balancing identities (spec § 9):
+     *   sum(isk_lost across sides) = theater_total
+     *   sum(isk_killed across sides) ≥ theater_total  (equality iff
+     *     every km has attackers from exactly one side)
      *
      * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<string, float>  $iskKilledBySide  side → ISK killed
      * @return array<string, array<string, int|float>>
      */
-    private function computeSideTotals(Collection $participants, BattleTheaterSideResolution $sides): array
-    {
+    private function computeSideTotals(
+        Collection $participants,
+        BattleTheaterSideResolution $sides,
+        array $iskKilledBySide,
+    ): array {
         $zero = [
             'pilots' => 0,
             'kills' => 0,
@@ -609,16 +606,82 @@ final class BattleTheaterViewData
             $totals[$side]['isk_lost'] += (float) $p->isk_lost;
         }
 
-        // isk_killed(S) = total − isk_lost(S). One pass, no
-        // attacker-side attribution, no double-entry bookkeeping.
-        $totalIskLost = $totals[BattleTheaterSideResolver::SIDE_A]['isk_lost']
-            + $totals[BattleTheaterSideResolver::SIDE_B]['isk_lost']
-            + $totals[BattleTheaterSideResolver::SIDE_C]['isk_lost'];
         foreach ([BattleTheaterSideResolver::SIDE_A, BattleTheaterSideResolver::SIDE_B, BattleTheaterSideResolver::SIDE_C] as $s) {
-            $totals[$s]['isk_killed'] = $totalIskLost - $totals[$s]['isk_lost'];
+            $totals[$s]['isk_killed'] = (float) ($iskKilledBySide[$s] ?? 0.0);
         }
 
         return $totals;
+    }
+
+    /**
+     * Spec § 2.1 — N-side ISK Killed. For each killmail in the
+     * theater, determine the victim's side and the set of non-victim
+     * sides that had at least one attacker on the mail, and credit
+     * each of those sides with the full totalValue. Shared kills
+     * credit every participating side the full value; no pie-split.
+     *
+     * Validation identity: for any killmail K with victim on Side V,
+     * every other side S with an attacker on K has K.totalValue
+     * included in S.isk_killed (spec § 9.3).
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<string, float>
+     */
+    private function buildIskKilledBySide(array $killmailIds, BattleTheaterSideResolution $sides): array
+    {
+        $out = [
+            BattleTheaterSideResolver::SIDE_A => 0.0,
+            BattleTheaterSideResolver::SIDE_B => 0.0,
+            BattleTheaterSideResolver::SIDE_C => 0.0,
+        ];
+        if ($killmailIds === []) {
+            return $out;
+        }
+
+        // victim side per km. Structures (null victim char) fall back
+        // to Side C — they have no character_id so sideByCharacterId
+        // can't place them and they default to third-parties, which
+        // matches UX intent (no named side "owns" the structure).
+        $victimSidePerKm = [];
+        $valuePerKm = [];
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->select(['killmail_id', 'victim_character_id', 'total_value'])
+            ->get()
+            ->each(function ($r) use (&$victimSidePerKm, &$valuePerKm, $sides): void {
+                $kmId = (int) $r->killmail_id;
+                $vid = $r->victim_character_id ? (int) $r->victim_character_id : null;
+                $victimSidePerKm[$kmId] = $vid !== null
+                    ? ($sides->sideByCharacterId[$vid] ?? BattleTheaterSideResolver::SIDE_C)
+                    : BattleTheaterSideResolver::SIDE_C;
+                $valuePerKm[$kmId] = (float) $r->total_value;
+            });
+
+        // attacker sides per km — the set of sides that had ≥1
+        // character on the attacker list.
+        $attackerSidesPerKm = [];
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('character_id')
+            ->select(['killmail_id', 'character_id'])
+            ->get()
+            ->each(function ($r) use (&$attackerSidesPerKm, $sides): void {
+                $side = $sides->sideByCharacterId[(int) $r->character_id] ?? BattleTheaterSideResolver::SIDE_C;
+                $attackerSidesPerKm[(int) $r->killmail_id][$side] = true;
+            });
+
+        foreach ($attackerSidesPerKm as $kmId => $sidesPresent) {
+            $victimSide = $victimSidePerKm[$kmId] ?? BattleTheaterSideResolver::SIDE_C;
+            $value = $valuePerKm[$kmId] ?? 0.0;
+            foreach (array_keys($sidesPresent) as $s) {
+                if ($s === $victimSide) {
+                    continue; // no self-kill credit
+                }
+                $out[$s] += $value;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -626,32 +689,79 @@ final class BattleTheaterViewData
      * @return array<string, float>
      */
     /**
-     * Alliance-level kill involvements, per spec § 5.4:
+     * Alliance-level kill involvements per spec § 5.4 + § 8:
      *
      *   Kill_Involvements(Alliance) = COUNT(DISTINCT killmail_id)
      *                                 WHERE any member of Alliance is
      *                                 on the attacker list
+     *                                 AND victim is NOT on the
+     *                                 alliance's side
      *
-     * Sums of per-pilot involvements inflate by fleet size: 31 members
-     * of one alliance on 8 shared killmails = 248 involvements if
-     * summed, but 8 is the true distinct-killmail count.
+     * The "not on this alliance's side" clause drops blue-on-blue
+     * (same-side friendly fire) from the kill-involvement count so
+     * the number reflects adversarial hits only.
      *
      * @param  list<int>  $killmailIds
      * @return array<int, int>  alliance_id → distinct killmail count
      */
-    private function buildAllianceKillInvolvements(array $killmailIds): array
+    private function buildAllianceKillInvolvements(array $killmailIds, BattleTheaterSideResolution $sides): array
     {
         if ($killmailIds === []) {
             return [];
         }
+
+        // km → victim side (for blue-on-blue filter below).
+        $victimSidePerKm = [];
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->select(['killmail_id', 'victim_character_id'])
+            ->get()
+            ->each(function ($r) use (&$victimSidePerKm, $sides): void {
+                $vid = $r->victim_character_id ? (int) $r->victim_character_id : null;
+                $victimSidePerKm[(int) $r->killmail_id] = $vid !== null
+                    ? ($sides->sideByCharacterId[$vid] ?? BattleTheaterSideResolver::SIDE_C)
+                    : BattleTheaterSideResolver::SIDE_C;
+            });
+
+        // Alliance → its side. An alliance's side is the side its
+        // pilots were assigned to by the resolver; pull from the
+        // first-seen pilot per alliance (resolver puts every pilot
+        // of a given alliance on the same side via either bloc or
+        // alliance-anchor clustering).
+        $allianceSide = [];
+        // seed from sideByCharacterId + killmail_attackers join is
+        // cheap here — scan once.
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('alliance_id')
+            ->whereNotNull('character_id')
+            ->select(['alliance_id', 'character_id'])
+            ->get()
+            ->each(function ($r) use (&$allianceSide, $sides): void {
+                $aid = (int) $r->alliance_id;
+                if (isset($allianceSide[$aid])) {
+                    return;
+                }
+                $allianceSide[$aid] = $sides->sideByCharacterId[(int) $r->character_id] ?? BattleTheaterSideResolver::SIDE_C;
+            });
+
         $seen = [];   // alliance_id → [killmail_id => true]
         DB::table('killmail_attackers')
             ->whereIn('killmail_id', $killmailIds)
             ->whereNotNull('alliance_id')
             ->select(['alliance_id', 'killmail_id'])
             ->get()
-            ->each(function ($row) use (&$seen): void {
-                $seen[(int) $row->alliance_id][(int) $row->killmail_id] = true;
+            ->each(function ($row) use (&$seen, $victimSidePerKm, $allianceSide): void {
+                $aid = (int) $row->alliance_id;
+                $kmId = (int) $row->killmail_id;
+                $victimSide = $victimSidePerKm[$kmId] ?? BattleTheaterSideResolver::SIDE_C;
+                $allySide = $allianceSide[$aid] ?? null;
+                // Filter same-side: if the alliance is on Side A and
+                // the victim is also on Side A, don't count.
+                if ($allySide !== null && $allySide === $victimSide) {
+                    return;
+                }
+                $seen[$aid][$kmId] = true;
             });
 
         $out = [];
