@@ -2,3 +2,7 @@
 # OpenSearch client behaves identically across planes.
 opensearch-py~=2.7
 pymysql~=1.1
+# LLM planner — only imported when the CLI / broker actually routes a
+# question through the Claude planner. Pinned loosely so SDK security
+# fixes land without manual bumps.
+anthropic~=0.39
