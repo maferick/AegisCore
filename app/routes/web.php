@@ -105,8 +105,11 @@ Route::get('/internal/map/{scope}', MapDataController::class)
 // admin + scheduler path. Not auth-gated by design.
 Route::get('/battles', [PublicBattlesController::class, 'index'])
     ->name('public.battles.index');
+// Accept either numeric id (back-compat with old share links) or
+// the stable public_slug. Route regex allows letters/digits/dashes
+// so slugs like "9-gbpd-202604171300" resolve.
 Route::get('/battles/{record}', [PublicBattlesController::class, 'show'])
-    ->whereNumber('record')
+    ->where('record', '[A-Za-z0-9\-]+')
     ->name('public.battles.show');
 
 // Public killmail detail — same rollup the authed portal killmail

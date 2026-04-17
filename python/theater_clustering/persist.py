@@ -275,16 +275,39 @@ def persist_clusters(
         theaters_written = 0
         participants_written = 0
 
+        # Preload system names once so each INSERT can compute a
+        # stable share slug. Derived form mirrors the backfill
+        # statement in the add-public-slug migration so existing
+        # (locked) rows and new (unlocked) rows share the same format.
+        system_ids = {s.primary_system_id for _, s in stats_by_cluster}
+        system_name_by_id: dict[int, str] = {}
+        if system_ids:
+            cur.execute(
+                "SELECT id, name FROM ref_solar_systems WHERE id IN ("
+                + ",".join(["%s"] * len(system_ids))
+                + ")",
+                list(system_ids),
+            )
+            for row in cur.fetchall():
+                system_name_by_id[int(row["id"])] = str(row["name"])
+
+        def _slug_for(primary_system_id: int, start_time: datetime) -> str:
+            name = system_name_by_id.get(primary_system_id, f"sys{primary_system_id}")
+            slug_name = name.lower().replace(" ", "-").replace(".", "")
+            return f"{slug_name}-{start_time.strftime('%Y%m%d%H%M')}"
+
         for cluster, s in stats_by_cluster:
+            public_slug = _slug_for(s.primary_system_id, s.start_time)
             cur.execute(
                 """
                 INSERT INTO battle_theaters
-                  (primary_system_id, region_id, start_time, end_time,
+                  (public_slug, primary_system_id, region_id, start_time, end_time,
                    total_kills, total_isk_lost, participant_count,
                    system_count, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                 """,
                 (
+                    public_slug,
                     s.primary_system_id, s.region_id,
                     s.start_time, s.end_time,
                     s.total_kills, s.total_isk_lost,

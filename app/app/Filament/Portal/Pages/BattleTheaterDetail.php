@@ -39,9 +39,28 @@ class BattleTheaterDetail extends Page
     // scalar id and reload in getViewData().
     public ?int $recordId = null;
 
-    public function mount(BattleTheater|int $record): void
+    /**
+     * Mount accepts either a numeric id (legacy share URLs) or a
+     * stable public_slug (preferred — survives re-clusters of the
+     * same fight). Slugs resolve to the newest row with that slug
+     * in case clustering split one fight into two with identical
+     * system+minute buckets.
+     */
+    public function mount(BattleTheater|int|string $record): void
     {
-        $this->recordId = $record instanceof BattleTheater ? (int) $record->id : (int) $record;
+        if ($record instanceof BattleTheater) {
+            $this->recordId = (int) $record->id;
+            return;
+        }
+        if (is_int($record) || ctype_digit((string) $record)) {
+            $this->recordId = (int) $record;
+            return;
+        }
+        $theater = BattleTheater::query()
+            ->where('public_slug', (string) $record)
+            ->orderByDesc('id')
+            ->firstOrFail();
+        $this->recordId = (int) $theater->id;
     }
 
     private function loadRecord(): BattleTheater

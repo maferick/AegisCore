@@ -43,7 +43,7 @@
                     $secText = $sec !== null ? number_format($sec, 1) : '—';
                     $dur = $b->durationSeconds();
                     $durFmt = sprintf('%02d:%02d', intdiv($dur, 3600), intdiv($dur % 3600, 60));
-                    $url = route('public.battles.show', ['record' => $b->id]);
+                    $url = route('public.battles.show', ['record' => $b->public_slug ?: $b->id]);
                 @endphp
                 <tr class="link-row" onclick="location.href='{{ $url }}'">
                     <td>

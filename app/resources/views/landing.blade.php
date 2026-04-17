@@ -781,7 +781,7 @@
                         $sec = $b->primarySystem?->security_status;
                         $secColor = $sec === null ? '#7a7a82'
                             : ($sec >= 0.5 ? '#4ade80' : ($sec >= 0.0 ? '#e5a900' : '#ff3838'));
-                        $url = route('public.battles.show', ['record' => $b->id]);
+                        $url = route('public.battles.show', ['record' => $b->public_slug ?: $b->id]);
                     @endphp
                     <a href="{{ $url }}"
                        style="display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; border-bottom: 1px solid rgba(38,38,43,0.6); text-decoration: none; color: #e5e5e7; font-size: 0.85rem;">
