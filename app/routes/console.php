@@ -198,3 +198,15 @@ Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCharacterCorpor
     ->everyFiveMinutes()
     ->onOneServer()
     ->name('fetch-corp-history');
+
+// Allegiance graph backfill — project the last 24h of locked battle
+// theaters into the Neo4j allegiance graph so the resolver's
+// historical-allegiance tiebreaker accumulates signal on its own
+// (not just from operator overrides). Incremental: runs against the
+// last 24h every 6h so a single crash / deploy window never misses
+// more than one cycle of data, and the upsert is idempotent anyway.
+Schedule::command('allegiance:backfill --since=24h')
+    ->cron('0 */6 * * *')
+    ->onOneServer()
+    ->withoutOverlapping(60)
+    ->name('allegiance-backfill');

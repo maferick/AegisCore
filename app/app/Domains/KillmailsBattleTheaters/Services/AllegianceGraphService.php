@@ -101,6 +101,49 @@ class AllegianceGraphService
     }
 
     /**
+     * Record allegiance edges from an explicit alliance → side map.
+     * Used by the backfill command to project the resolver's own
+     * output across locked theaters, and by internal callers that
+     * already have a sides dict in hand (avoiding the re-read of
+     * the overrides table in ``recordForTheater``).
+     *
+     * @param  array<int, string>  $allianceSides  alliance_id → 'A' | 'B'
+     */
+    public function recordForAllianceSides(int $theaterId, array $allianceSides): void
+    {
+        $bySide = ['A' => [], 'B' => []];
+        foreach ($allianceSides as $aid => $side) {
+            if ($side === 'A' || $side === 'B') {
+                $bySide[$side][] = (int) $aid;
+            }
+        }
+        if ($bySide['A'] === [] && $bySide['B'] === []) {
+            return;
+        }
+
+        try {
+            $client = $this->client();
+        } catch (Throwable $exc) {
+            logger()->warning('allegiance: neo4j unavailable, skipping record', ['err' => $exc->getMessage()]);
+            return;
+        }
+
+        foreach (['A', 'B'] as $side) {
+            $ids = $bySide[$side];
+            for ($i = 0; $i < count($ids); $i++) {
+                for ($j = $i + 1; $j < count($ids); $j++) {
+                    $this->upsertEdge($client, 'ALLIED_WITH', $ids[$i], $ids[$j], $theaterId);
+                }
+            }
+        }
+        foreach ($bySide['A'] as $a) {
+            foreach ($bySide['B'] as $b) {
+                $this->upsertEdge($client, 'OPPOSED', $a, $b, $theaterId);
+            }
+        }
+    }
+
+    /**
      * Score alliance X against two anchor alliances (the current
      * Side A and Side B). Returns
      *
