@@ -95,25 +95,77 @@ final class BattleTheaterSideResolver
             ? (int) $viewer->bloc_id
             : null;
 
-        $sideABlocId = $viewerBlocId;
-        $sideBBlocId = $this->pickOpposingBloc($iskPerBloc, excludeBlocId: $sideABlocId);
+        // Bloc-based path — only used when the viewer has an explicit
+        // bloc set. "Show me my coalition vs its dominant adversary,
+        // everyone else is third parties" is an intentional viewer
+        // choice; we respect it even if the bloc mapping is sparse.
+        if ($viewerBlocId !== null) {
+            $sideABlocId = $viewerBlocId;
+            $sideBBlocId = $this->pickOpposingBloc($iskPerBloc, excludeBlocId: $sideABlocId);
 
-        // Fallback for viewers with no confirmed bloc: pick the two
-        // largest blocs by ISK lost. UI can swap A/B.
-        if ($sideABlocId === null) {
-            arsort($iskPerBloc);
-            $topTwo = array_slice(array_keys($iskPerBloc), 0, 2);
-            $sideABlocId = $topTwo[0] ?? null;
-            $sideBBlocId = $topTwo[1] ?? null;
+            $sideByChar = [];
+            foreach ($participants as $p) {
+                $allianceBloc = $allianceToBloc[(int) $p->alliance_id] ?? null;
+                if ($allianceBloc !== null && $allianceBloc === $sideABlocId) {
+                    $sideByChar[(int) $p->character_id] = self::SIDE_A;
+                } elseif ($allianceBloc !== null && $allianceBloc === $sideBBlocId) {
+                    $sideByChar[(int) $p->character_id] = self::SIDE_B;
+                } else {
+                    $sideByChar[(int) $p->character_id] = self::SIDE_C;
+                }
+            }
+
+            return new BattleTheaterSideResolution(
+                sideByCharacterId: $sideByChar,
+                sideABlocId: $sideABlocId,
+                sideBBlocId: $sideBBlocId,
+                allianceToBloc: $allianceToBloc,
+            );
         }
 
-        // Assign each participant a side.
+        // Anonymous / no-viewer-bloc path — pick the two largest
+        // alliances by pilot count as Side A / Side B. Previously this
+        // path picked the two largest *blocs* by ISK lost, which
+        // produced "The Initiative. vs Fraternity." on a 1300-pilot
+        // battle where 140 out of 1300 pilots were in those two
+        // blocs — the other ~90% landed in "third parties" purely
+        // because their alliances weren't mapped in
+        // coalition_entity_labels. Alliance-level is always populated
+        // on participants, so it draws two real sides out of whatever
+        // is on the field.
+        return $this->resolveByAlliance($participants, $allianceToBloc);
+    }
+
+    /**
+     * Alliance-level fallback used when no viewer bloc is set. Picks
+     * the two alliances with the most pilots; everything else →
+     * Side C. Returns a resolution with blocId fields null so the UI
+     * doesn't surface bloc labels that would be arbitrary here.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<int, int>  $allianceToBloc
+     */
+    private function resolveByAlliance(Collection $participants, array $allianceToBloc): BattleTheaterSideResolution
+    {
+        $pilotsPerAlliance = [];
+        foreach ($participants as $p) {
+            $aid = (int) ($p->alliance_id ?? 0);
+            if ($aid === 0) {
+                continue; // no-alliance pilots can't anchor a side
+            }
+            $pilotsPerAlliance[$aid] = ($pilotsPerAlliance[$aid] ?? 0) + 1;
+        }
+        arsort($pilotsPerAlliance);
+        $topTwo = array_slice(array_keys($pilotsPerAlliance), 0, 2);
+        $sideAAllianceId = $topTwo[0] ?? null;
+        $sideBAllianceId = $topTwo[1] ?? null;
+
         $sideByChar = [];
         foreach ($participants as $p) {
-            $allianceBloc = $allianceToBloc[(int) $p->alliance_id] ?? null;
-            if ($allianceBloc !== null && $allianceBloc === $sideABlocId) {
+            $aid = (int) ($p->alliance_id ?? 0);
+            if ($aid !== 0 && $aid === $sideAAllianceId) {
                 $sideByChar[(int) $p->character_id] = self::SIDE_A;
-            } elseif ($allianceBloc !== null && $allianceBloc === $sideBBlocId) {
+            } elseif ($aid !== 0 && $aid === $sideBAllianceId) {
                 $sideByChar[(int) $p->character_id] = self::SIDE_B;
             } else {
                 $sideByChar[(int) $p->character_id] = self::SIDE_C;
@@ -122,8 +174,8 @@ final class BattleTheaterSideResolver
 
         return new BattleTheaterSideResolution(
             sideByCharacterId: $sideByChar,
-            sideABlocId: $sideABlocId,
-            sideBBlocId: $sideBBlocId,
+            sideABlocId: null,
+            sideBBlocId: null,
             allianceToBloc: $allianceToBloc,
         );
     }
