@@ -7,8 +7,11 @@ use App\Domains\UsersCharacters\Models\CoalitionEntityLabel;
 use App\Domains\UsersCharacters\Models\CorporationAffiliationProfile;
 use App\Domains\UsersCharacters\Models\EntityClassificationOverride;
 use App\Domains\UsersCharacters\Observers\ClassificationDirtyObserver;
+use App\Domains\IntelCopilot\Services\IntelCopilotBroker;
 use App\Domains\UsersCharacters\Services\DonorBenefitCalculator;
 use App\Livewire\AccountSettings;
+use App\Livewire\IntelCopilotChat;
+use Illuminate\Http\Client\Factory as HttpFactory;
 use App\Services\Eve\Esi\CachedEsiClient;
 use App\Services\Eve\Esi\EsiClient;
 use App\Services\Eve\Esi\EsiClientInterface;
@@ -78,6 +81,19 @@ class AppServiceProvider extends ServiceProvider
         // which is already a singleton. A singleton here is what
         // `EsiClient` above uses for the same reason.
         $this->app->singleton(EveSsoClient::class, fn () => EveSsoClient::fromConfig());
+
+        // Intel Copilot broker — Http timeouts, base URL and shared
+        // token come from config('services.intel_copilot'). Singleton
+        // because the underlying Http factory already handles connection
+        // pooling per call; one broker client per process is enough.
+        $this->app->singleton(IntelCopilotBroker::class, function ($app) {
+            return new IntelCopilotBroker(
+                http: $app->make(HttpFactory::class),
+                baseUrl: (string) config('services.intel_copilot.url'),
+                token: config('services.intel_copilot.token'),
+                timeoutSeconds: (int) config('services.intel_copilot.timeout', 20),
+            );
+        });
     }
 
     /**
@@ -127,6 +143,7 @@ class AppServiceProvider extends ServiceProvider
         // redundant and can be dropped — until then this line is the
         // chokepoint that keeps /account/settings reachable.
         Livewire::component('account.settings', AccountSettings::class);
+        Livewire::component('intel-copilot-chat', IntelCopilotChat::class);
 
         // Classification dirty-flag observers. When any of the four
         // upstream models that feed the resolver chain changes, the

@@ -1071,6 +1071,48 @@ services:
   # backfills over the full killmail corpus. Profile-gated under
   # `tools` so docker compose up doesn't start it; invoke via
   # `make theater-cluster`.
+  intel_copilot:
+    build:
+      context: ../python
+      dockerfile: intel_copilot.Dockerfile
+    image: aegiscore/intel-copilot:0.1.0
+    container_name: intel_copilot
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      INTEL_COPILOT_HOST: "0.0.0.0"
+      INTEL_COPILOT_PORT: "8000"
+      # Shared secret checked on every POST. Laravel sends the same
+      # value via X-Intel-Copilot-Token. Leave empty in pure-dev env
+      # to disable auth (Docker-network isolation is still the outer ring).
+      INTEL_COPILOT_API_TOKEN: "${INTEL_COPILOT_API_TOKEN}"
+      # Anthropic key is optional — the broker boots heuristic-only
+      # when unset, and `use_llm` requests will 422 with a clear error.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      INTEL_COPILOT_MODEL: "${INTEL_COPILOT_MODEL:-claude-sonnet-4-6}"
+      # Backend wiring — same env contract as killmail_search.
+      OPENSEARCH_URL: "http://opensearch:9200"
+      OPENSEARCH_USERNAME: admin
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_ADMIN_PASSWORD}"
+      OPENSEARCH_KILLMAIL_INDEX: killmails
+      OPENSEARCH_VERIFY_CERTS: "false"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.47
+    # No host-port mapping by design — only php-fpm (same network)
+    # should reach the broker. External exposure would need an auth
+    # proxy we haven't built.
+
   theater_cluster:
     build:
       context: ../python

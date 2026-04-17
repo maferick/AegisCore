@@ -35,4 +35,17 @@ return [
         ],
     ],
 
+    // Intel Copilot — Python broker reachable on the internal Docker
+    // network (see infra/docker-compose.yml `intel_copilot`). All NL
+    // questions from the portal chat page route through this.
+    //
+    // Token is shared with the Python side via INTEL_COPILOT_API_TOKEN
+    // and sent as X-Intel-Copilot-Token on every request; the broker
+    // rejects missing/mismatched tokens with 401.
+    'intel_copilot' => [
+        'url' => env('INTEL_COPILOT_URL', 'http://intel_copilot:8000'),
+        'token' => env('INTEL_COPILOT_API_TOKEN'),
+        'timeout' => (int) env('INTEL_COPILOT_TIMEOUT', 20),
+    ],
+
 ];
