@@ -765,10 +765,12 @@
         }
     }
     $killmailUrl = function (int $kmId) use ($hide_bloc_names): string {
-        // Public viewers → zkillboard (no auth wall). Portal viewers
-        // → internal killmail detail page with full item breakdown.
+        // Portal viewers get the Filament-chrome'd page; public
+        // viewers get the standalone /kills/{id} page. Both render
+        // the same partial via KillmailViewData, and both include
+        // an outbound zKillboard link in the header.
         return $hide_bloc_names
-            ? "https://zkillboard.com/kill/{$kmId}/"
+            ? "/kills/{$kmId}"
             : "/portal/killmails/{$kmId}";
     };
 @endphp
@@ -796,7 +798,7 @@
                         $lossKm    = $lossKmByChar[$cid] ?? null;
                     @endphp
                     @if ($lossKm)
-                    <a href="{{ $killmailUrl($lossKm) }}" {{ $hide_bloc_names ? 'target=_blank rel=noopener' : '' }} class="bt-pilot-link">
+                    <a href="{{ $killmailUrl($lossKm) }}" class="bt-pilot-link">
                     @endif
                     <div class="km-attacker {{ $isFB ? 'km-final-blow' : '' }} {{ $lossKm ? 'bt-pilot-clickable' : '' }}">
                         <img src="https://images.evetech.net/characters/{{ $cid }}/portrait?size=64"

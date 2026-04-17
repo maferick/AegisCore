@@ -109,6 +109,13 @@ Route::get('/battles/{record}', [PublicBattlesController::class, 'show'])
     ->whereNumber('record')
     ->name('public.battles.show');
 
+// Public killmail detail — same rollup the authed portal killmail
+// page renders. All killmail fields are already public via
+// zkillboard, so no gating needed.
+Route::get('/kills/{record}', [\App\Http\Controllers\PublicKillmailsController::class, 'show'])
+    ->whereNumber('record')
+    ->name('public.kills.show');
+
 // Side overrides — authed operators correct the auto-resolver's
 // clustering. Per-theater, so the same alliance can be Side A in
 // one battle and Side B in another. See ADR-0006 § 2 addendum.
