@@ -247,11 +247,11 @@
     <div class="bt-metric-grid">
         <div>
             <div class="bt-metric-label">ISK destroyed</div>
-            <div class="bt-metric-value loss">{{ $formatIsk((float) $theater->total_isk_lost) }}</div>
+            <div class="bt-metric-value loss">{{ $formatIsk((float) ($reconciled_total_isk_lost ?? $theater->total_isk_lost)) }}</div>
         </div>
         <div>
             <div class="bt-metric-label">Ships lost</div>
-            <div class="bt-metric-value">{{ number_format($theater->total_kills) }}</div>
+            <div class="bt-metric-value">{{ number_format($reconciled_total_kills ?? (int) $theater->total_kills) }}</div>
         </div>
         <div>
             <div class="bt-metric-label">Damage dealt</div>

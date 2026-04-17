@@ -48,6 +48,17 @@ final class BattleTheaterViewData
         // the collection in memory from them — no DB write.
         $this->hydrateParticipantAffiliations($theater, $participants);
 
+        // Spec § 5.1 + § 5.2 — fold capsule + structure kills into
+        // the participants collection so the roster / ISK totals
+        // reconcile with the theater's total totalValue. The
+        // clustering worker materialises participant rows from
+        // ship kills only, leaving capsule ISK and structure kills
+        // invisible to the UI (sum of visible rows came out ~70% of
+        // theater value on test fights with pods and citadel shoots
+        // in the cluster).
+        $synthetic = $this->hydrateCapsuleAndStructureKills($theater, $participants);
+        $structureNames = $synthetic['structure_names']; // char_id → display name
+
         $sides = $this->sideResolver->resolve($theater, $viewer);
 
         // Overlay operator overrides on top of the auto-resolver.
@@ -82,7 +93,13 @@ final class BattleTheaterViewData
             ->whereIn('entity_id', $charIds->merge($corpIds)->merge($allIds)->unique()->values()->all())
             ->pluck('name', 'entity_id');
 
-        $allianceRows = $this->buildAllianceRollup($participants, $names, $sides);
+        // Merge structure display labels into the names map keyed by
+        // the synthetic character_id ("-killmail_id"). Blade renders
+        // ``$names[$p->character_id]`` unchanged; structure rows look
+        // like any other participant with a descriptive label.
+        foreach ($structureNames as $syntheticCid => $label) {
+            $names[$syntheticCid] = $label;
+        }
 
         $killmailIds = DB::table('battle_theater_killmails')
             ->where('theater_id', $theater->id)
@@ -104,8 +121,20 @@ final class BattleTheaterViewData
 
         $shipsByCharacter = $this->buildShipRollup($killmailIds);
 
-        $iskDestroyedBySide = $this->buildIskDestroyedBySide($killmailIds, $sides);
-        $sideTotals = $this->computeSideTotals($participants, $sides, $iskDestroyedBySide);
+        // Per the domain spec (ADR-0006 § 2): ISK Killed is the
+        // mirror of the opposing side's ISK Lost — one number, two
+        // perspectives. No attacker-attribution, no proportional
+        // splitting. Previous impl did zkb-style attacker-side
+        // attribution which double-counted on mixed fights.
+        $sideTotals = $this->computeSideTotals($participants, $sides);
+
+        // Alliance-level kill involvements = COUNT(DISTINCT killmail_id)
+        // where any member of the alliance is on the attacker list
+        // (spec § 5.4). Sum of per-pilot kills inflates by fleet size;
+        // this query returns the true distinct-km count per alliance.
+        $allianceKillInvolvements = $this->buildAllianceKillInvolvements($killmailIds);
+
+        $allianceRows = $this->buildAllianceRollup($participants, $names, $sides, $allianceKillInvolvements);
 
         $shipTypeIds = [];
         foreach ($shipsByCharacter as $rows) {
@@ -132,9 +161,25 @@ final class BattleTheaterViewData
         $flagshipLogos = $this->buildFlagshipLogos($allianceRows);
         $headerStats = $this->buildHeaderStats($participants);
 
+        // Recomputed theater-level totals — spec § 9.1 requires
+        // sum(side.isk_lost) = sum(totalValue). Clustering worker
+        // writes theater.total_isk_lost / total_kills from ship-kill
+        // participants only, missing capsule + structure values; the
+        // read-time hydration above captures them. We surface both so
+        // the blade can show reconciled numbers without touching the
+        // clustering worker.
+        $reconciledTotalIskLost = (float) array_sum(array_column($sideTotals, 'isk_lost'));
+        $reconciledTotalKills = (int) (
+            $sideTotals[BattleTheaterSideResolver::SIDE_A]['deaths']
+            + $sideTotals[BattleTheaterSideResolver::SIDE_B]['deaths']
+            + $sideTotals[BattleTheaterSideResolver::SIDE_C]['deaths']
+        );
+
         return [
             'theater' => $theater,
             'sides' => $sides,
+            'reconciled_total_isk_lost' => $reconciledTotalIskLost,
+            'reconciled_total_kills' => $reconciledTotalKills,
             'blocs' => $blocs,
             'names' => $names,
             'participants' => $participants,
@@ -234,6 +279,109 @@ final class BattleTheaterViewData
         );
 
         return [$newSides, $keptParticipants->values(), $excludedCharIds];
+    }
+
+    /**
+     * Fold capsule kills + structure kills into the participants
+     * collection so the ISK totals reconcile with the theater's
+     * totalValue (spec § 5.1 + § 5.2).
+     *
+     * Capsules — victim_character_id is set and (on normal fights)
+     * matches a participant whose ship kill is already tracked. We
+     * add the capsule's totalValue to that participant's isk_lost
+     * and bump ``deaths``. The capsule's own row is NOT added — it
+     * belongs to the same pilot.
+     *
+     * Structures — victim_character_id is NULL; we synthesise a
+     * participant with character_id = -killmail_id, corporation_id
+     * + alliance_id from the killmail, and a display label pulled
+     * from ``ref_item_types`` so the roster shows something like
+     * "Skyhook".
+     *
+     * Returns the list of synthetic-char-id → label mappings so the
+     * caller can merge them into the entity-names collection the
+     * blade reads.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @return array{structure_names: array<int, string>}
+     */
+    private function hydrateCapsuleAndStructureKills(
+        BattleTheater $theater,
+        Collection $participants,
+    ): array {
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theater->id)
+            ->pluck('killmail_id')
+            ->all();
+        $out = ['structure_names' => []];
+        if ($killmailIds === []) {
+            return $out;
+        }
+
+        // --- Capsules ------------------------------------------------
+        // ref_item_groups.id 29 = "Capsule" family. Pod and Capsule
+        // (Genolution 'Auroral' 197-variant) all roll up under it.
+        $capsules = DB::table('killmails as k')
+            ->join('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->whereIn('k.killmail_id', $killmailIds)
+            ->where('t.group_id', 29)
+            ->whereNotNull('k.victim_character_id')
+            ->select(['k.killmail_id', 'k.victim_character_id', 'k.total_value'])
+            ->get();
+
+        $byChar = $participants->keyBy(fn ($p) => (int) $p->character_id);
+        foreach ($capsules as $c) {
+            $cid = (int) $c->victim_character_id;
+            $p = $byChar->get($cid);
+            if ($p === null) {
+                continue; // pilot not in participants — leave for the structure path / NPC data
+            }
+            $p->isk_lost = (float) $p->isk_lost + (float) $c->total_value;
+            $p->deaths = (int) $p->deaths + 1;
+        }
+
+        // --- Structures ---------------------------------------------
+        // victim_character_id IS NULL ⇒ structure / deployable /
+        // mobile depot. We project one synthetic participant row per
+        // killmail so the roster + ISK totals reflect the loss.
+        $structures = DB::table('killmails as k')
+            ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->whereIn('k.killmail_id', $killmailIds)
+            ->whereNull('k.victim_character_id')
+            ->whereNotNull('k.victim_corporation_id')
+            ->select([
+                'k.killmail_id',
+                'k.victim_corporation_id as corp',
+                'k.victim_alliance_id as alliance',
+                'k.victim_ship_type_id as ship_type_id',
+                'k.total_value as isk',
+                't.name as ship_type_name',
+            ])
+            ->get();
+
+        foreach ($structures as $s) {
+            $syntheticCid = -((int) $s->killmail_id); // unique, negative to avoid collision
+            $row = new BattleTheaterParticipant();
+            $row->theater_id = $theater->id;
+            $row->character_id = $syntheticCid;
+            $row->corporation_id = $s->corp ? (int) $s->corp : null;
+            $row->alliance_id = $s->alliance ? (int) $s->alliance : null;
+            $row->kills = 0;
+            $row->final_blows = 0;
+            $row->damage_done = 0;
+            $row->damage_taken = 0;
+            $row->deaths = 1;
+            $row->isk_lost = (float) $s->isk;
+            // ``exists = false`` so Eloquent never considers this a
+            // persisted row and never tries to save on touch.
+            $row->exists = false;
+            $participants->push($row);
+
+            $label = $s->ship_type_name ?? 'Structure';
+            $out['structure_names'][$syntheticCid] = $label;
+        }
+
+        return $out;
     }
 
     /**
@@ -403,10 +551,28 @@ final class BattleTheaterViewData
     }
 
     /**
+     * Side-level totals. Per ADR-0006 § 2:
+     *
+     *   isk_lost    = sum(totalValue) over killmails where victim ∈ side
+     *   isk_killed  = mirror of the opposing side's isk_lost
+     *                 (one number, two perspectives — never computed
+     *                 from attacker-side attribution)
+     *   kills       = sum of per-pilot kill involvements on the side
+     *                 (bag-of-involvements, rolled up for the header
+     *                 card; alliance-level uses COUNT(DISTINCT km) in
+     *                 the rollup path to avoid fleet-size inflation)
+     *   final_blows = sum of per-pilot final_blows on the side
+     *                 (final_blow is one per km, so the side-level
+     *                 sum IS the distinct-km count)
+     *
+     * Side C (third parties) ISK Killed stays 0 — the mirror rule
+     * applies to the two named sides; crediting third parties with
+     * opposing-side losses would inflate totals past theater value.
+     *
      * @param  Collection<int, BattleTheaterParticipant>  $participants
      * @return array<string, array<string, int|float>>
      */
-    private function computeSideTotals(Collection $participants, BattleTheaterSideResolution $sides, array $iskDestroyedBySide): array
+    private function computeSideTotals(Collection $participants, BattleTheaterSideResolution $sides): array
     {
         $zero = [
             'pilots' => 0,
@@ -432,9 +598,14 @@ final class BattleTheaterViewData
             $totals[$side]['damage_taken'] += (int) $p->damage_taken;
             $totals[$side]['isk_lost'] += (float) $p->isk_lost;
         }
-        foreach ([BattleTheaterSideResolver::SIDE_A, BattleTheaterSideResolver::SIDE_B, BattleTheaterSideResolver::SIDE_C] as $s) {
-            $totals[$s]['isk_killed'] = (float) ($iskDestroyedBySide[$s] ?? 0.0);
-        }
+
+        // Mirror: Side A's ISK Killed is exactly Side B's ISK Lost.
+        $totals[BattleTheaterSideResolver::SIDE_A]['isk_killed']
+            = $totals[BattleTheaterSideResolver::SIDE_B]['isk_lost'];
+        $totals[BattleTheaterSideResolver::SIDE_B]['isk_killed']
+            = $totals[BattleTheaterSideResolver::SIDE_A]['isk_lost'];
+        $totals[BattleTheaterSideResolver::SIDE_C]['isk_killed'] = 0.0;
+
         return $totals;
     }
 
@@ -442,43 +613,64 @@ final class BattleTheaterViewData
      * @param  list<int>  $killmailIds
      * @return array<string, float>
      */
-    private function buildIskDestroyedBySide(array $killmailIds, BattleTheaterSideResolution $sides): array
+    /**
+     * Alliance-level kill involvements, per spec § 5.4:
+     *
+     *   Kill_Involvements(Alliance) = COUNT(DISTINCT killmail_id)
+     *                                 WHERE any member of Alliance is
+     *                                 on the attacker list
+     *
+     * Sums of per-pilot involvements inflate by fleet size: 31 members
+     * of one alliance on 8 shared killmails = 248 involvements if
+     * summed, but 8 is the true distinct-killmail count.
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<int, int>  alliance_id → distinct killmail count
+     */
+    private function buildAllianceKillInvolvements(array $killmailIds): array
     {
-        $out = [
-            BattleTheaterSideResolver::SIDE_A => 0.0,
-            BattleTheaterSideResolver::SIDE_B => 0.0,
-            BattleTheaterSideResolver::SIDE_C => 0.0,
-        ];
         if ($killmailIds === []) {
-            return $out;
+            return [];
         }
-        $values = DB::table('killmails')
-            ->whereIn('killmail_id', $killmailIds)
-            ->pluck('total_value', 'killmail_id');
-        $sidesPerKm = [];
+        $seen = [];   // alliance_id → [killmail_id => true]
         DB::table('killmail_attackers')
             ->whereIn('killmail_id', $killmailIds)
-            ->whereNotNull('character_id')
-            ->select(['killmail_id', 'character_id'])
+            ->whereNotNull('alliance_id')
+            ->select(['alliance_id', 'killmail_id'])
             ->get()
-            ->each(function ($row) use (&$sidesPerKm, $sides): void {
-                $side = $sides->sideByCharacterId[(int) $row->character_id] ?? BattleTheaterSideResolver::SIDE_C;
-                $sidesPerKm[(int) $row->killmail_id][$side] = true;
+            ->each(function ($row) use (&$seen): void {
+                $seen[(int) $row->alliance_id][(int) $row->killmail_id] = true;
             });
-        foreach ($sidesPerKm as $kmId => $sideSet) {
-            $value = (float) ($values[$kmId] ?? 0);
-            foreach (array_keys($sideSet) as $s) {
-                $out[$s] += $value;
-            }
+
+        $out = [];
+        foreach ($seen as $aid => $kmMap) {
+            $out[$aid] = count($kmMap);
         }
         return $out;
     }
 
     /**
+     * Alliance roster rollup.
+     *
+     *   pilots      — distinct character_ids per alliance on the side
+     *   kills       — COUNT(DISTINCT killmail_id) where any member of
+     *                 alliance is on the attacker list (passed in as
+     *                 ``$allianceKillInvolvements``; computed by the
+     *                 caller from killmail_attackers so fleet-size
+     *                 inflation is eliminated — spec § 5.4).
+     *   deaths      — sum of per-pilot deaths on the side
+     *   isk_lost    — sum of per-pilot isk_lost
+     *   damage_done / damage_taken — raw HP sums (display only)
+     *
+     * @param  array<int, int>  $allianceKillInvolvements  alliance_id → distinct km count
      * @return Collection<int, array<string, mixed>>
      */
-    private function buildAllianceRollup(Collection $participants, Collection $names, BattleTheaterSideResolution $sides): Collection
-    {
+    private function buildAllianceRollup(
+        Collection $participants,
+        Collection $names,
+        BattleTheaterSideResolution $sides,
+        array $allianceKillInvolvements = [],
+    ): Collection {
         $byAlliance = [];
         foreach ($participants as $p) {
             $aid = (int) ($p->alliance_id ?? 0);
@@ -495,13 +687,19 @@ final class BattleTheaterViewData
                 'damage_taken' => 0,
             ];
             $row['pilots']++;
-            $row['kills'] += (int) $p->kills;
             $row['deaths'] += (int) $p->deaths;
             $row['damage_done'] += (int) $p->damage_done;
             $row['damage_taken'] += (int) $p->damage_taken;
             $row['isk_lost'] += (float) $p->isk_lost;
             $byAlliance[$aid] = $row;
         }
+        // Overlay the distinct-killmail count from the kill-graph
+        // aggregation rather than the (inflated) per-pilot sum.
+        foreach ($byAlliance as $aid => &$row) {
+            $row['kills'] = $allianceKillInvolvements[$aid] ?? 0;
+        }
+        unset($row);
+
         return collect(array_values($byAlliance))
             ->sortByDesc('isk_lost')
             ->values();
