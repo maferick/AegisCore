@@ -210,3 +210,15 @@ Schedule::command('allegiance:backfill --since=24h')
     ->onOneServer()
     ->withoutOverlapping(60)
     ->name('allegiance-backfill');
+
+// zkill catch-up — fans out a per-system job for every system that
+// had killmail activity in the last 4h. Each job asks zkill for
+// kills it might have that our R2Z2 stream missed (big-fight feed
+// backlog, dropped sequences, etc) and ingests them through the
+// same KillmailIngested outbox event the stream uses. Every 3h,
+// off the :00/:30 rush so we don't collide with the mariadb backup.
+Schedule::command('killmails:zkill-catchup')
+    ->cron('17 */3 * * *')
+    ->onOneServer()
+    ->withoutOverlapping(60)
+    ->name('zkill-catchup');
