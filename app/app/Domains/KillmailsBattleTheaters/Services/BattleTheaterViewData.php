@@ -551,23 +551,33 @@ final class BattleTheaterViewData
     }
 
     /**
-     * Side-level totals. Per ADR-0006 § 2:
+     * Side-level totals. Per ADR-0006 § 2, generalised across all
+     * sides (including third parties):
      *
-     *   isk_lost    = sum(totalValue) over killmails where victim ∈ side
-     *   isk_killed  = mirror of the opposing side's isk_lost
-     *                 (one number, two perspectives — never computed
-     *                 from attacker-side attribution)
-     *   kills       = sum of per-pilot kill involvements on the side
-     *                 (bag-of-involvements, rolled up for the header
-     *                 card; alliance-level uses COUNT(DISTINCT km) in
-     *                 the rollup path to avoid fleet-size inflation)
-     *   final_blows = sum of per-pilot final_blows on the side
-     *                 (final_blow is one per km, so the side-level
-     *                 sum IS the distinct-km count)
+     *   isk_lost(S)    = sum(totalValue) over killmails where victim ∈ S
+     *   isk_killed(S)  = total_theater_isk_lost − isk_lost(S)
+     *                    i.e. the sum of every OTHER side's losses,
+     *                    viewed as "ships side S is collectively
+     *                    credited with destroying".
      *
-     * Side C (third parties) ISK Killed stays 0 — the mirror rule
-     * applies to the two named sides; crediting third parties with
-     * opposing-side losses would inflate totals past theater value.
+     * Mirror still holds pairwise on two-side fights (Side A's
+     * isk_killed = Side B's isk_lost + 0 = Side B's isk_lost), but
+     * on theaters with a meaningful Side C (third parties), those
+     * losses aren't orphaned — each side picks up credit for the
+     * portion it wasn't the victim of. Tradeoff: sum(isk_killed)
+     * exceeds theater_total because each loss gets mirrored by
+     * every non-victim side. That's acceptable UX for a "who
+     * destroyed what" number — the balance that MUST hold is on
+     * isk_lost, not isk_killed.
+     *
+     * Other fields:
+     *   kills       = sum of per-pilot kill involvements
+     *                 (rolled up for the header card; alliance
+     *                  roster uses COUNT(DISTINCT km) to avoid
+     *                  fleet-size inflation, § 5.4)
+     *   final_blows = sum of per-pilot final_blows
+     *                 (FB is unique per km, so this equals the
+     *                  distinct-km count for the side)
      *
      * @param  Collection<int, BattleTheaterParticipant>  $participants
      * @return array<string, array<string, int|float>>
@@ -599,12 +609,14 @@ final class BattleTheaterViewData
             $totals[$side]['isk_lost'] += (float) $p->isk_lost;
         }
 
-        // Mirror: Side A's ISK Killed is exactly Side B's ISK Lost.
-        $totals[BattleTheaterSideResolver::SIDE_A]['isk_killed']
-            = $totals[BattleTheaterSideResolver::SIDE_B]['isk_lost'];
-        $totals[BattleTheaterSideResolver::SIDE_B]['isk_killed']
-            = $totals[BattleTheaterSideResolver::SIDE_A]['isk_lost'];
-        $totals[BattleTheaterSideResolver::SIDE_C]['isk_killed'] = 0.0;
+        // isk_killed(S) = total − isk_lost(S). One pass, no
+        // attacker-side attribution, no double-entry bookkeeping.
+        $totalIskLost = $totals[BattleTheaterSideResolver::SIDE_A]['isk_lost']
+            + $totals[BattleTheaterSideResolver::SIDE_B]['isk_lost']
+            + $totals[BattleTheaterSideResolver::SIDE_C]['isk_lost'];
+        foreach ([BattleTheaterSideResolver::SIDE_A, BattleTheaterSideResolver::SIDE_B, BattleTheaterSideResolver::SIDE_C] as $s) {
+            $totals[$s]['isk_killed'] = $totalIskLost - $totals[$s]['isk_lost'];
+        }
 
         return $totals;
     }
