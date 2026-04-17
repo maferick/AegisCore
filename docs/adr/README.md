@@ -48,3 +48,8 @@ planning work the roadmap should do.
 - [ADR-0005](0005-private-market-hub-overlay.md) — Private Market Hub
   overlay: canonical hubs, collector / viewer split, donor-gated
   intersection rule
+- [ADR-0006](0006-battle-theater-reports.md) — Battle Theater reports:
+  metric contract and viewer-context side assignment
+- [ADR-0007](0007-intel-copilot-rag-broker.md) — Intel Copilot: tool-
+  augmented RAG broker over OpenSearch / SQL / Neo4j, with a typed query
+  plan IR as the spine
