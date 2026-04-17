@@ -253,20 +253,38 @@ final class BattleTheaterSideResolver
             return null;
         }
 
-        // Side B = alliance with the most mutual kills against Side A
-        // (their kills on A plus A's kills on them).
+        // Side B candidates must both (a) have mutual kills vs Side A
+        // and (b) have at least one participant on the field. Without
+        // (b) you get the "gank" case: Side A hit a cluster of random
+        // freighters whose alliance isn't represented in participants,
+        // so the top "mutualVsA" entry maps to 0 pilots and Side B
+        // ends up empty. Keeping the filter here means we fall back
+        // cleanly to the alliance-pilots split below when nobody on
+        // the field was shooting back.
+        $participantAlliances = array_keys($pilotsPerAlliance);
         $mutualVsA = [];
         foreach ($kills[$sideAId] ?? [] as $vic => $n) {
+            if (! in_array($vic, $participantAlliances, true)) {
+                continue;
+            }
             $mutualVsA[$vic] = ($mutualVsA[$vic] ?? 0) + $n;
         }
         foreach ($kills as $att => $vics) {
             if (! isset($vics[$sideAId])) {
                 continue;
             }
+            if (! in_array($att, $participantAlliances, true)) {
+                continue;
+            }
             $mutualVsA[$att] = ($mutualVsA[$att] ?? 0) + $vics[$sideAId];
         }
         unset($mutualVsA[$sideAId]);
         if ($mutualVsA === []) {
+            // No alliance actually present in the theater exchanged
+            // fire with Side A. Kick back to the alliance-pilot-count
+            // split so the UI still shows the second-largest
+            // alliance as an opposing side (operator can see "we
+            // fought X and Y even if nobody died").
             return null;
         }
         arsort($mutualVsA);
