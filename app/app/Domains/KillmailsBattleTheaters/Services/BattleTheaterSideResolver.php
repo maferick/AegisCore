@@ -6,6 +6,7 @@ namespace App\Domains\KillmailsBattleTheaters\Services;
 
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheater;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant;
+use App\Domains\KillmailsBattleTheaters\Services\AllegianceGraphService;
 use App\Domains\UsersCharacters\Models\CoalitionEntityLabel;
 use App\Domains\UsersCharacters\Models\ViewerContext;
 use Illuminate\Support\Collection;
@@ -38,6 +39,10 @@ final class BattleTheaterSideResolver
     public const SIDE_A = 'A';
     public const SIDE_B = 'B';
     public const SIDE_C = 'C';
+
+    public function __construct(
+        private readonly ?AllegianceGraphService $allegiance = null,
+    ) {}
 
     /**
      * Result: for each participant (keyed by character_id), the side
@@ -417,7 +422,10 @@ final class BattleTheaterSideResolver
         arsort($mutualVsA);
         $sideBId = (int) array_key_first($mutualVsA);
 
-        // Classify every other alliance by shoot-direction.
+        // Classify every other alliance by shoot-direction. Kill
+        // graph first (highest-confidence signal in THIS fight);
+        // anything it can't decide falls through to the historical
+        // allegiance tiebreaker below.
         $allianceSide = [$sideAId => self::SIDE_A, $sideBId => self::SIDE_B];
         $allAlliances = array_merge(
             array_keys($kills),
@@ -441,6 +449,32 @@ final class BattleTheaterSideResolver
                 $allianceSide[$aid] = self::SIDE_A;
             } elseif ($supportsB >= 3 && $supportsB > 2 * $supportsA) {
                 $allianceSide[$aid] = self::SIDE_B;
+            }
+        }
+
+        // Historical-allegiance tiebreaker. For every alliance still
+        // unclassified AND on-field, ask the graph: "how often has X
+        // been allied with / opposed to anchor A vs anchor B across
+        // prior theaters?" If the historical signal is clear
+        // (>=3 supporting events, 2x weight spread) we fold X into
+        // that side. Neo4j down / no prior signal → alliance stays
+        // Side C, same as before.
+        if ($this->allegiance !== null) {
+            foreach ($onFieldAlliances as $aid) {
+                if (isset($allianceSide[$aid])) {
+                    continue;
+                }
+                $score = $this->allegiance->scoreFor($aid, $sideAId, $sideBId);
+                if ($score === null) {
+                    continue;
+                }
+                $supportsA = $score['a_ally'] + $score['b_oppose'];
+                $supportsB = $score['b_ally'] + $score['a_oppose'];
+                if ($supportsA >= 3 && $supportsA > 2 * $supportsB) {
+                    $allianceSide[$aid] = self::SIDE_A;
+                } elseif ($supportsB >= 3 && $supportsB > 2 * $supportsA) {
+                    $allianceSide[$aid] = self::SIDE_B;
+                }
             }
         }
 

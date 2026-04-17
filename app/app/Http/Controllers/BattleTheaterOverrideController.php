@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheater;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride;
+use App\Domains\KillmailsBattleTheaters\Services\AllegianceGraphService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -25,6 +26,8 @@ use Illuminate\Support\Facades\Auth;
  */
 class BattleTheaterOverrideController
 {
+    public function __construct(private readonly AllegianceGraphService $graph) {}
+
     public function store(Request $request, int $record): RedirectResponse
     {
         $data = $request->validate([
@@ -52,6 +55,12 @@ class BattleTheaterOverrideController
             ],
         );
 
+        // Project the new allegiance picture into the Neo4j
+        // historical-allegiance graph. Best-effort: the service
+        // swallows Neo4j failures so operator feedback never hinges
+        // on the graph being up.
+        $this->graph->recordForTheater($record);
+
         return back()->with('status', 'override saved');
     }
 
@@ -67,6 +76,13 @@ class BattleTheaterOverrideController
             ->where('entity_type', $data['entity_type'])
             ->where('entity_id', $data['entity_id'])
             ->delete();
+
+        // Re-project: the remaining overrides may have shrunk the
+        // set of high-confidence allegiance signals for this theater.
+        // We don't attempt to remove previously-recorded edges
+        // (decay handles stale data over time), but re-emitting
+        // leaves the latest ``last_seen`` + ``theaters`` list honest.
+        $this->graph->recordForTheater($record);
 
         return back()->with('status', 'override cleared');
     }

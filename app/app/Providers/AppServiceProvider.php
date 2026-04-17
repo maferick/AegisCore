@@ -82,6 +82,20 @@ class AppServiceProvider extends ServiceProvider
         // `EsiClient` above uses for the same reason.
         $this->app->singleton(EveSsoClient::class, fn () => EveSsoClient::fromConfig());
 
+        // Side resolver — wired with the optional Neo4j
+        // historical-allegiance scorer. Singleton so the resolver's
+        // internal caches survive across calls in a single request.
+        $this->app->singleton(
+            \App\Domains\KillmailsBattleTheaters\Services\BattleTheaterSideResolver::class,
+            function ($app) {
+                return new \App\Domains\KillmailsBattleTheaters\Services\BattleTheaterSideResolver(
+                    allegiance: $app->make(
+                        \App\Domains\KillmailsBattleTheaters\Services\AllegianceGraphService::class,
+                    ),
+                );
+            }
+        );
+
         // Intel Copilot broker — Http timeouts, base URL and shared
         // token come from config('services.intel_copilot'). Singleton
         // because the underlying Http factory already handles connection
