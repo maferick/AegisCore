@@ -55,7 +55,8 @@ class PipelineHealthWidget extends StatsOverviewWidget
             'neo4j_edges' => 'Neo4j allegiance',
             'market_history' => 'Market history',
             'esi_backlog' => 'ESI name cache',
-            'corp_history' => 'Corp history coverage',
+            'corp_history' => 'Char → corp history',
+            'alliance_history' => 'Corp → alliance history',
             'opensearch_docs' => 'OpenSearch docs',
         ];
 

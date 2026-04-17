@@ -99,7 +99,19 @@
                      alt="" referrerpolicy="no-referrer">
                 {{ $victim['corp'] ?? 'Corp #'.$km->victim_corporation_id }}
             @endif
-            @if($km->victim_alliance_id)
+            @php
+                $victimEtCorpId = $victimEtCorp['corporation_id'] ?? $km->victim_corporation_id;
+                $victimEtAlly = ($eventTimeAlliances[$victimEtCorpId] ?? null);
+            @endphp
+            @if($victimEtAlly && $victimEtAlly['alliance_id'] != $km->victim_alliance_id && $victimEtAlly['alliance_name'])
+                <span style="margin: 0 0.2rem;">/</span>
+                <img src="https://images.evetech.net/alliances/{{ $victimEtAlly['alliance_id'] }}/logo?size=32"
+                     alt="" referrerpolicy="no-referrer">
+                <span style="color: #e5a900;">{{ $victimEtAlly['alliance_name'] }}</span>
+                @if($km->victim_alliance_id)
+                    <span style="font-size: 0.6rem; color: #3a3a42;">(now: {{ $victim['alliance'] ?? '#'.$km->victim_alliance_id }})</span>
+                @endif
+            @elseif($km->victim_alliance_id)
                 <span style="margin: 0 0.2rem;">/</span>
                 <img src="https://images.evetech.net/alliances/{{ $km->victim_alliance_id }}/logo?size=32"
                      alt="" referrerpolicy="no-referrer">
@@ -208,7 +220,16 @@
                             @else
                                 {{ $currentCorp }}
                             @endif
-                            @if($att->alliance_id && isset($names[$att->alliance_id]))
+                            @php
+                                $etCorpId = $etCorp['corporation_id'] ?? $att->corporation_id;
+                                $etAlly = ($eventTimeAlliances[$etCorpId] ?? null);
+                            @endphp
+                            @if($etAlly && $etAlly['alliance_id'] != $att->alliance_id && $etAlly['alliance_name'])
+                                / <span style="color: #e5a900;" title="Alliance at time of kill">{{ $etAlly['alliance_name'] }}</span>
+                                @if($att->alliance_id && isset($names[$att->alliance_id]))
+                                    <span style="font-size: 0.6rem; color: #3a3a42;"> (now: {{ $names[$att->alliance_id] }})</span>
+                                @endif
+                            @elseif($att->alliance_id && isset($names[$att->alliance_id]))
                                 / {{ $names[$att->alliance_id] }}
                             @endif
                         </div>

@@ -71,6 +71,7 @@ class PipelineHealthService
             'market_history' => $this->probeMarketHistory(),
             'esi_backlog' => $this->probeEsiBacklog(),
             'corp_history' => $this->probeCorpHistoryCoverage(),
+            'alliance_history' => $this->probeAllianceHistoryCoverage(),
             'opensearch_docs' => $this->probeOpenSearchDocs(),
         ];
 
@@ -428,6 +429,41 @@ class PipelineHealthService
             $level = $pct >= 80 ? 'ok' : ($pct >= 20 ? 'warn' : 'down');
             return self::level(
                 number_format($covered).' / '.number_format($seen).' characters ('.$pct.'%) · '.number_format($pending).' pending',
+                $level,
+                ['covered' => $covered, 'seen' => $seen, 'pct' => $pct, 'pending' => $pending],
+            );
+        } catch (Throwable $e) {
+            return self::level('probe failed: '.$e->getMessage(), 'down');
+        }
+    }
+
+    private function probeAllianceHistoryCoverage(): array
+    {
+        try {
+            $covered = (int) DB::table('corporation_alliance_history')
+                ->distinct('corporation_id')
+                ->count('corporation_id');
+
+            $row = DB::selectOne(<<<'SQL'
+                SELECT COUNT(*) AS n FROM (
+                    SELECT DISTINCT victim_corporation_id AS corp_id FROM killmails
+                        WHERE victim_corporation_id IS NOT NULL
+                    UNION
+                    SELECT DISTINCT corporation_id AS corp_id FROM killmail_attackers
+                        WHERE corporation_id IS NOT NULL
+                ) t
+            SQL);
+            $seen = (int) ($row->n ?? 0);
+
+            if ($seen === 0) {
+                return self::level('no corps on field yet', 'warn');
+            }
+
+            $pct = (int) round(($covered / $seen) * 100);
+            $pending = max(0, $seen - $covered);
+            $level = $pct >= 80 ? 'ok' : ($pct >= 20 ? 'warn' : 'down');
+            return self::level(
+                number_format($covered).' / '.number_format($seen).' corps ('.$pct.'%) · '.number_format($pending).' pending',
                 $level,
                 ['covered' => $covered, 'seen' => $seen, 'pct' => $pct, 'pending' => $pending],
             );

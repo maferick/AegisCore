@@ -199,6 +199,17 @@ Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCharacterCorpor
     ->onOneServer()
     ->name('fetch-corp-history');
 
+// Corporation alliance history — same pattern, one level up. Answers
+// "which alliance was this corp in at time Y?" for killmail detail
+// event-time rendering. Smaller numerator than the character set
+// (<100k player corps vs 500k+ pilots); backfill closes in a day or
+// two. Staggered :02 past every 5 minutes so the two history jobs
+// don't collide on the queue.
+Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCorporationAllianceHistory)
+    ->cron('2-59/5 * * * *')
+    ->onOneServer()
+    ->name('fetch-corp-alliance-history');
+
 // Allegiance graph backfill — project the last 24h of locked battle
 // theaters into the Neo4j allegiance graph so the resolver's
 // historical-allegiance tiebreaker accumulates signal on its own

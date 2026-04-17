@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domains\KillmailsBattleTheaters\Services;
 
 use App\Domains\KillmailsBattleTheaters\Models\CharacterCorporationHistory;
+use App\Domains\KillmailsBattleTheaters\Models\CorporationAllianceHistory;
 use App\Domains\KillmailsBattleTheaters\Models\Killmail;
 use App\Services\Eve\Esi\EsiNameResolver;
 use Illuminate\Support\Facades\DB;
@@ -152,6 +153,36 @@ class KillmailViewData
             unset($data);
         }
 
+        // Event-time alliance per corporation — mirrors event-time corp
+        // but one level up. Collect every corporation_id that appeared
+        // on the mail (victim + attackers), plus the event-time corps
+        // we just derived, then ask CorporationAllianceHistory what
+        // alliance each was in at killed_at.
+        $eventTimeAlliances = [];
+        $allCorpIds = collect([$km->victim_corporation_id])
+            ->merge($km->attackers->pluck('corporation_id'))
+            ->merge(collect($eventTimeCorps)->pluck('corporation_id'))
+            ->filter()
+            ->unique();
+        foreach ($allCorpIds as $corpId) {
+            $hist = CorporationAllianceHistory::allianceAt((int) $corpId, $km->killed_at);
+            if ($hist && $hist->alliance_id) {
+                $eventTimeAlliances[(int) $corpId] = [
+                    'alliance_id' => (int) $hist->alliance_id,
+                ];
+            }
+        }
+        $eventAllianceIds = collect($eventTimeAlliances)->pluck('alliance_id')->unique()->filter()->values()->all();
+        if ($eventAllianceIds) {
+            $aNames = DB::table('esi_entity_names')
+                ->whereIn('entity_id', $eventAllianceIds)
+                ->pluck('name', 'entity_id');
+            foreach ($eventTimeAlliances as $cid => &$data) {
+                $data['alliance_name'] = $aNames[$data['alliance_id']] ?? null;
+            }
+            unset($data);
+        }
+
         $systemName = $km->solarSystem?->name ?? 'Unknown';
         $regionName = $km->region?->name ?? 'Unknown';
 
@@ -160,6 +191,7 @@ class KillmailViewData
             'names' => $names,
             'typeNames' => $typeNames,
             'eventTimeCorps' => $eventTimeCorps,
+            'eventTimeAlliances' => $eventTimeAlliances,
             'chargeTypeIds' => $chargeTypeIds,
             'itemValues' => $itemValues,
             'hullValue' => $hullValue,
