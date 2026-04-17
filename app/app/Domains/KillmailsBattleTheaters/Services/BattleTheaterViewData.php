@@ -50,6 +50,22 @@ final class BattleTheaterViewData
 
         $sides = $this->sideResolver->resolve($theater, $viewer);
 
+        // Overlay operator overrides on top of the auto-resolver.
+        // Precedence: character > corporation > alliance > auto. A
+        // side value of 'exclude' drops the entity's pilots + kills
+        // from every downstream rollup. Overrides persist across
+        // recluster runs and across deploys — the same alliance can
+        // be Side A in one theater and Side B in another (keyed by
+        // theater_id).
+        $overrides = \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride::query()
+            ->where('theater_id', $theater->id)
+            ->get();
+        [$sides, $participants, $excludedCharIds] = $this->applyOverrides(
+            sides: $sides,
+            participants: $participants,
+            overrides: $overrides,
+        );
+
         $blocIds = array_values(array_filter([
             $sides->sideABlocId,
             $sides->sideBBlocId,
@@ -72,6 +88,19 @@ final class BattleTheaterViewData
             ->where('theater_id', $theater->id)
             ->pluck('killmail_id')
             ->all();
+
+        // Drop killmails whose victim is an excluded character —
+        // keeps the kill feed / most-valuable-kills honest when the
+        // operator marked an entity as noise. Excluding by corp /
+        // alliance drops many killmails; excluding by character
+        // drops one at a time.
+        if ($excludedCharIds !== []) {
+            $killmailIds = DB::table('killmails')
+                ->whereIn('killmail_id', $killmailIds)
+                ->whereNotIn('victim_character_id', $excludedCharIds)
+                ->pluck('killmail_id')
+                ->all();
+        }
 
         $shipsByCharacter = $this->buildShipRollup($killmailIds);
 
@@ -123,8 +152,88 @@ final class BattleTheaterViewData
             'roster_by_side' => $rosterBySide,
             'flagship_logos' => $flagshipLogos,
             'header_stats' => $headerStats,
+            // Raw override rows so the portal view can render the
+            // "this alliance was manually moved" indicator + the
+            // dropdown to change / clear it.
+            'overrides' => $overrides,
             'hide_bloc_names' => $hideBlocNames,
         ];
+    }
+
+    /**
+     * Overlay operator side overrides on top of the auto-resolver
+     * output. Returns ``[newSides, filteredParticipants, excludedCharIds]``.
+     *
+     * Precedence is character > corporation > alliance. ``exclude``
+     * at any level drops the entity's pilots from the report entirely.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  \Illuminate\Support\Collection<int, \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride>  $overrides
+     * @return array{0: BattleTheaterSideResolution, 1: Collection<int, BattleTheaterParticipant>, 2: list<int>}
+     */
+    private function applyOverrides(
+        BattleTheaterSideResolution $sides,
+        Collection $participants,
+        Collection $overrides,
+    ): array {
+        if ($overrides->isEmpty()) {
+            return [$sides, $participants, []];
+        }
+
+        // Bucket overrides by entity type. Character / corp / alliance
+        // are applied in that precedence order — a character-level
+        // override wins over a corp-level override for the same pilot.
+        $charOv = [];
+        $corpOv = [];
+        $allOv = [];
+        foreach ($overrides as $o) {
+            $map = match ($o->entity_type) {
+                \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride::ENTITY_CHARACTER => 'charOv',
+                \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride::ENTITY_CORPORATION => 'corpOv',
+                \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride::ENTITY_ALLIANCE => 'allOv',
+                default => null,
+            };
+            if ($map === null) {
+                continue;
+            }
+            ${$map}[(int) $o->entity_id] = $o->side;
+        }
+
+        $excludedCharIds = [];
+        $newSideByChar = $sides->sideByCharacterId;
+        $keptParticipants = collect();
+
+        foreach ($participants as $p) {
+            $cid = (int) $p->character_id;
+            $corp = (int) ($p->corporation_id ?? 0);
+            $all = (int) ($p->alliance_id ?? 0);
+
+            // Resolve override side by precedence. Missing = auto.
+            $overrideSide = $charOv[$cid]
+                ?? ($corp > 0 ? ($corpOv[$corp] ?? null) : null)
+                ?? ($all > 0 ? ($allOv[$all] ?? null) : null);
+
+            if ($overrideSide === \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride::SIDE_EXCLUDE) {
+                // Dropped entirely — no row in participants, no side.
+                unset($newSideByChar[$cid]);
+                $excludedCharIds[] = $cid;
+                continue;
+            }
+
+            if ($overrideSide !== null) {
+                $newSideByChar[$cid] = $overrideSide;
+            }
+            $keptParticipants->push($p);
+        }
+
+        $newSides = new BattleTheaterSideResolution(
+            sideByCharacterId: $newSideByChar,
+            sideABlocId: $sides->sideABlocId,
+            sideBBlocId: $sides->sideBBlocId,
+            allianceToBloc: $sides->allianceToBloc,
+        );
+
+        return [$newSides, $keptParticipants->values(), $excludedCharIds];
     }
 
     /**

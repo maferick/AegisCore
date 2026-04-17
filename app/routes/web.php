@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\EveSsoController;
 use App\Http\Controllers\Map\MapDataController;
+use App\Http\Controllers\BattleTheaterOverrideController;
 use App\Http\Controllers\PublicBattlesController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -107,3 +108,15 @@ Route::get('/battles', [PublicBattlesController::class, 'index'])
 Route::get('/battles/{record}', [PublicBattlesController::class, 'show'])
     ->whereNumber('record')
     ->name('public.battles.show');
+
+// Side overrides — authed operators correct the auto-resolver's
+// clustering. Per-theater, so the same alliance can be Side A in
+// one battle and Side B in another. See ADR-0006 § 2 addendum.
+Route::middleware('auth')->group(function () {
+    Route::post('/portal/battles/{record}/overrides', [BattleTheaterOverrideController::class, 'store'])
+        ->whereNumber('record')
+        ->name('portal.battles.overrides.store');
+    Route::delete('/portal/battles/{record}/overrides', [BattleTheaterOverrideController::class, 'destroy'])
+        ->whereNumber('record')
+        ->name('portal.battles.overrides.destroy');
+});

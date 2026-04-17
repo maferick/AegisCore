@@ -10,6 +10,20 @@
     // authed portal callers pass it false, but older tests that
     // render the partial directly may not set it at all.
     $hide_bloc_names = $hide_bloc_names ?? false;
+    $overrides = $overrides ?? collect();
+
+    // Signed-in users see the "move this alliance" controls; anon
+    // viewers on /battles get a read-only report.
+    $can_override = auth()->check();
+
+    // Alliance-level override lookup for the "(manual)" badge next
+    // to overridden rows.
+    $override_by_alliance = [];
+    foreach ($overrides as $o) {
+        if ($o->entity_type === 'alliance') {
+            $override_by_alliance[(int) $o->entity_id] = $o->side;
+        }
+    }
 @endphp
 
 @php
@@ -527,6 +541,11 @@
                 <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No alliances.</div>
             @else
                 @foreach ($rows as $row)
+                    @php
+                        $currentOverride = $row['alliance_id'] > 0
+                            ? ($override_by_alliance[(int) $row['alliance_id']] ?? null)
+                            : null;
+                    @endphp
                     <div class="km-attacker">
                         @if ($row['alliance_id'] > 0)
                             <img src="https://images.evetech.net/alliances/{{ $row['alliance_id'] }}/logo?size=64"
@@ -535,7 +554,12 @@
                             <div class="km-attacker-portrait" style="border-radius: 4px; background: #1a1a1e;"></div>
                         @endif
                         <div class="km-attacker-info">
-                            <div class="km-attacker-name">{{ $row['alliance_name'] }}</div>
+                            <div class="km-attacker-name">
+                                {{ $row['alliance_name'] }}
+                                @if ($currentOverride)
+                                    <span class="km-badge km-badge-cyan" style="margin-left: 4px;">manual → {{ $currentOverride }}</span>
+                                @endif
+                            </div>
                             <div class="km-attacker-corp">
                                 {{ $row['pilots'] }}p · {{ $row['kills'] }}k · {{ $row['deaths'] }}d
                             </div>
@@ -545,6 +569,41 @@
                             <div style="font-size:0.6rem;color:#7a7a82;">isk lost</div>
                         </div>
                     </div>
+                    @if ($can_override && $row['alliance_id'] > 0)
+                        <div style="display: flex; gap: 0.3rem; align-items: center; padding: 0 0.3rem 0.4rem 2.9rem; font-size: 0.7rem; color: #7a7a82;">
+                            <label style="font-family:'JetBrains Mono',monospace; font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;">move →</label>
+                            <form method="POST"
+                                  action="{{ route('portal.battles.overrides.store', ['record' => $theater->id]) }}"
+                                  style="display: inline;">
+                                @csrf
+                                <input type="hidden" name="entity_type" value="alliance">
+                                <input type="hidden" name="entity_id" value="{{ $row['alliance_id'] }}">
+                                <select name="side"
+                                        onchange="this.form.submit()"
+                                        style="background:#0c0c0e;color:#e5e5e7;border:1px solid #26262b;border-radius:3px;padding:0.15rem 0.3rem;font-size:0.7rem;font-family:'JetBrains Mono',monospace;">
+                                    <option value="" disabled {{ $currentOverride ? '' : 'selected' }}>— auto —</option>
+                                    <option value="A" {{ $currentOverride === 'A' ? 'selected' : '' }}>Side A</option>
+                                    <option value="B" {{ $currentOverride === 'B' ? 'selected' : '' }}>Side B</option>
+                                    <option value="C" {{ $currentOverride === 'C' ? 'selected' : '' }}>Third party</option>
+                                    <option value="exclude" {{ $currentOverride === 'exclude' ? 'selected' : '' }}>Exclude</option>
+                                </select>
+                            </form>
+                            @if ($currentOverride)
+                                <form method="POST"
+                                      action="{{ route('portal.battles.overrides.destroy', ['record' => $theater->id]) }}"
+                                      style="display: inline;">
+                                    @csrf
+                                    @method('DELETE')
+                                    <input type="hidden" name="entity_type" value="alliance">
+                                    <input type="hidden" name="entity_id" value="{{ $row['alliance_id'] }}">
+                                    <button type="submit"
+                                            style="background: transparent; border: 1px solid #26262b; color: #7a7a82; border-radius: 3px; padding: 0.1rem 0.4rem; font-size: 0.6rem; cursor: pointer;">
+                                        clear
+                                    </button>
+                                </form>
+                            @endif
+                        </div>
+                    @endif
                 @endforeach
             @endif
         </div>
