@@ -66,13 +66,27 @@ class PipelineHealthWidget extends StatsOverviewWidget
                 $cards[] = Stat::make($label, 'n/a')->color('gray');
                 continue;
             }
+            $level = $m['level'] ?? 'ok';
+            $color = match ($level) {
+                'ok' => 'success',
+                'warn' => 'warning',
+                'down' => 'danger',
+                default => 'gray',
+            };
+            // Filament only tints the description/icon area — without
+            // an icon the red/amber/green is nearly invisible. Attach
+            // a level-matching heroicon so the traffic light actually
+            // reads at a glance.
+            $icon = match ($level) {
+                'ok' => 'heroicon-m-check-circle',
+                'warn' => 'heroicon-m-exclamation-triangle',
+                'down' => 'heroicon-m-x-circle',
+                default => 'heroicon-m-question-mark-circle',
+            };
             $cards[] = Stat::make($label, $m['detail'] ?? '—')
-                ->color(match ($m['level'] ?? 'ok') {
-                    'ok' => 'success',
-                    'warn' => 'warning',
-                    'down' => 'danger',
-                    default => 'gray',
-                });
+                ->description(strtoupper($level))
+                ->descriptionIcon($icon)
+                ->color($color);
         }
 
         return $cards;
