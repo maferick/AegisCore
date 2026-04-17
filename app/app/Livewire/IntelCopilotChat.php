@@ -45,7 +45,10 @@ class IntelCopilotChat extends Component
     {
         $this->messages[] = [
             'role' => 'system',
-            'text' => 'Ask a question about combat data — "most used ship to kill freighters last 30 days", "how many kills in Delve this week". Heuristic parser handles common shapes for free; turn on LLM for the rest.',
+            'text' => 'Ask a question about combat data. Try: "how many kills last 7 days", '
+                .'"most used ship to kill freighters last 30 days", "shortest path from Jita to Amarr", '
+                .'"systems within 3 jumps of Jita". Heuristic parser handles common shapes for free; '
+                .'flip the toggle below to fall through to the local LLM for free-form questions.',
         ];
     }
 

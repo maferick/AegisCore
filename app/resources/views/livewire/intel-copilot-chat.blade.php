@@ -113,7 +113,7 @@
 
     <label class="ic-toggle">
         <input type="checkbox" wire:model.live="useLlm" />
-        Use LLM when heuristic doesn't match (requires ANTHROPIC_API_KEY on broker)
+        Use LLM when heuristic doesn't match (local Qwen via Ollama by default; Claude if ANTHROPIC_API_KEY set)
     </label>
 
 </div>
