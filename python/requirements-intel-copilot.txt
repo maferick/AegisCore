@@ -1,0 +1,4 @@
+# intel_copilot deps — share wire shape with killmail_search so the
+# OpenSearch client behaves identically across planes.
+opensearch-py~=2.7
+pymysql~=1.1
