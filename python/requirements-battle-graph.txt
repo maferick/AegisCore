@@ -1,0 +1,7 @@
+# battle_graph deps.
+#
+# Reads killmail + killmail_attackers + battle_theaters from MariaDB,
+# writes to Neo4j via the official Bolt driver, runs GDS algorithms,
+# writes raw metrics back to MariaDB. Pure stdlib for the edge math.
+pymysql~=1.1
+neo4j~=5.28
