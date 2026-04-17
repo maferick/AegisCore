@@ -61,6 +61,9 @@
     // Banner headline = biggest alliance on the side. Bloc subtitle.
     $sideAHeadline = $flagA['alliance_name'] ?? $blocA ?? 'Side A';
     $sideBHeadline = $flagB['alliance_name'] ?? $blocB ?? 'No opposing side';
+    $flagC = $flagship_logos[S::SIDE_C] ?? null;
+    $sideCHeadline = $flagC['alliance_name'] ?? 'Third parties';
+    $hasSideC = ! empty($roster_by_side[S::SIDE_C] ?? null) && ($roster_by_side[S::SIDE_C]->count() > 0);
 
     $primaryShipOf = function (int $characterId) use ($ships_by_character, $ship_names): array {
         $rows = $ships_by_character[$characterId] ?? [];
@@ -209,6 +212,7 @@
     .bt-comp-bar > div { height: 100%; }
     .bt-comp-bar.a > div { background: #4fd0d0; }
     .bt-comp-bar.b > div { background: #ff3838; }
+    .bt-comp-bar.c > div { background: #7a7a82; }
 
     .bt-kill-time { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #7a7a82; width: 70px; flex-shrink: 0; }
     .bt-kill-a { border-left: 3px solid rgba(79,208,208,0.6); padding-left: 0.6rem; }
@@ -218,6 +222,7 @@
 
     .bt-mvk-ship { width: 56px; height: 56px; border-radius: 4px; flex-shrink: 0; border: 1px solid rgba(79,208,208,0.25); }
     .bt-mvk-ship.b { border-color: rgba(255,56,56,0.3); }
+    .bt-mvk-ship.c { border-color: rgba(122,122,130,0.35); }
 
     .bt-pilot-group-head {
         display: flex; align-items: center; gap: 0.5rem;
@@ -435,12 +440,18 @@
 {{-- ================================================================
      MOST VALUABLE KILLS per side
      ================================================================ --}}
-@if (!empty($most_valuable_kills[S::SIDE_A]) || !empty($most_valuable_kills[S::SIDE_B]))
+@if (!empty($most_valuable_kills[S::SIDE_A]) || !empty($most_valuable_kills[S::SIDE_B]) || !empty($most_valuable_kills[S::SIDE_C]))
 <div class="km-grid" style="margin-bottom: 1.5rem;">
-    @foreach ([
-        S::SIDE_A => ['Top kills — Side A', 'a', $sideAHeadline],
-        S::SIDE_B => ['Top kills — Side B', 'b', $sideBHeadline],
-    ] as $sideKey => $meta)
+    @php
+        $mvkSides = [
+            S::SIDE_A => ['Top kills — Side A', 'a', $sideAHeadline],
+            S::SIDE_B => ['Top kills — Side B', 'b', $sideBHeadline],
+        ];
+        if ($hasSideC || !empty($most_valuable_kills[S::SIDE_C])) {
+            $mvkSides[S::SIDE_C] = ['Top kills — Third parties', 'c', $sideCHeadline];
+        }
+    @endphp
+    @foreach ($mvkSides as $sideKey => $meta)
         @php [$title, $toneClass, $labelFor] = $meta; $rows = $most_valuable_kills[$sideKey] ?? []; @endphp
         <div class="km-card">
             <h3>{{ $title }} <span class="muted">· kills by {{ $labelFor }}</span></h3>
@@ -476,10 +487,16 @@
      SHIP COMPOSITION per side
      ================================================================ --}}
 <div class="km-grid" style="margin-bottom: 1.5rem;">
-    @foreach ([
-        S::SIDE_A => ['Composition — Side A', 'a', $sideAHeadline],
-        S::SIDE_B => ['Composition — Side B', 'b', $sideBHeadline],
-    ] as $sideKey => $meta)
+    @php
+        $compSides = [
+            S::SIDE_A => ['Composition — Side A', 'a', $sideAHeadline],
+            S::SIDE_B => ['Composition — Side B', 'b', $sideBHeadline],
+        ];
+        if ($hasSideC || !empty($composition[S::SIDE_C])) {
+            $compSides[S::SIDE_C] = ['Composition — Third parties', 'c', $sideCHeadline];
+        }
+    @endphp
+    @foreach ($compSides as $sideKey => $meta)
         @php
             [$title, $toneClass, $labelFor] = $meta;
             $rows = $composition[$sideKey] ?? [];
@@ -511,10 +528,16 @@
      TOP DAMAGE per side
      ================================================================ --}}
 <div class="km-grid" style="margin-bottom: 1.5rem;">
-    @foreach ([
-        S::SIDE_A => ['Top damage — Side A', 'a'],
-        S::SIDE_B => ['Top damage — Side B', 'b'],
-    ] as $sideKey => $meta)
+    @php
+        $dmgSides = [
+            S::SIDE_A => ['Top damage — Side A', 'a'],
+            S::SIDE_B => ['Top damage — Side B', 'b'],
+        ];
+        if ($hasSideC || !empty($top_damage[S::SIDE_C])) {
+            $dmgSides[S::SIDE_C] = ['Top damage — Third parties', 'c'];
+        }
+    @endphp
+    @foreach ($dmgSides as $sideKey => $meta)
         @php [$title, $toneClass] = $meta; $rows = $top_damage[$sideKey] ?? []; @endphp
         <div class="km-card">
             <h3>{{ $title }}</h3>

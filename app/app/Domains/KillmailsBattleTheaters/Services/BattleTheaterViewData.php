@@ -1005,23 +1005,35 @@ final class BattleTheaterViewData
      */
     private function buildMostValuableKills(array $killFeed, BattleTheaterSideResolution $sides): array
     {
+        // Credit the kill to the final-blower's side (§ 2.1 spec
+        // revision). Fall back to "whoever wasn't the victim's
+        // side" for kills with no FB character (NPC final blows) so
+        // the card isn't empty in fights where NPCs cleaned up.
         $buckets = [
             BattleTheaterSideResolver::SIDE_A => [],
             BattleTheaterSideResolver::SIDE_B => [],
             BattleTheaterSideResolver::SIDE_C => [],
         ];
         foreach ($killFeed as $km) {
-            $victimSide = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? BattleTheaterSideResolver::SIDE_C) : BattleTheaterSideResolver::SIDE_C;
-            $buckets[$victimSide][] = $km;
+            $fbCid = (int) ($km['final_blow_char_id'] ?? 0);
+            $creditSide = $fbCid > 0 ? ($sides->sideByCharacterId[$fbCid] ?? null) : null;
+            if ($creditSide === null) {
+                $victimSide = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? null) : null;
+                if ($victimSide === BattleTheaterSideResolver::SIDE_A) {
+                    $creditSide = BattleTheaterSideResolver::SIDE_B;
+                } elseif ($victimSide === BattleTheaterSideResolver::SIDE_B) {
+                    $creditSide = BattleTheaterSideResolver::SIDE_A;
+                } else {
+                    continue;
+                }
+            }
+            $buckets[$creditSide][] = $km;
         }
         foreach ($buckets as $k => $rows) {
             usort($rows, fn ($a, $b) => $b['total_value'] <=> $a['total_value']);
             $buckets[$k] = array_slice($rows, 0, 3);
         }
-        return [
-            BattleTheaterSideResolver::SIDE_A => $buckets[BattleTheaterSideResolver::SIDE_B],
-            BattleTheaterSideResolver::SIDE_B => $buckets[BattleTheaterSideResolver::SIDE_A],
-        ];
+        return $buckets;
     }
 
     /**
@@ -1038,6 +1050,7 @@ final class BattleTheaterViewData
         $bySide = [
             BattleTheaterSideResolver::SIDE_A => [],
             BattleTheaterSideResolver::SIDE_B => [],
+            BattleTheaterSideResolver::SIDE_C => [],
         ];
         foreach ($participants as $p) {
             $cid = (int) $p->character_id;
@@ -1135,6 +1148,7 @@ final class BattleTheaterViewData
         return [
             BattleTheaterSideResolver::SIDE_A => $pick(BattleTheaterSideResolver::SIDE_A),
             BattleTheaterSideResolver::SIDE_B => $pick(BattleTheaterSideResolver::SIDE_B),
+            BattleTheaterSideResolver::SIDE_C => $pick(BattleTheaterSideResolver::SIDE_C),
         ];
     }
 
