@@ -124,37 +124,163 @@ final class BattleTheaterSideResolver
             );
         }
 
-        // Anonymous / no-viewer-bloc path — kill-graph clustering.
-        //
-        // Strategy:
-        //   1. Pick the biggest alliance by pilot count as Side A.
-        //   2. Side B = alliance with the most mutual kills vs Side A
-        //      (killed Side A pilots or lost pilots to Side A).
-        //   3. For every other alliance, look at which of Side A / B
-        //      they shot: alliances that only shoot Side B are Side A
-        //      allies, alliances that only shoot Side A are Side B
-        //      allies, alliances that shoot both (within a threshold)
-        //      are real third parties and go to Side C.
-        //
-        // Falls back to the pure alliance-pilot-count split when we
-        // don't have enough kill data to draw clusters from (tiny
-        // fights, pre-locked theaters with no killmails indexed yet).
-        $graph = $this->resolveByKillGraph($theater, $participants, $allianceToBloc);
-        if ($graph !== null) {
-            return $graph;
-        }
-        return $this->resolveByAlliance($participants, $allianceToBloc);
+        // Anonymous / no-viewer-bloc path — everything below treats
+        // the killmail table as the single source of truth for who's
+        // on the field (victim or attacker). The persisted
+        // ``battle_theater_participants`` rows are consulted only for
+        // per-pilot metrics downstream — alliance / corp affiliation
+        // comes from killmails because those are always filled.
+        return $this->resolveFromKillData($theater, $participants, $allianceToBloc);
     }
 
     /**
-     * Alliance-level fallback used when no viewer bloc is set AND the
-     * kill graph couldn't anchor a pair. Picks the two alliances with
-     * the most pilots; everything else → Side C.
+     * End-to-end resolution from killmail data, used when no viewer
+     * bloc is set.
+     *
+     * Steps:
+     *   1. Read ``charToAlliance`` from killmails (victim side) +
+     *      killmail_attackers. That's everyone who was on the field.
+     *   2. Try the kill-graph pairing (``resolveByKillGraph``). When
+     *      that succeeds, we have a Side A / B with third parties.
+     *   3. Kill-graph can't pair when attackers are all NPCs or
+     *      unenriched. Fall back to two-largest-alliances by pilot
+     *      count over the same ``charToAlliance`` map. If only one
+     *      alliance is present, everyone lands on Side A and Side B
+     *      legitimately stays empty (the UI will show "no opposing
+     *      side"). If zero alliances are known → Side C only.
+     *
+     * Either way, participant rows with broken alliance_id still get
+     * the correct side assigned because assignment is keyed by
+     * character_id, not by alliance_id pulled from the participant row.
      *
      * @param  Collection<int, BattleTheaterParticipant>  $participants
      * @param  array<int, int>  $allianceToBloc
      */
-    private function resolveByAlliance(Collection $participants, array $allianceToBloc): BattleTheaterSideResolution
+    private function resolveFromKillData(BattleTheater $theater, Collection $participants, array $allianceToBloc): BattleTheaterSideResolution
+    {
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theater->id)
+            ->pluck('killmail_id')
+            ->all();
+
+        $charToAlliance = $killmailIds === [] ? [] : $this->buildCharToAlliance($killmailIds);
+
+        // Kill-graph pairing first — it knows which alliances shot
+        // which, so it can cluster real coalitions + detect third
+        // parties that shot both sides.
+        $graph = $this->resolveByKillGraph($theater, $killmailIds, $charToAlliance, $participants, $allianceToBloc);
+        if ($graph !== null) {
+            return $graph;
+        }
+
+        // Fallback: top-2-alliances-by-pilots over the killmail-
+        // derived char→alliance map. Handles theaters where the
+        // attackers were NPC / unenriched, or where one side simply
+        // didn't shoot back.
+        return $this->resolveByAlliance($charToAlliance, $participants, $allianceToBloc);
+    }
+
+    /**
+     * Union of every character → their alliance, pulled from both
+     * sides of every killmail in the theater. The returned map
+     * excludes characters whose affiliation is null in the killmail.
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<int, int>
+     */
+    private function buildCharToAlliance(array $killmailIds): array
+    {
+        $charToAlliance = [];
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('victim_character_id')
+            ->whereNotNull('victim_alliance_id')
+            ->select(['victim_character_id as cid', 'victim_alliance_id as aid'])
+            ->get()
+            ->each(function ($r) use (&$charToAlliance): void {
+                $charToAlliance[(int) $r->cid] = (int) $r->aid;
+            });
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('character_id')
+            ->whereNotNull('alliance_id')
+            ->select(['character_id as cid', 'alliance_id as aid'])
+            ->get()
+            ->each(function ($r) use (&$charToAlliance): void {
+                $charToAlliance[(int) $r->cid] = (int) $r->aid;
+            });
+
+        return $charToAlliance;
+    }
+
+    /**
+     * Alliance-level fallback used when the kill graph couldn't draw
+     * a clean Side A / Side B pair. Picks up to the two alliances
+     * with the most pilots over ``$charToAlliance``; everything else
+     * → Side C.
+     *
+     * @param  array<int, int>  $charToAlliance  char → alliance from killmails
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<int, int>  $allianceToBloc
+     */
+    private function resolveByAlliance(array $charToAlliance, Collection $participants, array $allianceToBloc): BattleTheaterSideResolution
+    {
+        $pilotsPerAlliance = [];
+        foreach ($charToAlliance as $aid) {
+            $pilotsPerAlliance[$aid] = ($pilotsPerAlliance[$aid] ?? 0) + 1;
+        }
+        arsort($pilotsPerAlliance);
+        $topTwo = array_slice(array_keys($pilotsPerAlliance), 0, 2);
+        $sideAId = $topTwo[0] ?? null;
+        $sideBId = $topTwo[1] ?? null;
+
+        $sideByChar = [];
+        // Start with every participant — they still need a side
+        // assigned even if they don't appear in charToAlliance.
+        foreach ($participants as $p) {
+            $cid = (int) $p->character_id;
+            $aid = $charToAlliance[$cid] ?? (int) ($p->alliance_id ?? 0);
+            $sideByChar[$cid] = $this->assignSide($aid, $sideAId, $sideBId);
+        }
+        // Add any on-field character that isn't in participants (e.g.
+        // attackers with no participant row of their own).
+        foreach ($charToAlliance as $cid => $aid) {
+            if (! isset($sideByChar[$cid])) {
+                $sideByChar[$cid] = $this->assignSide($aid, $sideAId, $sideBId);
+            }
+        }
+
+        return new BattleTheaterSideResolution(
+            sideByCharacterId: $sideByChar,
+            sideABlocId: null,
+            sideBBlocId: null,
+            allianceToBloc: $allianceToBloc,
+        );
+    }
+
+    private function assignSide(int $allianceId, ?int $sideAId, ?int $sideBId): string
+    {
+        if ($allianceId === 0) {
+            return self::SIDE_C;
+        }
+        if ($sideAId !== null && $allianceId === $sideAId) {
+            return self::SIDE_A;
+        }
+        if ($sideBId !== null && $allianceId === $sideBId) {
+            return self::SIDE_B;
+        }
+        return self::SIDE_C;
+    }
+
+    /**
+     * @deprecated kept to avoid a diff spike; resolveFromKillData is
+     * the canonical entry point. Callers outside the resolver should
+     * not rely on this signature.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<int, int>  $allianceToBloc
+     */
+    private function resolveByAllianceLegacyUnused(Collection $participants, array $allianceToBloc): BattleTheaterSideResolution
     {
         $pilotsPerAlliance = [];
         foreach ($participants as $p) {
@@ -190,41 +316,60 @@ final class BattleTheaterSideResolver
     }
 
     /**
-     * Side assignment via the kill graph. "Who shot whom" is the
-     * ground truth for allegiance in a single fight — two opposing
-     * fleets never shoot each other's members, and a real third
-     * party (nation-state observer, loot hunter, random pirate who
-     * chewed up a mag-9) shoots both sides.
+     * Side assignment via the kill graph. Ground truth = "who shot
+     * whom". Anyone who appeared as an attacker OR as a victim on a
+     * killmail in this theater is on the field — we read both sides
+     * of every killmail directly rather than trusting the
+     * persisted ``battle_theater_participants`` rows, which on small
+     * fights can be missing alliance / corp data or the
+     * attacker-side pilots entirely.
      *
-     * Returns null when the theater has no killmail data or no
-     * alliance-attributable kills (structure kills, pure NPC, etc.),
-     * letting the caller fall back to the pilot-count split.
+     * The clustering path:
+     *
+     *   1. Build ``charToAlliance`` from killmails (victim side) +
+     *      killmail_attackers (attacker side). This is every
+     *      character that was on field, with their alliance.
+     *   2. Pilots-per-alliance = count distinct characters per
+     *      alliance. Side A = biggest.
+     *   3. Side B = alliance with the most mutual kills vs Side A,
+     *      restricted to alliances that have at least one on-field
+     *      character (so we never pick an absent alliance whose name
+     *      only appears as a victim's corp-to-alliance lookup).
+     *   4. Classify every other alliance by shoot-direction against
+     *      A and B (same 2× threshold as before). Neutral or "shot
+     *      both" → Side C.
+     *
+     * Returns null on a genuinely empty / NPC-only theater so the
+     * caller can fall back to the participant-table alliance split.
      *
      * @param  Collection<int, BattleTheaterParticipant>  $participants
      * @param  array<int, int>  $allianceToBloc
      */
-    private function resolveByKillGraph(BattleTheater $theater, Collection $participants, array $allianceToBloc): ?BattleTheaterSideResolution
-    {
-        $killmailIds = DB::table('battle_theater_killmails')
-            ->where('theater_id', $theater->id)
-            ->pluck('killmail_id')
-            ->all();
-        if ($killmailIds === []) {
+    /**
+     * @param  list<int>  $killmailIds
+     * @param  array<int, int>  $charToAlliance  char → alliance from killmails
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<int, int>  $allianceToBloc
+     */
+    private function resolveByKillGraph(
+        BattleTheater $theater,
+        array $killmailIds,
+        array $charToAlliance,
+        Collection $participants,
+        array $allianceToBloc,
+    ): ?BattleTheaterSideResolution {
+        if ($killmailIds === [] || $charToAlliance === []) {
             return null;
         }
 
-        // kills[attacker_alliance_id][victim_alliance_id] = count.
-        // Duplicated attackers on the same killmail inflate the count
-        // slightly (10 pilots of alliance X on one killmail → 10
-        // "kills" in the graph), which matches intent — more guns
-        // pointed = stronger signal.
+        // kills[attacker_alliance][victim_alliance] = count.
         $kills = [];
         DB::table('killmail_attackers as a')
             ->join('killmails as k', 'k.killmail_id', '=', 'a.killmail_id')
             ->whereIn('a.killmail_id', $killmailIds)
             ->whereNotNull('a.alliance_id')
             ->whereNotNull('k.victim_alliance_id')
-            ->where('a.alliance_id', '!=', DB::raw('k.victim_alliance_id')) // drop friendly-fire self-hits
+            ->where('a.alliance_id', '!=', DB::raw('k.victim_alliance_id'))
             ->select('a.alliance_id as att', 'k.victim_alliance_id as vic')
             ->get()
             ->each(function ($r) use (&$kills): void {
@@ -233,18 +378,11 @@ final class BattleTheaterSideResolver
                 $kills[$att][$vic] = ($kills[$att][$vic] ?? 0) + 1;
             });
 
-        if ($kills === []) {
-            return null;
-        }
-
-        // Anchor Side A on the biggest alliance by pilots — fights
-        // never have the main defender sitting in third place.
+        // Pilots per alliance derived from WHO WAS ON FIELD (kill
+        // data), not from the persisted participants table — the
+        // latter is sometimes empty of affiliations.
         $pilotsPerAlliance = [];
-        foreach ($participants as $p) {
-            $aid = (int) ($p->alliance_id ?? 0);
-            if ($aid === 0) {
-                continue;
-            }
+        foreach ($charToAlliance as $aid) {
             $pilotsPerAlliance[$aid] = ($pilotsPerAlliance[$aid] ?? 0) + 1;
         }
         arsort($pilotsPerAlliance);
@@ -253,52 +391,42 @@ final class BattleTheaterSideResolver
             return null;
         }
 
-        // Side B candidates must both (a) have mutual kills vs Side A
-        // and (b) have at least one participant on the field. Without
-        // (b) you get the "gank" case: Side A hit a cluster of random
-        // freighters whose alliance isn't represented in participants,
-        // so the top "mutualVsA" entry maps to 0 pilots and Side B
-        // ends up empty. Keeping the filter here means we fall back
-        // cleanly to the alliance-pilots split below when nobody on
-        // the field was shooting back.
-        $participantAlliances = array_keys($pilotsPerAlliance);
+        // Side B must be an alliance that (a) exchanged fire with
+        // Side A and (b) had on-field characters. Dropping (b)
+        // causes the "gank" case where Side A killed random
+        // freighters whose alliance had no one returning fire.
+        $onFieldAlliances = array_keys($pilotsPerAlliance);
         $mutualVsA = [];
         foreach ($kills[$sideAId] ?? [] as $vic => $n) {
-            if (! in_array($vic, $participantAlliances, true)) {
-                continue;
+            if (in_array($vic, $onFieldAlliances, true)) {
+                $mutualVsA[$vic] = ($mutualVsA[$vic] ?? 0) + $n;
             }
-            $mutualVsA[$vic] = ($mutualVsA[$vic] ?? 0) + $n;
         }
         foreach ($kills as $att => $vics) {
             if (! isset($vics[$sideAId])) {
                 continue;
             }
-            if (! in_array($att, $participantAlliances, true)) {
-                continue;
+            if (in_array($att, $onFieldAlliances, true)) {
+                $mutualVsA[$att] = ($mutualVsA[$att] ?? 0) + $vics[$sideAId];
             }
-            $mutualVsA[$att] = ($mutualVsA[$att] ?? 0) + $vics[$sideAId];
         }
         unset($mutualVsA[$sideAId]);
         if ($mutualVsA === []) {
-            // No alliance actually present in the theater exchanged
-            // fire with Side A. Kick back to the alliance-pilot-count
-            // split so the UI still shows the second-largest
-            // alliance as an opposing side (operator can see "we
-            // fought X and Y even if nobody died").
             return null;
         }
         arsort($mutualVsA);
         $sideBId = (int) array_key_first($mutualVsA);
 
-        // Classify every other alliance by attack direction. The
-        // 2× + >=3 absolute-minimum guard keeps noise out — a single
-        // stray shot across the field shouldn't pull an alliance
-        // into a bloc.
+        // Classify every other alliance by shoot-direction.
         $allianceSide = [$sideAId => self::SIDE_A, $sideBId => self::SIDE_B];
-        $allAlliances = array_unique(array_merge(
+        $allAlliances = array_merge(
             array_keys($kills),
-            ...array_map(static fn ($v) => array_keys($v), array_values($kills)),
-        ));
+            $onFieldAlliances,
+        );
+        foreach ($kills as $vics) {
+            $allAlliances = array_merge($allAlliances, array_keys($vics));
+        }
+        $allAlliances = array_unique($allAlliances);
         foreach ($allAlliances as $aid) {
             if (isset($allianceSide[$aid])) {
                 continue;
@@ -307,24 +435,35 @@ final class BattleTheaterSideResolver
             $againstB = $kills[$aid][$sideBId] ?? 0;
             $losesToA = $kills[$sideAId][$aid] ?? 0;
             $losesToB = $kills[$sideBId][$aid] ?? 0;
-            // Alliance X: attacks A + takes losses from B → ally of B.
-            // Attacks B + loses to A → ally of A. Mostly even or
-            // shoots both → genuine third party.
-            $supportsA = $againstB + $losesToB; // hits B / bleeds to B
+            $supportsA = $againstB + $losesToB;
             $supportsB = $againstA + $losesToA;
             if ($supportsA >= 3 && $supportsA > 2 * $supportsB) {
                 $allianceSide[$aid] = self::SIDE_A;
             } elseif ($supportsB >= 3 && $supportsB > 2 * $supportsA) {
                 $allianceSide[$aid] = self::SIDE_B;
             }
-            // else: leave unassigned so the per-pilot loop below
-            // drops them into Side C.
         }
 
+        // Character → side via killmail-derived alliance. Participant
+        // rows that carried a zero alliance_id but whose character
+        // appeared in a killmail still get a correct side here.
+        // Characters in participants but missing from charToAlliance
+        // (no alliance in either side of any kill — i.e. NPC / genuine
+        // unaffiliated) fall to Side C, which is accurate.
         $sideByChar = [];
         foreach ($participants as $p) {
-            $aid = (int) ($p->alliance_id ?? 0);
-            $sideByChar[(int) $p->character_id] = $allianceSide[$aid] ?? self::SIDE_C;
+            $cid = (int) $p->character_id;
+            $aid = $charToAlliance[$cid] ?? (int) ($p->alliance_id ?? 0);
+            $sideByChar[$cid] = $allianceSide[$aid] ?? self::SIDE_C;
+        }
+        // Also include anyone who appeared in kills but isn't in
+        // participants (attackers-without-participant-row case), so
+        // downstream consumers that iterate sideByCharacterId don't
+        // miss on-field pilots.
+        foreach ($charToAlliance as $cid => $aid) {
+            if (! isset($sideByChar[$cid])) {
+                $sideByChar[$cid] = $allianceSide[$aid] ?? self::SIDE_C;
+            }
         }
 
         return new BattleTheaterSideResolution(

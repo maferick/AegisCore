@@ -32,13 +32,23 @@ final class BattleTheaterViewData
      */
     public function build(BattleTheater $theater, ?ViewerContext $viewer, bool $hideBlocNames = false): array
     {
-        $sides = $this->sideResolver->resolve($theater, $viewer);
-
         $participants = $theater->participants()->orderByDesc('isk_lost')->get();
         $systems = $theater->systems()
             ->with('solarSystem:id,name,security_status')
             ->orderByDesc('kill_count')
             ->get();
+
+        // The clustering worker sometimes writes participant rows with
+        // alliance_id=0 / corporation_id=0 for pilots whose
+        // affiliations weren't resolved at cluster time (NPC-killed
+        // pilots, old killmails re-ingested, the victim-side join
+        // racing a ref_* reload). Those zeros poison the side
+        // resolver and the roster / pilot table UI. The killmails +
+        // killmail_attackers rows always carry the truth, so we patch
+        // the collection in memory from them — no DB write.
+        $this->hydrateParticipantAffiliations($theater, $participants);
+
+        $sides = $this->sideResolver->resolve($theater, $viewer);
 
         $blocIds = array_values(array_filter([
             $sides->sideABlocId,
@@ -115,6 +125,79 @@ final class BattleTheaterViewData
             'header_stats' => $headerStats,
             'hide_bloc_names' => $hideBlocNames,
         ];
+    }
+
+    /**
+     * Patch participant rows whose affiliation fields are zero/null
+     * by looking up the character's alliance + corp from the
+     * killmail data (which always carries the truth for on-field
+     * pilots). Pure in-memory mutation; the DB is never written.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     */
+    private function hydrateParticipantAffiliations(BattleTheater $theater, Collection $participants): void
+    {
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theater->id)
+            ->pluck('killmail_id')
+            ->all();
+        if ($killmailIds === []) {
+            return;
+        }
+
+        // Char -> [corp, alliance]. Victim side is authoritative
+        // because victim rows on killmails carry both fields; the
+        // attackers side is a fallback that contributes attacker
+        // pilots whose corp/alliance is known.
+        $truth = [];
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('victim_character_id')
+            ->select([
+                'victim_character_id as cid',
+                'victim_corporation_id as corp',
+                'victim_alliance_id as all',
+            ])
+            ->get()
+            ->each(function ($r) use (&$truth): void {
+                $cid = (int) $r->cid;
+                $truth[$cid] = [
+                    'corp' => $r->corp !== null ? (int) $r->corp : null,
+                    'alliance' => $r->all !== null ? (int) $r->all : null,
+                ];
+            });
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('character_id')
+            ->select(['character_id as cid', 'corporation_id as corp', 'alliance_id as all'])
+            ->get()
+            ->each(function ($r) use (&$truth): void {
+                $cid = (int) $r->cid;
+                // Only fill in when we don't already have a victim
+                // record for this char — victim rows are richer on
+                // ordinary killmails.
+                if (isset($truth[$cid])) {
+                    return;
+                }
+                $truth[$cid] = [
+                    'corp' => $r->corp !== null ? (int) $r->corp : null,
+                    'alliance' => $r->all !== null ? (int) $r->all : null,
+                ];
+            });
+
+        foreach ($participants as $p) {
+            $cid = (int) $p->character_id;
+            $t = $truth[$cid] ?? null;
+            if ($t === null) {
+                continue;
+            }
+            if ((int) ($p->alliance_id ?? 0) === 0 && $t['alliance'] !== null) {
+                $p->alliance_id = $t['alliance'];
+            }
+            if ((int) ($p->corporation_id ?? 0) === 0 && $t['corp'] !== null) {
+                $p->corporation_id = $t['corp'];
+            }
+        }
     }
 
     // ------------------------------------------------------------------ //
