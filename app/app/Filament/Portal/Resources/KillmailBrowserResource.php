@@ -43,6 +43,16 @@ class KillmailBrowserResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            // Default query hides unenriched killmails. The ingest
+            // pipeline writes a skeleton row the moment a killmail
+            // hits the stream; enrichment fills the victim/ship/value
+            // fields asynchronously (2000/min across all months).
+            // Without this filter the top of the browser is a wall of
+            // "#System / Structure / 0 ISK" placeholders for the last
+            // few minutes of traffic until the enrichment job catches
+            // up. The "Include unenriched" filter below flips it off
+            // when an operator actually wants to see raw stream rows.
+            ->modifyQueryUsing(fn (Builder $query) => $query->enriched())
             ->defaultSort('killed_at', 'desc')
             ->recordUrl(fn (Killmail $record): string => KillmailResource::getUrl('view', ['record' => $record->killmail_id]))
             ->columns([
@@ -150,6 +160,23 @@ class KillmailBrowserResource extends Resource
                 Filter::make('solo')
                     ->label('Solo Kills')
                     ->query(fn (Builder $query) => $query->where('is_solo_kill', true)),
+
+                Filter::make('include_unenriched')
+                    ->label('Include unenriched (raw stream rows)')
+                    ->query(function (Builder $query): Builder {
+                        // ``modifyQueryUsing`` added the ``enriched()``
+                        // scope up front; when this filter is active we
+                        // need to drop that constraint. There's no
+                        // public API to subtract a scope, but clearing
+                        // the bound ``enriched_at IS NOT NULL`` where
+                        // clause is both simple and safe — nothing else
+                        // on the query touches that column.
+                        $query->getQuery()->wheres = array_values(array_filter(
+                            $query->getQuery()->wheres,
+                            fn (array $w): bool => ($w['column'] ?? null) !== 'enriched_at',
+                        ));
+                        return $query;
+                    }),
 
                 SelectFilter::make('victim_ship_category')
                     ->label('Ship Category')
