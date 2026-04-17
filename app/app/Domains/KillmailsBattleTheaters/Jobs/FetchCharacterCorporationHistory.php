@@ -35,8 +35,19 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
     use Queueable;
     use SerializesModels;
 
-    /** Characters to fetch per dispatch. */
-    private const BATCH_SIZE = 50;
+    /**
+     * Characters to fetch per dispatch.
+     *
+     * Bumped from 50 to 500 after the 2026-04-17 pipeline-health audit
+     * showed 97.5% of killmail characters had no history (12,993 of
+     * 524,959). At 50 / 5 min the backfill was a 36-day wall clock;
+     * 500 / 5 min drops that to ~3 days while staying well under
+     * CCP's public-endpoint rate cap (~100 req/sec with UA) because
+     * the shared ESI client paces per-request internally, a 60-sec
+     * batch timeout per dispatch, and the EsiRateLimitException
+     * hard-break still short-circuits any burst.
+     */
+    private const BATCH_SIZE = 500;
 
     public int $tries = 3;
 

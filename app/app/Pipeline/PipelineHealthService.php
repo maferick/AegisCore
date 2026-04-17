@@ -70,6 +70,7 @@ class PipelineHealthService
             'neo4j_edges' => $this->probeNeo4jEdges(),
             'market_history' => $this->probeMarketHistory(),
             'esi_backlog' => $this->probeEsiBacklog(),
+            'corp_history' => $this->probeCorpHistoryCoverage(),
             'opensearch_docs' => $this->probeOpenSearchDocs(),
         ];
 
@@ -389,6 +390,46 @@ class PipelineHealthService
                 number_format($resolved).' resolved · '.number_format($pendingN).' pending (recent 1k kms)',
                 $level,
                 ['resolved' => $resolved, 'pending' => $pendingN],
+            );
+        } catch (Throwable $e) {
+            return self::level('probe failed: '.$e->getMessage(), 'down');
+        }
+    }
+
+    private function probeCorpHistoryCoverage(): array
+    {
+        try {
+            $covered = (int) DB::table('character_corporation_history')
+                ->distinct('character_id')
+                ->count('character_id');
+
+            // Distinct characters we've seen in either side of any
+            // killmail — the denominator we're trying to cover.
+            $row = DB::selectOne(<<<'SQL'
+                SELECT COUNT(*) AS n FROM (
+                    SELECT DISTINCT character_id FROM killmail_attackers
+                        WHERE character_id IS NOT NULL
+                    UNION
+                    SELECT DISTINCT victim_character_id FROM killmails
+                        WHERE victim_character_id IS NOT NULL
+                ) t
+            SQL);
+            $seen = (int) ($row->n ?? 0);
+
+            if ($seen === 0) {
+                return self::level('no on-field characters yet', 'warn');
+            }
+
+            $pct = (int) round(($covered / $seen) * 100);
+            $pending = max(0, $seen - $covered);
+            // Under 20% = red (event-time affiliations are mostly
+            // missing), 20-80% = amber (backfill is progressing),
+            // ≥80% = green.
+            $level = $pct >= 80 ? 'ok' : ($pct >= 20 ? 'warn' : 'down');
+            return self::level(
+                number_format($covered).' / '.number_format($seen).' characters ('.$pct.'%) · '.number_format($pending).' pending',
+                $level,
+                ['covered' => $covered, 'seen' => $seen, 'pct' => $pct, 'pending' => $pending],
             );
         } catch (Throwable $e) {
             return self::level('probe failed: '.$e->getMessage(), 'down');
