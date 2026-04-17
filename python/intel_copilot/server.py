@@ -387,13 +387,43 @@ def _build_router(cfg: Config) -> Router:
 
 def _build_llm_factory() -> Callable[[], Any] | None:
     """Returns a zero-arg factory that produces the LLM parser, or None
-    when the API key isn't configured. Lazy so server boot doesn't need
-    the SDK installed."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    when no provider is configured.
+
+    Provider selection:
+
+    * ``INTEL_COPILOT_LLM_PROVIDER=ollama|claude`` pins the choice.
+    * Otherwise prefer Ollama when ``OLLAMA_URL`` is set, fall back to
+      Claude when ``ANTHROPIC_API_KEY`` is set, else no LLM at all.
+
+    The factory is lazy — imports the provider SDK only when first
+    called, so non-LLM request paths stay dependency-free.
+    """
+    explicit = (os.environ.get("INTEL_COPILOT_LLM_PROVIDER") or "").lower().strip()
+    has_ollama = bool(os.environ.get("OLLAMA_URL"))
+    has_claude = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    provider: str | None
+    if explicit in ("ollama", "claude"):
+        provider = explicit
+    elif has_ollama:
+        provider = "ollama"
+    elif has_claude:
+        provider = "claude"
+    else:
+        provider = None
+
+    if provider is None:
         return None
 
     def factory() -> Any:
-        from intel_copilot.llm import ClaudeLLM, LLMPlanParser
+        from intel_copilot.llm import LLMPlanParser
+
+        if provider == "ollama":
+            from intel_copilot.llm_ollama import OllamaLLM
+
+            return LLMPlanParser(OllamaLLM.from_env())
+
+        from intel_copilot.llm import ClaudeLLM
 
         return LLMPlanParser(ClaudeLLM.from_env())
 

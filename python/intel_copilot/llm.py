@@ -333,6 +333,14 @@ class ClaudeLLM:
         return self._client.messages_create(**kwargs)
 
 
+class _PlanEmittingLLM(Protocol):
+    """Minimum shape ``LLMPlanParser`` needs from any provider. Both
+    ``ClaudeLLM`` and ``OllamaLLM`` satisfy it; any future provider
+    (vLLM, mlc, etc.) only has to implement ``plan``."""
+
+    def plan(self, question: str) -> dict[str, Any]: ...
+
+
 class LLMPlanParser:
     """Same surface as ``DictPlanParser``, backed by an LLM.
 
@@ -341,7 +349,7 @@ class LLMPlanParser:
     from a handwritten JSON payload, or from the heuristic parser.
     """
 
-    def __init__(self, llm: ClaudeLLM, validator: DictPlanParser | None = None) -> None:
+    def __init__(self, llm: _PlanEmittingLLM, validator: DictPlanParser | None = None) -> None:
         self._llm = llm
         self._validator = validator or DictPlanParser()
 

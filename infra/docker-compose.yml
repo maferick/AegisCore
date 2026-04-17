@@ -1086,8 +1086,15 @@ services:
       # value via X-Intel-Copilot-Token. Leave empty in pure-dev env
       # to disable auth (Docker-network isolation is still the outer ring).
       INTEL_COPILOT_API_TOKEN: "${INTEL_COPILOT_API_TOKEN}"
-      # Anthropic key is optional — the broker boots heuristic-only
-      # when unset, and `use_llm` requests will 422 with a clear error.
+      # LLM provider — pick 'ollama' for the local model (zero per-request
+      # cost, nothing leaves the stack) or 'claude' for the Anthropic API.
+      # Unset = auto: prefer Ollama when OLLAMA_URL is set, else Claude
+      # when ANTHROPIC_API_KEY is set, else heuristic-only.
+      INTEL_COPILOT_LLM_PROVIDER: "${INTEL_COPILOT_LLM_PROVIDER:-}"
+      # Ollama — local LLM via the sidecar service below.
+      OLLAMA_URL: "${OLLAMA_URL:-http://ollama:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}"
+      # Claude — optional fallback / A-B comparison.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       INTEL_COPILOT_MODEL: "${INTEL_COPILOT_MODEL:-claude-sonnet-4-6}"
       # Backend wiring — same env contract as killmail_search.
@@ -1123,12 +1130,40 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
+      # Ollama isn't required — the broker degrades to Claude / heuristic
+      # when the local LLM isn't up, so the dependency is ``service_started``
+      # rather than ``service_healthy``.
+      ollama:
+        condition: service_started
     networks:
       aegiscore:
         ipv4_address: 172.16.238.47
     # No host-port mapping by design — only php-fpm (same network)
     # should reach the broker. External exposure would need an auth
     # proxy we haven't built.
+
+  ollama:
+    # Local LLM runtime. Default model (qwen2.5:1.5b-instruct) fits
+    # in ~1.5 GB RAM and supports tool-calling, which the planner
+    # needs. Swap to llama3.2:3b via OLLAMA_MODEL when the host has
+    # more memory.
+    # 0.5+ adds JSON Schema as the ``format`` parameter, which the
+    # broker relies on to get reliably-shaped plans out of small models.
+    image: ollama/ollama:0.5.13
+    container_name: ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      # Keep one model resident; evict anything else — the broker
+      # only ever talks to one model at a time.
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: "5m"
+    volumes:
+      - aegiscore-ollama:/root/.ollama
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.48
+    # No host-port mapping — stays internal, same as the broker.
 
   theater_cluster:
     build:
@@ -1175,6 +1210,11 @@ volumes:
       type: none
       o: bind
       device: ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/mariadb/data
+
+  # Ollama model cache. Named volume rather than a bind mount — models
+  # are 1-3 GB each and re-pulling them on every recreate hurts.
+  aegiscore-ollama:
+    driver: local
 
 networks:
   aegiscore:
