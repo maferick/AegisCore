@@ -10,3 +10,7 @@ anthropic~=0.39
 # but the image always ships the client so operators can enable the
 # cache via env without rebuilding.
 redis~=5.0
+# Neo4j driver — path / neighbors intents project through the SDE
+# universe graph. Optional at runtime (broker boots without it); we
+# pin to match graph_universe_sync's driver line.
+neo4j~=5.25

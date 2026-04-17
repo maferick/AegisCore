@@ -35,6 +35,31 @@ class TestHeuristicParser(unittest.TestCase):
     def test_unmatched_question_returns_none(self) -> None:
         self.assertIsNone(HeuristicPlanParser().parse("explain the universe"))
 
+    def test_shortest_path_template(self) -> None:
+        plan = HeuristicPlanParser().parse("shortest path from Jita to Amarr")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.intent, Intent.PATH)
+        self.assertEqual(plan.subject.entity_type, EntityType.SYSTEM)
+        self.assertEqual(plan.subject.value, "Jita")
+        self.assertEqual(plan.filters[0].value, "Amarr")
+
+    def test_route_phrasing_also_matches_path(self) -> None:
+        plan = HeuristicPlanParser().parse("route from Perimeter to Urlen")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.intent, Intent.PATH)
+
+    def test_neighbors_template(self) -> None:
+        plan = HeuristicPlanParser().parse("systems within 3 jumps of Jita")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.intent, Intent.NEIGHBORS)
+        self.assertEqual(plan.subject.value, "Jita")
+        self.assertEqual(plan.limit, 3)
+
+    def test_neighbors_limit_clamped(self) -> None:
+        plan = HeuristicPlanParser().parse("within 50 jumps of Jita")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.limit, 10)  # clamp to MAX_NEIGHBOR_HOPS
+
 
 class TestDictParser(unittest.TestCase):
     def test_parses_example_plan_from_the_spec(self) -> None:

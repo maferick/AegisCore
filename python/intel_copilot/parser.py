@@ -69,6 +69,7 @@ class HeuristicPlanParser:
 
     def parse(self, question: str) -> QueryPlan | None:
         q = question.lower().strip().rstrip("?.")
+        raw = question.strip().rstrip("?.")
 
         plan = self._try_top_attacker_vs_victim(q)
         if plan:
@@ -76,6 +77,16 @@ class HeuristicPlanParser:
             return plan
 
         plan = self._try_count_kills(q)
+        if plan:
+            plan.validate()
+            return plan
+
+        plan = self._try_path(q, raw)
+        if plan:
+            plan.validate()
+            return plan
+
+        plan = self._try_neighbors(q, raw)
         if plan:
             plan.validate()
             return plan
@@ -117,6 +128,45 @@ class HeuristicPlanParser:
             intent=Intent.COUNT,
             metric=Metric.COUNT,
             time_window=self._time_window(q),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Graph templates — rely on the SDE projection in Neo4j.
+    # ------------------------------------------------------------------ #
+
+    _PATH_RE = re.compile(
+        r"(?:jumps|path|shortest\s+path|route)\s+from\s+(?P<src>[A-Za-z0-9\-\.\' ]+?)\s+to\s+(?P<dst>[A-Za-z0-9\-\.\' ]+)$",
+        re.I,
+    )
+
+    _NEIGHBORS_RE = re.compile(
+        r"(?:systems?\s+)?within\s+(?P<n>\d+)\s+jumps?\s+of\s+(?P<src>[A-Za-z0-9\-\.\' ]+)$",
+        re.I,
+    )
+
+    def _try_path(self, q: str, raw: str) -> QueryPlan | None:
+        m = self._PATH_RE.search(raw)
+        if not m:
+            return None
+        src = m.group("src").strip()
+        dst = m.group("dst").strip()
+        return QueryPlan(
+            intent=Intent.PATH,
+            subject=EntityRef(role=Role.ANY, entity_type=EntityType.SYSTEM, value=src),
+            filters=(EntityRef(role=Role.ANY, entity_type=EntityType.SYSTEM, value=dst),),
+            limit=50,
+        )
+
+    def _try_neighbors(self, q: str, raw: str) -> QueryPlan | None:
+        m = self._NEIGHBORS_RE.search(raw)
+        if not m:
+            return None
+        n = int(m.group("n"))
+        src = m.group("src").strip()
+        return QueryPlan(
+            intent=Intent.NEIGHBORS,
+            subject=EntityRef(role=Role.ANY, entity_type=EntityType.SYSTEM, value=src),
+            limit=max(1, min(n, 10)),
         )
 
     # ------------------------------------------------------------------ #

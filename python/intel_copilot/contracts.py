@@ -20,7 +20,7 @@ from intel_copilot.plan import Intent, QueryPlan
 class Backend(str, Enum):
     OPENSEARCH = "opensearch"
     SQL = "sql"
-    NEO4J = "neo4j"  # Deferred — declared so the router can refuse it cleanly.
+    NEO4J = "neo4j"
 
 
 #: Intent → preferred backend. Order matters only when multiple backends
@@ -31,9 +31,13 @@ INTENT_ROUTING: dict[Intent, tuple[Backend, ...]] = {
     Intent.COUNT: (Backend.OPENSEARCH,),
     Intent.TREND: (Backend.OPENSEARCH,),
     Intent.LIST:  (Backend.OPENSEARCH,),
+    Intent.LOOKUP: (Backend.SQL,),
+    # Graph questions — spatial topology (shortest path, N-hop
+    # neighbors) lives in the SDE-projected Neo4j graph.
+    Intent.PATH: (Backend.NEO4J,),
+    Intent.NEIGHBORS: (Backend.NEO4J,),
     # Reserved for follow-up phases:
     Intent.COMPARE: (Backend.OPENSEARCH,),
-    Intent.LOOKUP:  (Backend.SQL,),
 }
 
 

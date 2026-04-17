@@ -28,9 +28,11 @@ class Intent(str, Enum):
     COUNT = "count"      # "how many kills"  → single integer
     TREND = "trend"      # "kills per day"   → time-bucketed series
     LIST = "list"        # "which kills"     → raw documents (paged)
+    LOOKUP = "lookup"    # "who is X"        → single-entity fact (SQL)
+    PATH = "path"        # "Jita → Amarr"    → shortest jump path (Neo4j)
+    NEIGHBORS = "neighbors"  # "within N jumps of X" (Neo4j)
     # Reserved for follow-up phases:
     COMPARE = "compare"  # "A vs B"          → parallel metrics
-    LOOKUP = "lookup"    # "who flies X"     → single-entity fact
 
 
 class EntityType(str, Enum):
@@ -167,6 +169,17 @@ class QueryPlan:
                 "count intent only supports metric=count; "
                 "use top_n or trend with metric=sum_isk instead"
             )
+
+        if self.intent is Intent.PATH:
+            if self.subject is None or self.subject.entity_type is not EntityType.SYSTEM:
+                raise PlanError("path requires subject with entity_type=system (source)")
+            dests = [f for f in self.filters if f.entity_type is EntityType.SYSTEM]
+            if len(dests) != 1:
+                raise PlanError("path requires exactly one system filter (destination)")
+
+        if self.intent is Intent.NEIGHBORS:
+            if self.subject is None or self.subject.entity_type is not EntityType.SYSTEM:
+                raise PlanError("neighbors requires subject with entity_type=system")
 
         for f in self.filters:
             if not f.has_value():

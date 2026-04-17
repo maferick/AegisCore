@@ -1108,12 +1108,20 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       INTEL_COPILOT_REDIS_DB: "${INTEL_COPILOT_REDIS_DB:-1}"
+      # Neo4j — shares env names with graph_universe_sync so operators
+      # only maintain one set of credentials.
+      NEO4J_HOST: "bolt://neo4j:7687"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
     depends_on:
       opensearch:
         condition: service_healthy
       mariadb:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     networks:
       aegiscore:

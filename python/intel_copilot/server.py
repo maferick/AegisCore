@@ -366,6 +366,22 @@ def _build_router(cfg: Config) -> Router:
         )
         router.register(SQLExecutor(conn))
 
+    # Neo4j is optional — path/neighbors intents surface a clean 422
+    # when the driver isn't configured. Credentials live under the same
+    # NEO4J_* env the graph_universe_sync service already uses.
+    if cfg.neo4j_uri and cfg.neo4j_password:
+        try:
+            from neo4j import GraphDatabase  # type: ignore[import-not-found]
+            from intel_copilot.executors.neo4j import Neo4jExecutor
+
+            driver = GraphDatabase.driver(
+                cfg.neo4j_uri,
+                auth=(cfg.neo4j_username, cfg.neo4j_password),
+            )
+            router.register(Neo4jExecutor(driver, database=cfg.neo4j_database))
+        except ImportError:
+            log.warning("neo4j driver not installed; path/neighbors intents disabled")
+
     return router
 
 

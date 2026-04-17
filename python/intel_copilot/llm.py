@@ -86,8 +86,8 @@ PLAN_TOOL: dict[str, Any] = {
         "properties": {
             "intent": {
                 "type": "string",
-                "enum": ["top_n", "count", "trend", "list", "compare", "lookup"],
-                "description": "Question shape. top_n=ranked list; count=single integer; trend=time series; list=raw documents; lookup=single fact.",
+                "enum": ["top_n", "count", "trend", "list", "lookup", "path", "neighbors", "compare"],
+                "description": "Question shape. top_n=ranked list; count=single integer; trend=time series; list=raw documents; lookup=single fact; path=shortest jumps between two systems; neighbors=systems within N jumps.",
             },
             "metric": {
                 "type": "string",
@@ -144,12 +144,16 @@ will execute.
 A plan has:
 
 * `intent` — one of:
-  - `top_n`  : ranked buckets ("most used ship", "biggest losers")
-  - `count`  : single integer ("how many kills")
-  - `trend`  : time-bucketed series ("kills per day")
-  - `list`   : raw documents ("which kills last hour")
-  - `lookup` : single fact about one canonical entity ("who is 2113167159")
-  - `compare`: reserved, not yet supported
+  - `top_n`     : ranked buckets ("most used ship", "biggest losers")
+  - `count`     : single integer ("how many kills")
+  - `trend`     : time-bucketed series ("kills per day")
+  - `list`      : raw documents ("which kills last hour")
+  - `lookup`    : single fact about one canonical entity ("who is 2113167159")
+  - `path`      : shortest jump path between two systems
+                  (subject=source system, filter[0]=destination system)
+  - `neighbors` : systems within N jumps of one system
+                  (subject=source system, limit=N jumps, max 10)
+  - `compare`   : reserved, not yet supported
 * `metric` — what to sum inside buckets: `count` (default), `sum_isk`, `avg_isk`.
 * `subject` — what the *answer is about*. For `top_n` this is the dimension
   you are ranking. Has a `role` (attacker / victim / any) + `entity_type`
@@ -200,6 +204,17 @@ Q: "kills per day in Fountain last month"
 
 Q: "who is character id 2113167159"
 → intent=lookup, subject={{role:any, entity_type:character, value_id:2113167159}}.
+
+Q: "shortest path from Jita to Amarr"
+→ intent=path,
+  subject={{role:any, entity_type:system, value:"Jita"}},
+  filters=[{{role:any, entity_type:system, value:"Amarr"}}],
+  limit=30.
+
+Q: "systems within 3 jumps of Jita"
+→ intent=neighbors,
+  subject={{role:any, entity_type:system, value:"Jita"}},
+  limit=3.
 """
 
 

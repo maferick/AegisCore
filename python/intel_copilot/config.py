@@ -22,6 +22,12 @@ class Config:
     db_username: str | None
     db_password: str | None
 
+    # Neo4j (SDE spatial graph)
+    neo4j_uri: str | None
+    neo4j_username: str
+    neo4j_password: str | None
+    neo4j_database: str
+
     @classmethod
     def from_env(cls, **overrides) -> "Config":
         def env(key: str, default: str | None = None, required: bool = False) -> str:
@@ -43,6 +49,14 @@ class Config:
             db_database=os.environ.get("DB_DATABASE"),
             db_username=os.environ.get("DB_USERNAME"),
             db_password=os.environ.get("DB_PASSWORD"),
+            # ``NEO4J_HOST`` is the stack-wide name (see
+            # graph_universe_sync); ``NEO4J_URI`` is accepted as an
+            # alias so callers can use whichever they remember.
+            # ``NEO4J_USER`` / ``NEO4J_USERNAME`` — same pattern.
+            neo4j_uri=os.environ.get("NEO4J_HOST") or os.environ.get("NEO4J_URI"),
+            neo4j_username=os.environ.get("NEO4J_USER") or env("NEO4J_USERNAME", "neo4j"),
+            neo4j_password=os.environ.get("NEO4J_PASSWORD"),
+            neo4j_database=env("NEO4J_DATABASE", "neo4j"),
         )
         if overrides:
             cfg = replace(cfg, **overrides)
