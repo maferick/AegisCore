@@ -1,3 +1,3 @@
 <x-filament-panels::page>
-    <livewire:intel-copilot-chat />
+    @livewire('intel-copilot-chat')
 </x-filament-panels::page>
