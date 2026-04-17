@@ -10,6 +10,12 @@
     };
 @endphp
 
+{{-- Livewire 3 requires a single root element — if anything, even a
+     <style> tag, sits outside it, wire:submit / wire:poll fall through
+     to the parent Livewire component (here, the Filament page), and
+     ``ask`` gets called on the wrong class. Everything below stays
+     inside the root <div>. --}}
+<div class="ic-shell" wire:poll.keep-alive.30s>
 <style>
     .ic-shell { display: flex; flex-direction: column; gap: 1rem; }
     .ic-log { display: flex; flex-direction: column; gap: 0.75rem; max-height: 70vh; overflow-y: auto; padding-right: 0.5rem; }
@@ -40,8 +46,6 @@
     .ic-busy { font-size: 0.78rem; color: #7a7a82; font-style: italic; }
     .ic-error { color: #ff3838; font-size: 0.72rem; margin-top: 0.25rem; word-break: break-word; }
 </style>
-
-<div class="ic-shell" wire:poll.keep-alive.30s>
 
     <div class="ic-log">
         @foreach ($messages as $m)
