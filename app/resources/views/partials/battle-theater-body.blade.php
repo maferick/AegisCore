@@ -233,6 +233,19 @@
     .bt-pilot-group-head.a { color: #4fd0d0; }
     .bt-pilot-group-head.b { color: #ff3838; }
     .bt-pilot-group-head.c { color: #7a7a82; }
+
+    .bt-killfeed > summary {
+        list-style: none; cursor: pointer;
+        display: flex; align-items: center; gap: 0.75rem;
+        padding: 0.1rem 0;
+    }
+    .bt-killfeed > summary::-webkit-details-marker { display: none; }
+    .bt-killfeed > summary::before {
+        content: '▸'; color: #7a7a82; font-size: 0.8rem; transition: transform 0.15s ease;
+    }
+    .bt-killfeed[open] > summary::before { transform: rotate(90deg); }
+    .bt-killfeed-hint { font-size: 0.7rem; color: #7a7a82; font-style: italic; }
+    .bt-killfeed[open] .bt-killfeed-hint { display: none; }
     .bt-pilot-group-count { margin-left: auto; color: #7a7a82; font-weight: 400; letter-spacing: 0; text-transform: none; }
 </style>
 
@@ -664,7 +677,11 @@
      KILL FEED — narrative row per kill, ordered by time
      ================================================================ --}}
 <div class="km-card" style="margin-bottom: 1.5rem;">
-    <h3>Kill feed <span class="muted">· {{ count($kill_feed) }} kills</span></h3>
+    <details class="bt-killfeed">
+        <summary>
+            <h3 style="margin:0;display:inline;">Kill feed <span class="muted">· {{ count($kill_feed) }} kills</span></h3>
+            <span class="bt-killfeed-hint">click to expand</span>
+        </summary>
     @foreach ($kill_feed as $km)
         @php
             $vSide       = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? 'C') : 'C';
@@ -716,6 +733,7 @@
             </div>
         </div>
     @endforeach
+    </details>
 </div>
 
 {{-- ================================================================
