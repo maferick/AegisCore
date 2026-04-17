@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\EveSsoController;
 use App\Http\Controllers\Map\MapDataController;
+use App\Http\Controllers\PublicBattlesController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -96,3 +97,13 @@ Route::get('/account/market-hubs', [\App\Http\Controllers\AccountMarketHubsContr
 Route::get('/internal/map/{scope}', MapDataController::class)
     ->middleware('throttle:60,1')
     ->name('map.data');
+
+// Public battle reports — same rollup the Filament Portal page
+// renders, minus coalition bloc labels (internal intel) and the
+// portal nav chrome. Read-only; theater generation stays in the
+// admin + scheduler path. Not auth-gated by design.
+Route::get('/battles', [PublicBattlesController::class, 'index'])
+    ->name('public.battles.index');
+Route::get('/battles/{record}', [PublicBattlesController::class, 'show'])
+    ->whereNumber('record')
+    ->name('public.battles.show');

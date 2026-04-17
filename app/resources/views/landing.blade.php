@@ -14,6 +14,22 @@
         ? $authUser->canAccessPanel(\Filament\Facades\Filament::getPanel('admin'))
         : false;
     $ssoConfigured = \App\Services\Eve\Sso\EveSsoClient::isConfigured();
+
+    // Recent battles preview for the anonymous-friendly landing
+    // page — the Battles list at /battles is public too, this is
+    // just the teaser. Query is cheap (indexed on end_time).
+    $recentBattles = \App\Domains\KillmailsBattleTheaters\Models\BattleTheater::query()
+        ->with(['primarySystem:id,name,security_status', 'region:id,name'])
+        ->orderByDesc('end_time')
+        ->limit(5)
+        ->get();
+    $formatIskShort = function (float $v): string {
+        if ($v >= 1e12) return number_format($v / 1e12, 1).'T';
+        if ($v >= 1e9)  return number_format($v / 1e9, 1).'B';
+        if ($v >= 1e6)  return number_format($v / 1e6, 0).'M';
+        if ($v >= 1e3)  return number_format($v / 1e3, 0).'k';
+        return number_format($v, 0);
+    };
 @endphp
 <!DOCTYPE html>
 <html lang="en">
@@ -744,6 +760,51 @@
             </div>
         </div>
     </div>
+    @endif
+
+    {{-- Recent battles preview — public surface so reviewers can click
+         through without signing in. Full list lives at /battles. --}}
+    @if ($recentBattles->isNotEmpty())
+        <div style="max-width: 90%; margin: 2rem auto; padding: 0 1rem;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.75rem;">
+                <h2 style="font-family: 'JetBrains Mono', monospace; font-size: 1rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted, #7a7a82); margin: 0;">
+                    Recent battles
+                </h2>
+                <a href="{{ route('public.battles.index') }}"
+                   style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: #4fd0d0; text-decoration: none;">
+                    all battles →
+                </a>
+            </div>
+            <div style="border: 1px solid rgba(79,208,208,0.15); border-radius: 8px; background: rgba(17,17,19,0.6); overflow: hidden;">
+                @foreach ($recentBattles as $b)
+                    @php
+                        $sec = $b->primarySystem?->security_status;
+                        $secColor = $sec === null ? '#7a7a82'
+                            : ($sec >= 0.5 ? '#4ade80' : ($sec >= 0.0 ? '#e5a900' : '#ff3838'));
+                        $url = route('public.battles.show', ['record' => $b->id]);
+                    @endphp
+                    <a href="{{ $url }}"
+                       style="display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; border-bottom: 1px solid rgba(38,38,43,0.6); text-decoration: none; color: #e5e5e7; font-size: 0.85rem;">
+                        <span style="font-family: 'JetBrains Mono', monospace; color: {{ $secColor }}; min-width: 2.2rem;">
+                            {{ $sec !== null ? number_format($sec, 1) : '—' }}
+                        </span>
+                        <span style="font-weight: 600; min-width: 7rem;">
+                            {{ $b->primarySystem?->name ?? '#'.$b->primary_system_id }}
+                        </span>
+                        <span style="color: #7a7a82; flex: 1;">{{ $b->region?->name ?? '' }}</span>
+                        <span style="font-family: 'JetBrains Mono', monospace; color: #7a7a82; font-size: 0.78rem;">
+                            {{ $b->end_time?->format('M d H:i') }}
+                        </span>
+                        <span style="font-family: 'JetBrains Mono', monospace; color: #7a7a82; min-width: 4rem; text-align: right;">
+                            {{ number_format((int) $b->total_kills) }} k
+                        </span>
+                        <span style="font-family: 'JetBrains Mono', monospace; color: #e5a900; min-width: 5rem; text-align: right;">
+                            {{ $formatIskShort((float) $b->total_isk_lost) }}
+                        </span>
+                    </a>
+                @endforeach
+            </div>
+        </div>
     @endif
 
     <footer>
