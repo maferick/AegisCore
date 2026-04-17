@@ -15,6 +15,8 @@ is lost (container restart, network blip, idle timeout).
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
 
 from killmail_ingest.config import Config
@@ -35,6 +37,43 @@ from killmail_ingest.state import get_state, set_state
 log = get(__name__)
 
 
+# Watchdog + heartbeat tuning.
+#
+# The stream shouldn't go more than WATCHDOG_TIMEOUT_SECONDS between
+# poll-cycle iterations — if it does, something's wedged (stuck
+# socket, GIL freeze, surprise blocking I/O) and Docker's restart
+# policy is the cleanest recovery. HEARTBEAT_INTERVAL_SECONDS is how
+# often we log "still here" during long idle periods so operators
+# can distinguish "stream is dead" from "EVE is quiet right now" by
+# tailing the container.
+WATCHDOG_TIMEOUT_SECONDS = 600
+HEARTBEAT_INTERVAL_SECONDS = 60
+
+
+def _start_watchdog(last_tick_ref: list[float], timeout: int) -> None:
+    """Spawn a daemon thread that force-exits the process if the main
+    loop hasn't ticked within ``timeout`` seconds. We use ``os._exit``
+    rather than raising because the hang is by definition inside a
+    blocking call that won't notice SIGTERM; the hard exit hands
+    control to Docker's restart policy.
+    """
+
+    def _watch() -> None:
+        while True:
+            time.sleep(30)
+            idle = time.time() - last_tick_ref[0]
+            if idle > timeout:
+                log.error(
+                    "watchdog: main loop stalled; exiting for container restart",
+                    idle_seconds=int(idle),
+                    timeout=timeout,
+                )
+                os._exit(1)
+
+    t = threading.Thread(target=_watch, daemon=True, name="stream-watchdog")
+    t.start()
+
+
 def run_stream(cfg: Config) -> int:
     """Run the R2Z2 live stream. Blocks indefinitely until interrupted."""
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -49,8 +88,35 @@ def run_stream(cfg: Config) -> int:
     errors = 0
     consecutive_db_errors = 0
 
+    # Shared tick timestamp — the watchdog reads it, the main loop
+    # writes it at the top of every iteration. Using a one-element
+    # list instead of a module-level global keeps the state per
+    # ``run_stream`` invocation (tests can spin two instances).
+    last_tick_ref = [time.time()]
+    last_heartbeat_at = time.time()
+    _start_watchdog(last_tick_ref, WATCHDOG_TIMEOUT_SECONDS)
+
     try:
         while True:
+            # Heartbeat + watchdog: write the tick first so any
+            # blocking call below is still "recent" from the
+            # watchdog's POV for the first WATCHDOG_TIMEOUT_SECONDS.
+            # Log a heartbeat periodically when the loop is idling
+            # on 404s — before this, ``stream progress`` only fired
+            # every 100 ingested kills, so an operator couldn't tell
+            # "alive but quiet" apart from "wedged".
+            last_tick_ref[0] = time.time()
+            now = last_tick_ref[0]
+            if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
+                log.info(
+                    "stream heartbeat",
+                    sequence=cursor,
+                    ingested=ingested,
+                    duplicates=duplicates,
+                    errors=errors,
+                )
+                last_heartbeat_at = now
+
             try:
                 data = fetch_killmail(cfg, cursor)
             except R2z2Transient as exc:
