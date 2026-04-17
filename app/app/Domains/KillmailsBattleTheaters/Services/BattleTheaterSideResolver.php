@@ -7,6 +7,7 @@ namespace App\Domains\KillmailsBattleTheaters\Services;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheater;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant;
 use App\Domains\KillmailsBattleTheaters\Services\AllegianceGraphService;
+use App\Domains\UsersCharacters\Models\CharacterStanding;
 use App\Domains\UsersCharacters\Models\CoalitionEntityLabel;
 use App\Domains\UsersCharacters\Models\ViewerContext;
 use Illuminate\Support\Collection;
@@ -101,31 +102,24 @@ final class BattleTheaterSideResolver
             ? (int) $viewer->bloc_id
             : null;
 
-        // Bloc-based path — only used when the viewer has an explicit
-        // bloc set. "Show me my coalition vs its dominant adversary,
-        // everyone else is third parties" is an intentional viewer
-        // choice; we respect it even if the bloc mapping is sparse.
+        // Viewer-with-bloc path. Old behaviour: hard bloc-match = A,
+        // single largest opposing bloc by ISK = B, everyone else = C.
+        // Problem: the viewer's real-world allies that aren't tagged
+        // in coalition_entity_labels, and alliances labelled to a
+        // smaller hostile bloc, all land in C — which is exactly what
+        // operators complain about ("my friend's alliance shows as
+        // third party"). Per-alliance affinity scoring folds in
+        // character_standings (viewer's own ESI contacts) and the
+        // Neo4j allegiance graph alongside the bloc label, so an
+        // alliance can land on A or B even without a coalition
+        // label as long as one of the stronger signals agrees.
         if ($viewerBlocId !== null) {
-            $sideABlocId = $viewerBlocId;
-            $sideBBlocId = $this->pickOpposingBloc($iskPerBloc, excludeBlocId: $sideABlocId);
-
-            $sideByChar = [];
-            foreach ($participants as $p) {
-                $allianceBloc = $allianceToBloc[(int) $p->alliance_id] ?? null;
-                if ($allianceBloc !== null && $allianceBloc === $sideABlocId) {
-                    $sideByChar[(int) $p->character_id] = self::SIDE_A;
-                } elseif ($allianceBloc !== null && $allianceBloc === $sideBBlocId) {
-                    $sideByChar[(int) $p->character_id] = self::SIDE_B;
-                } else {
-                    $sideByChar[(int) $p->character_id] = self::SIDE_C;
-                }
-            }
-
-            return new BattleTheaterSideResolution(
-                sideByCharacterId: $sideByChar,
-                sideABlocId: $sideABlocId,
-                sideBBlocId: $sideBBlocId,
+            return $this->resolveByViewerAffinity(
+                participants: $participants,
                 allianceToBloc: $allianceToBloc,
+                iskPerBloc: $iskPerBloc,
+                viewer: $viewer,
+                viewerBlocId: $viewerBlocId,
             );
         }
 
@@ -506,6 +500,211 @@ final class BattleTheaterSideResolver
             sideBBlocId: null,
             allianceToBloc: $allianceToBloc,
         );
+    }
+
+    /**
+     * Per-alliance affinity scoring for the viewer-with-bloc path.
+     *
+     * Signals, in descending weight:
+     *
+     *   +1000   alliance_id === viewer_alliance_id           (hard pin)
+     *   ±100    character_standings contact_type=alliance    (±5 threshold)
+     *   ±50     coalition_entity_labels bloc membership      (viewer's bloc = +,
+     *                                                         any other bloc = -)
+     *   ±30cap  Neo4j allegiance score vs (viewer anchor, opposing anchor)
+     *
+     * Threshold ±25 sends an alliance to Side A or Side B; below that
+     * it stays Side C. A single bloc match or a single standings
+     * entry is enough to cross; Neo4j alone is not (capped at 30,
+     * and it needs a clear spread). This keeps Neo4j in the role of
+     * disambiguator, not override.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<int, int>  $allianceToBloc
+     * @param  array<int, float>  $iskPerBloc
+     */
+    private function resolveByViewerAffinity(
+        Collection $participants,
+        array $allianceToBloc,
+        array $iskPerBloc,
+        ViewerContext $viewer,
+        int $viewerBlocId,
+    ): BattleTheaterSideResolution {
+        $allianceIds = $participants
+            ->pluck('alliance_id')
+            ->filter(fn ($id) => $id !== null && $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $viewerAllianceId = (int) ($viewer->viewer_alliance_id ?? 0);
+        $viewerCorpId = (int) ($viewer->viewer_corporation_id ?? 0);
+
+        $opposingBlocId = $this->pickOpposingBloc($iskPerBloc, excludeBlocId: $viewerBlocId);
+
+        // Neo4j anchors. Anchor A = viewer's alliance, or the
+        // flagship (biggest-ISK-lost) same-bloc alliance on the field
+        // if the viewer is solo / in an NPC corp. Anchor B = flagship
+        // of the largest opposing bloc. Missing either anchor skips
+        // the Neo4j step — we can score standings + bloc alone.
+        $anchorA = $viewerAllianceId > 0
+            ? $viewerAllianceId
+            : $this->flagshipOfBloc($participants, $allianceToBloc, $viewerBlocId);
+        $anchorB = $opposingBlocId !== null
+            ? $this->flagshipOfBloc($participants, $allianceToBloc, $opposingBlocId)
+            : null;
+
+        $standings = $this->loadViewerAllianceStandings(
+            viewerAllianceId: $viewerAllianceId,
+            viewerCorpId: $viewerCorpId,
+            allianceIds: $allianceIds,
+        );
+
+        $scoreByAlliance = [];
+        foreach ($allianceIds as $aid) {
+            if ($aid === $viewerAllianceId && $aid > 0) {
+                $scoreByAlliance[$aid] = 1000;
+                continue;
+            }
+
+            $score = 0;
+
+            // 1. Standings (viewer's own ESI contacts — strongest
+            //    signal after self-alliance match).
+            $standingValue = $standings[$aid] ?? null;
+            if ($standingValue !== null) {
+                if ($standingValue >= 5.0) {
+                    $score += 100;
+                } elseif ($standingValue <= -5.0) {
+                    $score -= 100;
+                }
+            }
+
+            // 2. Bloc label. Same bloc as viewer = ally. Any other
+            //    labelled bloc in this fight is presumed opposing —
+            //    if it were friendly it'd be sharing a bloc.
+            $bloc = $allianceToBloc[$aid] ?? null;
+            if ($bloc !== null) {
+                if ($bloc === $viewerBlocId) {
+                    $score += 50;
+                } else {
+                    $score -= 50;
+                }
+            }
+
+            // 3. Neo4j historical allegiance (capped).
+            if ($this->allegiance !== null
+                && $anchorA !== null && $anchorA > 0
+                && $anchorB !== null && $anchorB > 0
+                && $anchorA !== $anchorB
+                && $aid !== $anchorA && $aid !== $anchorB
+            ) {
+                $ng = $this->allegiance->scoreFor($aid, $anchorA, $anchorB);
+                if ($ng !== null) {
+                    $net = ($ng['a_ally'] + $ng['b_oppose'])
+                         - ($ng['b_ally'] + $ng['a_oppose']);
+                    $score += max(-30, min(30, $net));
+                }
+            }
+
+            $scoreByAlliance[$aid] = $score;
+        }
+
+        $threshold = 25;
+        $sideByChar = [];
+        foreach ($participants as $p) {
+            $aid = (int) ($p->alliance_id ?? 0);
+            $score = $scoreByAlliance[$aid] ?? 0;
+            if ($score >= $threshold) {
+                $sideByChar[(int) $p->character_id] = self::SIDE_A;
+            } elseif ($score <= -$threshold) {
+                $sideByChar[(int) $p->character_id] = self::SIDE_B;
+            } else {
+                $sideByChar[(int) $p->character_id] = self::SIDE_C;
+            }
+        }
+
+        return new BattleTheaterSideResolution(
+            sideByCharacterId: $sideByChar,
+            sideABlocId: $viewerBlocId,
+            sideBBlocId: $opposingBlocId,
+            allianceToBloc: $allianceToBloc,
+        );
+    }
+
+    /**
+     * Largest on-field alliance (by ISK lost) whose coalition label
+     * maps to the given bloc. Used as a Neo4j anchor. Returns null
+     * when the bloc has no labelled on-field presence.
+     *
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     * @param  array<int, int>  $allianceToBloc
+     */
+    private function flagshipOfBloc(Collection $participants, array $allianceToBloc, ?int $blocId): ?int
+    {
+        if ($blocId === null) {
+            return null;
+        }
+        $iskByAlliance = [];
+        foreach ($participants as $p) {
+            $aid = (int) ($p->alliance_id ?? 0);
+            if ($aid === 0) {
+                continue;
+            }
+            if (($allianceToBloc[$aid] ?? null) !== $blocId) {
+                continue;
+            }
+            $iskByAlliance[$aid] = ($iskByAlliance[$aid] ?? 0.0) + (float) $p->isk_lost;
+        }
+        if ($iskByAlliance === []) {
+            return null;
+        }
+        arsort($iskByAlliance);
+        return (int) array_key_first($iskByAlliance);
+    }
+
+    /**
+     * Load the viewer's alliance-scoped standings for the alliance
+     * IDs on the field. Alliance-owner rows are preferred; corp-
+     * owner rows fill gaps when the viewer's alliance doesn't have a
+     * standing toward a given alliance.
+     *
+     * @param  list<int>  $allianceIds
+     * @return array<int, float>  alliance_id → standing value (-10.0 … +10.0)
+     */
+    private function loadViewerAllianceStandings(int $viewerAllianceId, int $viewerCorpId, array $allianceIds): array
+    {
+        if ($allianceIds === []) {
+            return [];
+        }
+        $out = [];
+
+        if ($viewerAllianceId > 0) {
+            CharacterStanding::query()
+                ->where('owner_type', CharacterStanding::OWNER_ALLIANCE)
+                ->where('owner_id', $viewerAllianceId)
+                ->where('contact_type', CharacterStanding::CONTACT_ALLIANCE)
+                ->whereIn('contact_id', $allianceIds)
+                ->get(['contact_id', 'standing'])
+                ->each(function (CharacterStanding $row) use (&$out): void {
+                    $out[(int) $row->contact_id] = (float) $row->standing;
+                });
+        }
+
+        if ($viewerCorpId > 0) {
+            CharacterStanding::query()
+                ->where('owner_type', CharacterStanding::OWNER_CORPORATION)
+                ->where('owner_id', $viewerCorpId)
+                ->where('contact_type', CharacterStanding::CONTACT_ALLIANCE)
+                ->whereIn('contact_id', $allianceIds)
+                ->get(['contact_id', 'standing'])
+                ->each(function (CharacterStanding $row) use (&$out): void {
+                    // Alliance-owner row wins when both exist.
+                    $out[(int) $row->contact_id] ??= (float) $row->standing;
+                });
+        }
+
+        return $out;
     }
 
     /**
