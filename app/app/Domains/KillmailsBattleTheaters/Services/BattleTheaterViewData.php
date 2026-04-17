@@ -515,14 +515,16 @@ final class BattleTheaterViewData
         if ($killmailIds === []) {
             return [];
         }
-        $rows = DB::table('killmails')
-            ->whereIn('killmail_id', $killmailIds)
+        $rows = DB::table('killmails as k')
+            ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->whereIn('k.killmail_id', $killmailIds)
             ->select([
-                'killmail_id', 'killed_at', 'solar_system_id',
-                'victim_character_id', 'victim_corporation_id', 'victim_alliance_id',
-                'victim_ship_type_id', 'total_value', 'attacker_count',
+                'k.killmail_id', 'k.killed_at', 'k.solar_system_id',
+                'k.victim_character_id', 'k.victim_corporation_id', 'k.victim_alliance_id',
+                'k.victim_ship_type_id', 'k.total_value', 'k.attacker_count',
+                't.group_id as ship_group_id',
             ])
-            ->orderBy('killed_at')
+            ->orderBy('k.killed_at')
             ->get();
         $finalBlows = DB::table('killmail_attackers')
             ->whereIn('killmail_id', $killmailIds)
@@ -531,11 +533,61 @@ final class BattleTheaterViewData
             ->get()
             ->keyBy('killmail_id');
 
+        // Collapse capsules into their parent ship kill. For each
+        // capsule km (ref_item_groups.id=29), find the same pilot's
+        // most recent non-capsule kill in the same theater within
+        // 120s; attach the capsule's totalValue to that ship's feed
+        // row and skip emitting the capsule as a separate row.
+        // Standalone pods (no matching ship kill in window) stay
+        // visible.
+        $capsuleSkip = [];                 // km_id => true
+        $podAttachment = [];               // parent_km_id => ['ship_type_id' => X, 'total_value' => Y]
+        $rowsByKm = $rows->keyBy('killmail_id');
+        foreach ($rows as $r) {
+            if ((int) ($r->ship_group_id ?? 0) !== 29) {
+                continue;
+            }
+            if (! $r->victim_character_id) {
+                continue;
+            }
+            $capsuleAt = strtotime((string) $r->killed_at);
+            $parent = null;
+            foreach ($rows as $other) {
+                if ((int) $other->killmail_id === (int) $r->killmail_id) {
+                    continue;
+                }
+                if ((int) ($other->ship_group_id ?? 0) === 29) {
+                    continue;
+                }
+                if ((int) ($other->victim_character_id ?? 0) !== (int) $r->victim_character_id) {
+                    continue;
+                }
+                $delta = $capsuleAt - strtotime((string) $other->killed_at);
+                if ($delta < 0 || $delta > 120) {
+                    continue;
+                }
+                $parent = $other;
+                break;
+            }
+            if ($parent !== null) {
+                $capsuleSkip[(int) $r->killmail_id] = true;
+                $pid = (int) $parent->killmail_id;
+                $existing = $podAttachment[$pid] ?? ['ship_type_id' => (int) $r->victim_ship_type_id, 'total_value' => 0.0];
+                $existing['total_value'] += (float) $r->total_value;
+                $podAttachment[$pid] = $existing;
+            }
+        }
+
         $out = [];
         foreach ($rows as $r) {
+            $kmId = (int) $r->killmail_id;
+            if (isset($capsuleSkip[$kmId])) {
+                continue;
+            }
             $fb = $finalBlows->get($r->killmail_id);
+            $pod = $podAttachment[$kmId] ?? null;
             $out[] = [
-                'killmail_id' => (int) $r->killmail_id,
+                'killmail_id' => $kmId,
                 'killed_at' => $r->killed_at,
                 'system_id' => (int) $r->solar_system_id,
                 'victim_id' => $r->victim_character_id ? (int) $r->victim_character_id : null,
@@ -544,12 +596,16 @@ final class BattleTheaterViewData
                 'victim_alliance_id' => $r->victim_alliance_id ? (int) $r->victim_alliance_id : null,
                 'ship_type_id' => (int) $r->victim_ship_type_id,
                 'ship_name' => $shipNames[(int) $r->victim_ship_type_id] ?? '#'.$r->victim_ship_type_id,
-                'total_value' => (float) $r->total_value,
+                // total_value rolls in the linked pod so the kill
+                // feed row shows the combined ship+pod ISK.
+                'total_value' => (float) $r->total_value + ($pod['total_value'] ?? 0.0),
                 'attacker_count' => (int) $r->attacker_count,
                 'final_blow_char_id' => $fb && $fb->character_id ? (int) $fb->character_id : null,
                 'final_blow_name' => $fb && $fb->character_id ? ($names[(int) $fb->character_id] ?? '#'.$fb->character_id) : null,
                 'final_blow_alliance_id' => $fb && $fb->alliance_id ? (int) $fb->alliance_id : null,
                 'final_blow_ship_id' => $fb ? (int) $fb->ship_type_id : null,
+                'pod_ship_type_id' => $pod['ship_type_id'] ?? null,
+                'pod_value' => $pod['total_value'] ?? 0.0,
             ];
         }
         return $out;
@@ -868,7 +924,8 @@ final class BattleTheaterViewData
             $side = $sides->sideByCharacterId[(int) $p->character_id] ?? BattleTheaterSideResolver::SIDE_C;
             $row = $byAlliance[$aid] ?? [
                 'alliance_id' => $aid,
-                'alliance_name' => $aid > 0 ? ($names[$aid] ?? "Alliance #{$aid}") : '(no alliance)',
+                'alliance_name' => $aid > 0 ? ($names[$aid] ?? "Alliance #{$aid}") : 'No alliance (individuals)',
+                'is_individuals' => $aid === 0,
                 'side' => $side,
                 'pilots' => 0,
                 'kills' => 0,
@@ -891,8 +948,16 @@ final class BattleTheaterViewData
         }
         unset($row);
 
+        // Sort: named alliances first (by isk_lost desc), then the
+        // "No alliance (individuals)" catch-all last. This keeps
+        // the interesting movers at the top and buries the
+        // 24-pilot-1.28B-mostly-noobs bucket that otherwise
+        // visually dominates the roster.
         return collect(array_values($byAlliance))
-            ->sortByDesc('isk_lost')
+            ->sortBy([
+                ['is_individuals', 'asc'],   // false (0) before true (1)
+                ['isk_lost', 'desc'],
+            ])
             ->values();
     }
 
@@ -1018,20 +1083,53 @@ final class BattleTheaterViewData
     }
 
     /**
-     * @return array<string, array{alliance_id: int, alliance_name: string, pilots: int}|null>
+     * Flagship alliance per side — used for the big logo + name on
+     * the VS banner. Picks the alliance that contributed the most
+     * to the side's outcome:
+     *
+     *   1. biggest ISK lost (the side's biggest victim is the side's
+     *      real story — "who got blapped here"),
+     *   2. fall back to biggest kills (attack volume) when nobody
+     *      on the side lost anything,
+     *   3. fall back to biggest pilot count when neither metric
+     *      differentiates.
+     *
+     * Previous version picked by pilot count, which made a 4-Ibis
+     * Goonswarm contingent the "headline" on a side where Brave
+     * Collective actually lost 2.4B.
+     *
+     * @return array<string, array{alliance_id: int, alliance_name: string, pilots: int, isk_lost: float, kills: int}|null>
      */
     private function buildFlagshipLogos(Collection $allianceRows): array
     {
         $pick = function (string $side) use ($allianceRows): ?array {
-            $rows = $allianceRows->where('side', $side)->where('alliance_id', '>', 0)->sortByDesc('pilots')->values();
+            $rows = $allianceRows
+                ->where('side', $side)
+                ->where('alliance_id', '>', 0)
+                ->values();
             if ($rows->isEmpty()) {
                 return null;
             }
-            $r = $rows->first();
+            // Primary signal: ISK lost. Whoever bled the most on
+            // this side is the side's lead story.
+            $byLoss = $rows->where('isk_lost', '>', 0)->sortByDesc('isk_lost');
+            if ($byLoss->isNotEmpty()) {
+                $r = $byLoss->first();
+            } else {
+                // Nobody on this side lost anything → pick the
+                // alliance that landed the most kills. If nobody
+                // killed anything either, fall back to pilot count.
+                $r = $rows->sortByDesc('kills')->first();
+                if ((int) $r['kills'] === 0) {
+                    $r = $rows->sortByDesc('pilots')->first();
+                }
+            }
             return [
                 'alliance_id' => (int) $r['alliance_id'],
                 'alliance_name' => (string) $r['alliance_name'],
                 'pilots' => (int) $r['pilots'],
+                'isk_lost' => (float) $r['isk_lost'],
+                'kills' => (int) $r['kills'],
             ];
         };
         return [

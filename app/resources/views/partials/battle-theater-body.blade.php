@@ -665,7 +665,7 @@
             <div class="km-attacker-info">
                 <div class="km-attacker-name">{{ $km['victim_name'] }}</div>
                 <div class="km-attacker-corp">
-                    lost a <span style="color:#e5e5e7;">{{ $km['ship_name'] }}</span>
+                    lost a <span style="color:#e5e5e7;">{{ $km['ship_name'] }}</span>@if (! empty($km['pod_ship_type_id']))<span style="color:#9ca0a8;"> + Capsule</span>@endif
                     @if ($km['victim_alliance_id'])
                         · {{ $names[$km['victim_alliance_id']] ?? '#'.$km['victim_alliance_id'] }}
                     @endif
