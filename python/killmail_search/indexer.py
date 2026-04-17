@@ -73,12 +73,22 @@ def run_backfill(cfg: Config) -> int:
 
 
 def _get_max_indexed_id(client: OpenSearch, index_name: str) -> int:
-    """Get the highest killmail_id currently in the index."""
+    """Get the highest killmail_id currently in the index.
+
+    Caps the aggregation below the seed-ID range (>= 900_000_000).
+    Real EVE killmail IDs are in the ~130M range today. A stray test
+    fixture at id 999_999_903 got the cursor stuck forever (2026-04-17
+    incident: 7.7M real killmails sat unindexed because the indexer
+    kept asking MariaDB for id > 999_999_903 and got zero rows back).
+    Real EVE won't plausibly hit 900M this decade, so the cap is
+    safe; seeds above it are ignored.
+    """
     try:
         result = client.search(
             index=index_name,
             body={
                 "size": 0,
+                "query": {"range": {"killmail_id": {"lt": 900_000_000}}},
                 "aggs": {"max_id": {"max": {"field": "killmail_id"}}},
             },
         )
