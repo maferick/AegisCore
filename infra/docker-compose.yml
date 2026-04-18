@@ -1072,6 +1072,30 @@ services:
   # `tools` so docker compose up doesn't start it; invoke via
   # `make theater-cluster`.
 
+  # battle_features — Spec 4 one-shot role feature extraction.
+  # Reads Spec 2 metrics + Spec 3 membership, writes role features.
+  # Shares GET_LOCK keys with battle_graph + battle_partition so the
+  # input tables can't be rewritten mid-pass. Profile-gated under
+  # `tools`; see python/battle_features/README.md.
+  battle_features:
+    profiles: ["tools"]
+    build:
+      context: ../python
+      dockerfile: battle_features.Dockerfile
+    image: aegiscore/battle-features:0.1.0
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+
   # battle_partition — Spec 3 one-shot sub-fleet partitioning.
   # Reads Spec 2 metrics, writes battle_sub_fleets + membership.
   # Shares a GET_LOCK key with battle_graph so mid-write reads never

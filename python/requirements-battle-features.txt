@@ -1,0 +1,6 @@
+# battle_features deps.
+#
+# Pure relational job — reads membership + graph metrics + killmails
+# from MariaDB, writes battle_character_role_features. No Neo4j, no
+# scientific libraries.
+pymysql~=1.1

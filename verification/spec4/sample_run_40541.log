@@ -1,0 +1,13 @@
+time="2026-04-18T10:01:54+02:00" level=warning msg="The \"INTEL_COPILOT_API_TOKEN\" variable is not set. Defaulting to a blank string."
+ Container mariadb Running 
+ Container mariadb Waiting 
+ Container mariadb Healthy 
+ Container aegiscore-stack-battle_features-run-aeadaa22569e Creating 
+ Container aegiscore-stack-battle_features-run-aeadaa22569e Created 
+2026-04-18T08:01:55 INFO battle_features.cli profiles resolved {"battle_id": 40541, "alliance_id": 99011223, "partition_algo_version": 1, "edge_profile_version": 1, "algo_profile_version": 1}
+2026-04-18T08:01:55 INFO battle_features.cli locks acquired {"gm_key": "bg_98337800d02244ce9e08cc0a18c9e55ecb7b7c48", "partition_key": "bp_41d086b4f3d9aa0b2bf58e943e32598e4c9d7470", "feature_key": "bf_41d086b4f3d9aa0b2bf58e943e32598e4c9d7470"}
+2026-04-18T08:01:55 INFO battle_features.cli inputs loaded {"members": 50, "sub_fleets": 2, "graph_rows": 50, "attacker_events": 182, "victim_events": 29, "hull_map_size": 93}
+2026-04-18T08:01:55 WARNING battle_features.cli pilots flew hulls outside the v1 category mapping; categorized as 'other' — consider adding to ship_class_category_mapping {"unresolvable_ship_type_ids": [11959, 11961, 11971, 20125, 33153]}
+2026-04-18T08:01:55 INFO battle_features.cli features computed {"rows": 50, "small_tier": false}
+2026-04-18T08:01:55 INFO battle_features.cli feature_completeness distribution {"n": 50, "mean": 1.0, "min": 1.0, "max": 1.0, "stdev": 0.0}
+2026-04-18T08:01:55 INFO battle_features.cli features written {"run_status": "success", "rows_written": 50}

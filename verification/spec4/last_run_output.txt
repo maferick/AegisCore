@@ -1,0 +1,29 @@
+time="2026-04-18T10:01:57+02:00" level=warning msg="The \"INTEL_COPILOT_API_TOKEN\" variable is not set. Defaulting to a blank string."
+chk	violations
+is_in_subfleet_0 mismatch	0
+chk	violations
+non-binary early/late	0
+chk	bad_ds	bad_kpr	bad_ps	bad_dop	bad_deg	bad_pr	bad_sf_ds	bad_conc
+bounds audit [0,1]	0	0	0	0	0	0	0	0
+chk	battle_id	alliance_id	stdev	mean_fc	rows_
+feature_completeness stdev per battle	40228	99014027	0.000000	1.0000	72
+feature_completeness stdev per battle	40365	99011978	0.000000	1.0000	76
+feature_completeness stdev per battle	40374	99003581	0.000000	1.0000	174
+feature_completeness stdev per battle	40478	99003581	0.000000	1.0000	72
+feature_completeness stdev per battle	40537	1900696668	0.000000	1.0000	74
+feature_completeness stdev per battle	40541	99011223	0.000000	1.0000	50
+feature_completeness stdev per battle	40553	99011223	0.000000	1.0000	69
+feature_completeness stdev per battle	40605	99012122	0.000000	1.0000	78
+chk	character_id	ship	ship_class_category	sub_fleet_id	degree	pagerank	presence_span	early_presence	late_presence	death_order_pct
+40541 Monitor ship_class_category	93444333	Monitor	command	1	0.6388	0.6980	0.0000	0.0000	0.0000	1.0000
+chk	ship_class_category	pilots
+40478 sf2 hull distribution	bomber	10
+40478 sf2 hull distribution	other	1
+chk	dom	conc	has_logi	sf_n
+40478 sf2 denormalized	bomber	0.9091	0	11
+chk	n_logi	max_ds	min_kpr	avg_kpr
+40605 Scimi pilots	12	0.0038	0.2000	0.3833
+chk	hl	pilots
+40605 sf0 has_logi	1	60
+chk	rows_	min_is0	max_is0	sf_ds	sf_mc
+40553 single sub-fleet	69	1	1	1.0000	69
