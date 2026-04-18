@@ -62,11 +62,18 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
      * same rows. uniqueId() includes the shard so Laravel's ShouldBeUnique
      * keeps within-shard serial (fair — one slice at a time) while
      * letting distinct shards run in parallel.
+     *
+     * Properties declared with explicit defaults so pre-existing queued
+     * jobs (serialized before this field existed) unserialize cleanly
+     * as single-shard dispatches.
      */
-    public function __construct(public int $shardId = 0, public int $shardCount = 1)
+    public int $shardId = 0;
+    public int $shardCount = 1;
+
+    public function __construct(int $shardId = 0, int $shardCount = 1)
     {
-        // Drop into the default queue; shard routing is by ShouldBeUnique,
-        // not by queue partitioning (keeps horizon auto-balance happy).
+        $this->shardId = $shardId;
+        $this->shardCount = $shardCount;
     }
 
     public function uniqueId(): string
