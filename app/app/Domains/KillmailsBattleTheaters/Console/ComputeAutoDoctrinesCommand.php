@@ -47,6 +47,9 @@ class ComputeAutoDoctrinesCommand extends Command
     /** @var array<string, array> Cluster state across batches. Key = "$hull|$role|$fp". */
     private array $clusters = [];
 
+    /** @var array<int, array{canonical:int,name:string}> type_id → stem+name. */
+    private array $canonicalMap = [];
+
     public function handle(): int
     {
         $windowDays = (int) $this->option('window-days');
@@ -66,6 +69,30 @@ class ComputeAutoDoctrinesCommand extends Command
 
         $since = now()->subDays($windowDays);
         $hullCatMap = DB::table('ship_class_category_mapping')->pluck('category', 'ship_type_id')->all();
+
+        // Meta-variant canonical map: variation_parent_type_id points
+        // every meta/T2/faction variant back to its T1 stem. Clustering
+        // uses the stem as module identity so meta variants of the
+        // same module collapse to one canonical slot. Populated once
+        // per run; ~50k rows, ~5MB in memory.
+        $this->canonicalMap = [];
+        foreach (DB::table('ref_item_types')
+            ->select('id', 'variation_parent_type_id', 'name')
+            ->get() as $row
+        ) {
+            $id = (int) $row->id;
+            $parent = $row->variation_parent_type_id !== null ? (int) $row->variation_parent_type_id : $id;
+            $this->canonicalMap[$id] = [
+                'canonical' => $parent,
+                'name' => (string) $row->name,
+            ];
+        }
+        $collapsed = 0;
+        foreach ($this->canonicalMap as $id => $row) {
+            if ($row['canonical'] !== $id) $collapsed++;
+        }
+        $this->info(sprintf('Canonical map loaded: %d rows (%d meta-variants collapse to stem)',
+            count($this->canonicalMap), $collapsed));
 
         // Stream loss killmails in ascending killed_at batches using
         // a cursor-on-killmail_id pagination so big-window runs don't
@@ -204,7 +231,7 @@ class ComputeAutoDoctrinesCommand extends Command
         $emitted = 0; $active = 0; $skipped = 0;
 
         foreach ($merged as $family) {
-            $core = self::coreModules($family, $coreFreq);
+            $core = $this->coreModules($family, $coreFreq);
             if ($core === []) { $skipped++; continue; }
 
             $canonical = self::canonicalFingerprint($core);
@@ -240,9 +267,16 @@ class ComputeAutoDoctrinesCommand extends Command
 
                 DB::table('auto_doctrine_modules')->where('doctrine_id', $docId)->delete();
                 $modRows = [];
-                foreach ($core as [$tid, $slot, $q, $f]) {
-                    $modRows[] = ['doctrine_id' => $docId, 'type_id' => $tid,
-                        'flag_category' => $slot, 'quantity' => $q, 'frequency' => $f];
+                foreach ($core as [$canonical_id, $slot, $q, $f, $mostCommon, $variants]) {
+                    $modRows[] = [
+                        'doctrine_id' => $docId,
+                        'type_id' => $mostCommon,
+                        'flag_category' => $slot,
+                        'canonical_type_id' => $canonical_id,
+                        'quantity' => $q,
+                        'frequency' => $f,
+                        'variants_json' => json_encode($variants),
+                    ];
                 }
                 if ($modRows !== []) DB::table('auto_doctrine_modules')->insert($modRows);
 
@@ -264,13 +298,14 @@ class ComputeAutoDoctrinesCommand extends Command
                     // adopter-module rows.
                     if ($meta['n'] < 3) continue;
                     foreach (($meta['module_counts'] ?? []) as $mk => $count) {
-                        [$tid, $slot] = explode('|', $mk);
+                        [$canonical, $slot] = explode('|', $mk);
                         $avg = $count / $meta['n'];
                         if (min(1.0, $avg) < 0.60) continue;
                         $adopterModuleRows[] = [
                             'doctrine_id' => $docId,
                             'corporation_id' => $cid,
-                            'type_id' => (int) $tid,
+                            'type_id' => (int) $canonical,
+                            'canonical_type_id' => (int) $canonical,
                             'flag_category' => $slot,
                             'quantity' => max(1, (int) round($avg)),
                             'frequency' => round(min(1.0, $avg), 4),
@@ -358,11 +393,23 @@ class ComputeAutoDoctrinesCommand extends Command
 
     private function foldKillIntoClusters(object $r, string $role, array $mods): void
     {
-        $fp = self::fingerprint($mods);
+        // Canonicalize: variation_parent_type_id (if set) is the T1
+        // stem; every meta/T2/faction variant maps to the same stem
+        // for clustering identity. variant_counts tracks the specific
+        // variants within each canonical+slot.
+        $canonicalMods = [];
+        $variantPairs = [];
+        foreach ($mods as [$type_id, $slot]) {
+            $canonical = $this->canonicalMap[$type_id]['canonical'] ?? $type_id;
+            $canonicalMods[] = [$canonical, $slot];
+            $variantPairs[] = [$canonical, $slot, $type_id];
+        }
+        $fp = self::fingerprint($canonicalMods);
         $key = $r->hull_type_id . '|' . $role . '|' . $fp;
         if (! isset($this->clusters[$key])) {
             $this->clusters[$key] = [
                 'module_counts' => [], 'module_set' => [],
+                'variant_counts' => [],
                 'observation_count' => 0,
                 'first_seen' => $r->killed_at, 'last_seen' => $r->killed_at,
                 'kills' => [], 'corp_counts' => [], 'alliance_counts' => [],
@@ -372,10 +419,15 @@ class ComputeAutoDoctrinesCommand extends Command
         }
         $f = &$this->clusters[$key];
         $f['observation_count']++;
-        foreach ($mods as [$type_id, $slot]) {
-            $k = "{$type_id}|{$slot}";
+        foreach ($canonicalMods as [$canonical, $slot]) {
+            $k = "{$canonical}|{$slot}";
             $f['module_counts'][$k] = ($f['module_counts'][$k] ?? 0) + 1;
             $f['module_set'][$k] = true;
+        }
+        foreach ($variantPairs as [$canonical, $slot, $specific]) {
+            $vk = "{$canonical}|{$slot}";
+            if (! isset($f['variant_counts'][$vk])) $f['variant_counts'][$vk] = [];
+            $f['variant_counts'][$vk][$specific] = ($f['variant_counts'][$vk][$specific] ?? 0) + 1;
         }
         if ($r->killed_at < $f['first_seen']) $f['first_seen'] = $r->killed_at;
         if ($r->killed_at > $f['last_seen'])  $f['last_seen']  = $r->killed_at;
@@ -396,11 +448,10 @@ class ComputeAutoDoctrinesCommand extends Command
         $f['corp_counts'][$cid]['n']++;
         if ($r->killed_at < $f['corp_counts'][$cid]['first']) $f['corp_counts'][$cid]['first'] = $r->killed_at;
         if ($r->killed_at > $f['corp_counts'][$cid]['last'])  $f['corp_counts'][$cid]['last']  = $r->killed_at;
-        // Per-corp module tally. Enables per-corp core re-extraction
-        // at emit time so "your corp's Maelstrom" can diverge from
-        // the global core.
-        foreach ($mods as [$type_id, $slot]) {
-            $k = "{$type_id}|{$slot}";
+        // Per-corp module tally uses canonical IDs so corp-variant
+        // matching in the portal lines up with global canonical ids.
+        foreach ($canonicalMods as [$canonical, $slot]) {
+            $k = "{$canonical}|{$slot}";
             $f['corp_counts'][$cid]['module_counts'][$k] = ($f['corp_counts'][$cid]['module_counts'][$k] ?? 0) + 1;
         }
 
@@ -502,16 +553,36 @@ class ComputeAutoDoctrinesCommand extends Command
         return count(array_intersect_key($a, $b)) / $union;
     }
 
-    private static function coreModules(array $family, float $cutoff): array
+    /**
+     * @return list<array{0:int,1:string,2:int,3:float,4:int,5:array}>
+     *   [canonical_type_id, slot, quantity, frequency,
+     *    most_common_specific_type_id, variants_list]
+     */
+    private function coreModules(array $family, float $cutoff): array
     {
         $obs = max(1, $family['observation_count']);
         $out = [];
         foreach ($family['module_counts'] as $k => $count) {
-            [$type_id, $slot] = explode('|', $k);
+            [$canonical, $slot] = explode('|', $k);
             $avg = $count / $obs;
             $freq = min(1.0, $avg);
             if ($freq < $cutoff) continue;
-            $out[] = [(int) $type_id, $slot, max(1, (int) round($avg)), round($freq, 4)];
+            $quantity = max(1, (int) round($avg));
+
+            $variants = $family['variant_counts'][$k] ?? [(int) $canonical => $count];
+            arsort($variants);
+            $mostCommonSpecific = (int) array_key_first($variants);
+            $variantList = [];
+            foreach ($variants as $spec_id => $n) {
+                $name = $this->canonicalMap[(int) $spec_id]['name'] ?? ('type ' . $spec_id);
+                $variantList[] = [
+                    'type_id' => (int) $spec_id,
+                    'name' => $name,
+                    'count' => (int) $n,
+                    'frequency' => round($n / $obs, 4),
+                ];
+            }
+            $out[] = [(int) $canonical, $slot, $quantity, round($freq, 4), $mostCommonSpecific, $variantList];
         }
         sort($out);
         return $out;
@@ -520,7 +591,10 @@ class ComputeAutoDoctrinesCommand extends Command
     private static function canonicalFingerprint(array $core): string
     {
         $exp = [];
-        foreach ($core as [$tid, $slot, $q, $_]) for ($i = 0; $i < $q; $i++) $exp[] = [$tid, $slot];
+        foreach ($core as $row) {
+            $tid = $row[0]; $slot = $row[1]; $q = $row[2];
+            for ($i = 0; $i < $q; $i++) $exp[] = [$tid, $slot];
+        }
         sort($exp);
         return md5(json_encode($exp));
     }

@@ -114,17 +114,20 @@ class MyDoctrines extends Page
         $globalModules = DB::table('auto_doctrine_modules AS m')
             ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'm.type_id')
             ->whereIn('m.doctrine_id', $ids)
-            ->select('m.doctrine_id', 'm.type_id', 'm.flag_category', 'm.quantity', 'm.frequency', 'rit.name AS mod_name')
+            ->select(
+                'm.doctrine_id', 'm.type_id', 'm.canonical_type_id',
+                'm.flag_category', 'm.quantity', 'm.frequency',
+                'm.variants_json', 'rit.name AS mod_name'
+            )
             ->get()
             ->groupBy('doctrine_id');
 
         $corpModules = collect();
         if ($viewerCorpId > 0) {
             $corpModules = DB::table('auto_doctrine_adopter_modules AS m')
-                ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'm.type_id')
                 ->whereIn('m.doctrine_id', $ids)
                 ->where('m.corporation_id', $viewerCorpId)
-                ->select('m.doctrine_id', 'm.type_id', 'm.flag_category', 'm.quantity', 'm.frequency', 'rit.name AS mod_name')
+                ->select('m.doctrine_id', 'm.canonical_type_id', 'm.flag_category')
                 ->get()
                 ->groupBy('doctrine_id');
         }
@@ -134,31 +137,59 @@ class MyDoctrines extends Page
             $globals = $globalModules->get($r->id) ?? collect();
             $corps   = $corpModules->get($r->id) ?? collect();
 
+            // Build a set of (canonical_type_id|slot) pairs the corp
+            // fits, so the global row can be flagged as "corp also
+            // fits this" without mismatching on meta variant.
+            $corpKeys = [];
+            foreach ($corps as $cm) {
+                $corpKeys["{$cm->canonical_type_id}|{$cm->flag_category}"] = true;
+            }
+
             $byKey = [];
             foreach ($globals as $m) {
-                $k = "{$m->type_id}|{$m->flag_category}";
+                $canon = (int) $m->canonical_type_id;
+                $k = "{$canon}|{$m->flag_category}";
+                $variants = $m->variants_json ? json_decode($m->variants_json, true) : null;
+                // variants_json ordered by count desc at compute time,
+                // so the head is the most-common (== $m->type_id). Pull
+                // the tail for "also seen" annotation.
+                $alsoSeen = [];
+                if (is_array($variants) && count($variants) > 1) {
+                    foreach (array_slice($variants, 1) as $v) {
+                        $alsoSeen[] = [
+                            'type_id' => (int) $v['type_id'],
+                            'name' => (string) ($v['name'] ?? ('type ' . $v['type_id'])),
+                            'frequency' => (float) ($v['frequency'] ?? 0),
+                        ];
+                    }
+                }
                 $byKey[$k] = [
                     'type_id' => (int) $m->type_id,
+                    'canonical_type_id' => $canon,
                     'name' => $m->mod_name,
                     'slot' => $m->flag_category,
                     'quantity' => (int) $m->quantity,
-                    'global' => true, 'corp' => false,
+                    'global' => true,
+                    'corp' => isset($corpKeys[$k]),
+                    'also_seen' => $alsoSeen,
                 ];
             }
-            foreach ($corps as $m) {
-                $k = "{$m->type_id}|{$m->flag_category}";
-                if (isset($byKey[$k])) {
-                    $byKey[$k]['corp'] = true;
-                    $byKey[$k]['quantity'] = (int) $m->quantity;
-                } else {
-                    $byKey[$k] = [
-                        'type_id' => (int) $m->type_id,
-                        'name' => $m->mod_name,
-                        'slot' => $m->flag_category,
-                        'quantity' => (int) $m->quantity,
-                        'global' => false, 'corp' => true,
-                    ];
-                }
+            // Corp-only: corp fits something global doesn't. Fall back
+            // to ref lookup for name.
+            foreach ($corps as $cm) {
+                $k = "{$cm->canonical_type_id}|{$cm->flag_category}";
+                if (isset($byKey[$k])) continue;
+                $name = DB::table('ref_item_types')->where('id', $cm->canonical_type_id)->value('name')
+                    ?? ('type ' . $cm->canonical_type_id);
+                $byKey[$k] = [
+                    'type_id' => (int) $cm->canonical_type_id,
+                    'canonical_type_id' => (int) $cm->canonical_type_id,
+                    'name' => $name,
+                    'slot' => $cm->flag_category,
+                    'quantity' => 1,
+                    'global' => false, 'corp' => true,
+                    'also_seen' => [],
+                ];
             }
 
             $modules = collect(array_values($byKey))

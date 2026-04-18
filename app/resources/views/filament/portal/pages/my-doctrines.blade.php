@@ -92,12 +92,15 @@
                                                         elseif ($corpOnly)[$nc, $bd, $bc] = ['#fde047', 'you', '#fde047'];
                                                         else              [$nc, $bd, $bc] = ['#9ca3af', 'global', '#93c5fd'];
                                                     @endphp
-                                                    <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.75rem; padding:0.15rem 0;">
+                                                    <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.75rem; padding:0.15rem 0;" @if(! empty($m['also_seen'])) title="also seen: @foreach($m['also_seen'] as $v){{ $v['name'] }} ({{ number_format($v['frequency']*100,0) }}%)@if(! $loop->last), @endif @endforeach" @endif>
                                                         <img src="https://images.evetech.net/types/{{ $m['type_id'] }}/icon?size=32"
                                                              style="width:16px;height:16px;border-radius:2px;" alt="">
                                                         <span style="flex:1; color: {{ $nc }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                             @if ($m['quantity'] > 1) {{ $m['quantity'] }}× @endif
                                                             {{ $m['name'] ?? ('type ' . $m['type_id']) }}
+                                                            @if (! empty($m['also_seen']))
+                                                                <span style="color:#7a7a82; font-size:0.85em; font-style:italic;"> · +{{ count($m['also_seen']) }} variant{{ count($m['also_seen']) > 1 ? 's' : '' }}</span>
+                                                            @endif
                                                         </span>
                                                         <span style="font-size:0.6em; padding:1px 4px; border-radius:6px; border:1px solid {{ $bc }}; color: {{ $bc }};">{{ $bd }}</span>
                                                         <span style="color:#7a7a82; font-size:0.7em;">{{ $m['slot'] }}</span>
