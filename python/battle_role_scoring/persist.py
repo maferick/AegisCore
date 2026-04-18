@@ -44,7 +44,9 @@ ON DUPLICATE KEY UPDATE
   second_best_score = VALUES(second_best_score),
   confidence = VALUES(confidence),
   confidence_band = VALUES(confidence_band),
-  ui_state = VALUES(ui_state),
+  -- ui_state deliberately NOT updated on re-score; operator-approved
+  -- promotions via battle:promote-weight-version must survive rescore.
+  -- New rows land as 'beta' via the INSERT default below.
   computed_at = VALUES(computed_at)
 """
 

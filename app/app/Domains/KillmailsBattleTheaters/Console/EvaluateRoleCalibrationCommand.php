@@ -180,7 +180,8 @@ class EvaluateRoleCalibrationCommand extends Command
         // ------------------------------------------------------------------
         // Tackle + bomber: hull-category derived truth (same pattern as logi)
         // ------------------------------------------------------------------
-        foreach (['tackle', 'bomber'] as $role) {
+        foreach (['tackle', 'bomber', 'mainline_dps'] as $role) {
+            $truthCategory = $role === 'mainline_dps' ? 'mainline' : $role;
             $rows = DB::table('battle_character_role_features AS f')
                 ->leftJoin('battle_character_role_inference AS i', function ($j) use ($wv) {
                     $j->on('i.battle_id', '=', 'f.battle_id')
@@ -193,7 +194,7 @@ class EvaluateRoleCalibrationCommand extends Command
                 ->selectRaw("
                     f.ship_class_category = ? AS is_true,
                     i.primary_role_key = ? AS is_pred
-                ", [$role, $role])
+                ", [$truthCategory, $role])
                 ->get();
             $tp = 0; $fp = 0; $fn = 0;
             foreach ($rows as $r) {
@@ -261,49 +262,6 @@ class EvaluateRoleCalibrationCommand extends Command
             'threshold' => round($thresholds['command'], 4),
             'passed' => $cmdAccuracy >= $thresholds['command'] ? 1 : 0,
             'notes' => 'command vs top-degree command-hull per sub-fleet',
-        ];
-
-        // ------------------------------------------------------------------
-        // Mainline: top-damage_share pilot per sub-fleet is the anchor
-        // ------------------------------------------------------------------
-        $topDamagePerSf = DB::select("
-            SELECT t.battle_id, t.alliance_id, t.sub_fleet_id, t.partition_algo_version, t.character_id
-              FROM (
-                  SELECT f.*,
-                         ROW_NUMBER() OVER (
-                             PARTITION BY f.battle_id, f.alliance_id, f.sub_fleet_id, f.partition_algo_version
-                             ORDER BY f.damage_share DESC, f.character_id ASC
-                         ) rn
-                    FROM battle_character_role_features f
-                   WHERE f.damage_share > 0
-              ) t
-             WHERE t.rn = 1
-        ");
-        $mlCount = 0; $mlCorrect = 0;
-        foreach ($topDamagePerSf as $t) {
-            $mlCount++;
-            $inf = DB::table('battle_character_role_inference')
-                ->where('battle_id', $t->battle_id)
-                ->where('alliance_id', $t->alliance_id)
-                ->where('sub_fleet_id', $t->sub_fleet_id)
-                ->where('partition_algo_version', $t->partition_algo_version)
-                ->where('weight_version', $wv)
-                ->where('primary_role_key', 'mainline_dps')
-                ->first();
-            if ($inf === null) continue;
-            if ((int) $inf->character_id === (int) $t->character_id) $mlCorrect++;
-        }
-        $mlAccuracy = $mlCount > 0 ? $mlCorrect / $mlCount : 0.0;
-        $inserts[] = [
-            'weight_version' => $wv,
-            'role_key' => 'mainline_dps',
-            'evaluated_at' => $now,
-            'attestation_count' => $mlCount,
-            'correct_count' => $mlCorrect,
-            'accuracy' => round($mlAccuracy, 4),
-            'threshold' => round($thresholds['mainline_dps'], 4),
-            'passed' => $mlAccuracy >= $thresholds['mainline_dps'] ? 1 : 0,
-            'notes' => 'mainline_dps vs top-damage_share per sub-fleet',
         ];
 
         DB::table('battle_role_calibration_runs')->insert($inserts);

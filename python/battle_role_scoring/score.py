@@ -46,8 +46,8 @@ ROLES = (ROLE_FC, ROLE_LOGI, ROLE_MAINLINE, ROLE_TACKLE, ROLE_BOMBER, ROLE_COMMA
 
 # Set-membership roles: every char that clears threshold gets the role.
 # Single-winner roles: only the top char (after gap check) gets the role.
-SET_MEMBERSHIP_ROLES = {ROLE_LOGI, ROLE_TACKLE, ROLE_BOMBER}
-SINGLE_WINNER_ROLES = {ROLE_FC, ROLE_MAINLINE, ROLE_COMMAND}
+SET_MEMBERSHIP_ROLES = {ROLE_LOGI, ROLE_TACKLE, ROLE_BOMBER, ROLE_MAINLINE}
+SINGLE_WINNER_ROLES = {ROLE_FC, ROLE_COMMAND}
 
 # Hulls that the role-scorer unconditionally assigns FC to, bypassing
 # threshold + gap. Rationale: a Monitor applies zero damage and is
