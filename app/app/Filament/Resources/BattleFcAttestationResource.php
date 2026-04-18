@@ -12,25 +12,29 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
- * /admin/fc-attestations — admin-only view of all donor-tier FC
- * attestations (Spec 6 Mode A admin break).
+ * /admin/fc-attestations — admin-only read-only audit of donor-tier
+ * FC attestations (Spec 6 Mode A admin break).
  *
- * Read-only. Admins see every attestation across all users, with
- * battle + alliance + sub-fleet + attested-character context, for:
- *   - monitoring donor engagement with the attestation feature
- *   - surfacing candidate truth-set rows before Spec 7 lands
- *   - spotting potential abuse (e.g. one user flooding attestations)
+ * Mode A discipline is preserved at user-facing surfaces (portal battle
+ * reports, public battle reports, /portal/my-fc-attestations for
+ * the submitter only). Admin access is an explicit architectural
+ * break for:
+ *   - donor engagement monitoring
+ *   - Spec 7 truth-set review
+ *   - abuse detection (single user flooding, obviously-wrong attestations)
  *
- * Mode A discipline is preserved: non-admins NEVER reach this page.
- * The PanelProvider routes this under the admin panel only and
- * canViewAny defaults to the User::isAdmin() gate via canAccessPanel.
+ * Auth: admins only (gated at the panel level by User::isAdmin() /
+ * canAccessPanel). canCreate/canEdit/canDelete all disabled — the only
+ * writer is the donor-tier portal control.
  *
- * No create/edit/delete affordances. Attestations are authored
- * exclusively from the portal "Mark FC" control; admin surface is
- * audit-only.
+ * Name resolution (user / alliance / character) is done per-row via
+ * TextColumn::getStateUsing with keyed static maps so the base query
+ * stays a plain Eloquent query (Filament's search + pagination break
+ * when the base query is joined + aliased).
  */
 class BattleFcAttestationResource extends Resource
 {
@@ -68,27 +72,6 @@ class BattleFcAttestationResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(
-                fn (Builder $q) => $q
-                    ->leftJoin('users', 'users.id', '=', 'battle_fc_user_attestations.user_id')
-                    ->leftJoin('battle_theaters', 'battle_theaters.id', '=', 'battle_fc_user_attestations.battle_id')
-                    ->leftJoin('esi_entity_names AS en_char', function ($j) {
-                        $j->on('en_char.entity_id', '=', 'battle_fc_user_attestations.attested_character_id')
-                          ->where('en_char.category', '=', 'character');
-                    })
-                    ->leftJoin('esi_entity_names AS en_ally', function ($j) {
-                        $j->on('en_ally.entity_id', '=', 'battle_fc_user_attestations.alliance_id')
-                          ->where('en_ally.category', '=', 'alliance');
-                    })
-                    ->select(
-                        'battle_fc_user_attestations.*',
-                        'users.name AS user_name',
-                        'users.email AS user_email',
-                        'battle_theaters.public_slug AS battle_slug',
-                        'en_char.name AS attested_character_name',
-                        'en_ally.name AS alliance_name',
-                    )
-            )
             ->defaultSort('attested_at', 'desc')
             ->paginated([25, 50, 100])
             ->defaultPaginationPageOption(50)
@@ -96,44 +79,54 @@ class BattleFcAttestationResource extends Resource
                 TextColumn::make('attested_at')
                     ->label('When')
                     ->dateTime('Y-m-d H:i:s')
-                    ->description(fn ($record) => \Carbon\Carbon::parse($record->attested_at)->diffForHumans())
+                    ->description(fn (BattleFcUserAttestation $r) => optional($r->attested_at)->diffForHumans())
                     ->sortable(),
 
-                TextColumn::make('user_name')
+                TextColumn::make('user_id')
                     ->label('User')
-                    ->description(fn ($record) => $record->user_email)
-                    ->searchable(query: fn (Builder $q, string $s) => $q->where('users.name', 'like', "%{$s}%")->orWhere('users.email', 'like', "%{$s}%"))
+                    ->getStateUsing(function (BattleFcUserAttestation $r): string {
+                        $u = self::userMap()[$r->user_id] ?? null;
+                        return $u['name'] ?? ('user_' . $r->user_id);
+                    })
+                    ->description(fn (BattleFcUserAttestation $r) => self::userMap()[$r->user_id]['email'] ?? null)
                     ->sortable(),
 
-                TextColumn::make('battle_slug')
+                TextColumn::make('battle_id')
                     ->label('Battle')
-                    ->url(fn ($record) => $record->battle_slug ? '/portal/battles/' . $record->battle_id : null)
-                    ->placeholder(fn ($record) => '#' . $record->battle_id)
-                    ->searchable(query: fn (Builder $q, string $s) => $q->where('battle_theaters.public_slug', 'like', "%{$s}%")),
+                    ->url(fn (BattleFcUserAttestation $r) => '/portal/battles/' . $r->battle_id)
+                    ->getStateUsing(fn (BattleFcUserAttestation $r) => self::battleMap()[$r->battle_id] ?? ('#' . $r->battle_id))
+                    ->sortable(),
 
-                TextColumn::make('alliance_name')
+                TextColumn::make('alliance_id')
                     ->label('Alliance')
-                    ->placeholder(fn ($record) => 'Alliance #' . $record->alliance_id)
+                    ->getStateUsing(fn (BattleFcUserAttestation $r) => self::allianceNameMap()[$r->alliance_id] ?? ('Alliance #' . $r->alliance_id))
                     ->toggleable(),
 
                 TextColumn::make('sub_fleet_id')
                     ->label('SF')
                     ->badge()
-                    ->color('gray'),
+                    ->color('gray')
+                    ->sortable(),
 
                 TextColumn::make('partition_algo_version')
                     ->label('v')
                     ->toggleable(isToggledHiddenByDefault: true),
 
-                TextColumn::make('attested_character_name')
+                TextColumn::make('attested_character_id')
                     ->label('Attested FC')
-                    ->placeholder(fn ($record) => 'char_' . $record->attested_character_id)
-                    ->searchable(query: fn (Builder $q, string $s) => $q->where('en_char.name', 'like', "%{$s}%")),
+                    ->getStateUsing(fn (BattleFcUserAttestation $r) => self::characterNameMap()[$r->attested_character_id] ?? ('char_' . $r->attested_character_id))
+                    ->searchable(query: function (Builder $q, string $s) {
+                        $ids = DB::table('esi_entity_names')
+                            ->where('category', 'character')
+                            ->where('name', 'like', "%{$s}%")
+                            ->pluck('entity_id');
+                        $q->whereIn('attested_character_id', $ids);
+                    }),
 
                 TextColumn::make('user_note')
                     ->label('Note')
                     ->limit(40)
-                    ->tooltip(fn ($record) => $record->user_note)
+                    ->tooltip(fn (BattleFcUserAttestation $r) => $r->user_note)
                     ->toggleable(),
             ])
             ->filters([
@@ -144,7 +137,66 @@ class BattleFcAttestationResource extends Resource
                         ->pluck('sub_fleet_id', 'sub_fleet_id')
                         ->map(fn ($v) => "SF {$v}")
                         ->all()),
-            ]);
+            ])
+            ->recordActions([]);
+    }
+
+    /** @var array<int, array{name:string, email:string}>|null */
+    private static ?array $userMapCache = null;
+
+    private static function userMap(): array
+    {
+        if (self::$userMapCache === null) {
+            self::$userMapCache = DB::table('users')
+                ->select('id', 'name', 'email')
+                ->get()
+                ->mapWithKeys(fn ($u) => [(int) $u->id => ['name' => $u->name, 'email' => $u->email]])
+                ->all();
+        }
+        return self::$userMapCache;
+    }
+
+    /** @var array<int, string>|null */
+    private static ?array $battleMapCache = null;
+
+    private static function battleMap(): array
+    {
+        if (self::$battleMapCache === null) {
+            self::$battleMapCache = DB::table('battle_theaters')
+                ->select('id', 'public_slug')
+                ->get()
+                ->mapWithKeys(fn ($b) => [(int) $b->id => $b->public_slug ?: ('#' . $b->id)])
+                ->all();
+        }
+        return self::$battleMapCache;
+    }
+
+    /** @var array<int, string>|null */
+    private static ?array $allianceNameCache = null;
+
+    private static function allianceNameMap(): array
+    {
+        if (self::$allianceNameCache === null) {
+            self::$allianceNameCache = DB::table('esi_entity_names')
+                ->where('category', 'alliance')
+                ->pluck('name', 'entity_id')
+                ->all();
+        }
+        return self::$allianceNameCache;
+    }
+
+    /** @var array<int, string>|null */
+    private static ?array $characterNameCache = null;
+
+    private static function characterNameMap(): array
+    {
+        if (self::$characterNameCache === null) {
+            self::$characterNameCache = DB::table('esi_entity_names')
+                ->where('category', 'character')
+                ->pluck('name', 'entity_id')
+                ->all();
+        }
+        return self::$characterNameCache;
     }
 
     public static function getPages(): array
