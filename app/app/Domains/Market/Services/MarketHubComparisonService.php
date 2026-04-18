@@ -51,7 +51,21 @@ final class MarketHubComparisonService
      *   4168 Compressed Gas (Celestial cat — harvester yields)
      *   4932 Unrefined Mineral (raw)
      */
-    private const EXCLUDED_GROUPS = [280, 526, 422, 427, 967, 4168, 4932];
+    private const EXCLUDED_GROUPS = [
+        280,   // General — Tobacco, Spirits, Antibiotics, Quafe
+        283,   // Livestock — Slaver Hound etc
+        284,   // Biohazard — Hydrochloric Acid, Antibiotic raw
+        422,   // Gas Isotopes (Material) — raw gas yield
+        427,   // Moon Materials — pre-reaction goo
+        526,   // Commodities — mission loot, corpses, books
+        530,   // Materials and Compounds — trade-chain junk + salvage
+        754,   // Salvaged Materials (Material) — salvager output
+        967,   // Wormhole Minerals — site-harvested raw
+        966,   // Ancient Salvage — sansha/blood loot
+        4168,  // Compressed Gas (Celestial) — harvester yield
+        4915,  // Prismaticite ore (Material grouped but asteroid-style)
+        4932,  // Unrefined Mineral
+    ];
 
     /**
      * Best price per (type_id, side) for a hub. Keyed by the hub's
