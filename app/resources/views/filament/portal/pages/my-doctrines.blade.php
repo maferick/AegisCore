@@ -73,17 +73,26 @@
                                     </div>
                                     <details>
                                         <summary style="font-size:0.75rem; color:#9ca3af; cursor:pointer;">
-                                            {{ count($d['modules']) }} core module(s)
+                                            {{ count($d['modules']) }} module(s){{ $d['has_corp_variant'] ?? false ? ' · corp variant tracked' : ' · no corp variant yet' }}
                                         </summary>
                                         <div style="margin-top:0.4rem;">
                                             @foreach ($d['modules'] as $m)
+                                                @php
+                                                    $both       = ! empty($m['global']) && ! empty($m['corp']);
+                                                    $corpOnly   = empty($m['global']) && ! empty($m['corp']);
+                                                    $globalOnly = ! empty($m['global']) && empty($m['corp']);
+                                                    if ($both)            [$nameColor, $badge, $badgeColor] = ['#d1d5db', '✓', '#22c55e'];
+                                                    elseif ($corpOnly)    [$nameColor, $badge, $badgeColor] = ['#fde047', 'corp', '#fde047'];
+                                                    else                  [$nameColor, $badge, $badgeColor] = ['#9ca3af', 'global', '#93c5fd'];
+                                                @endphp
                                                 <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.75rem; padding:0.15rem 0;">
                                                     <img src="https://images.evetech.net/types/{{ $m['type_id'] }}/icon?size=32"
                                                          style="width:16px;height:16px;border-radius:2px;" alt="">
-                                                    <span style="flex:1; color:#d1d5db; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                                    <span style="flex:1; color: {{ $nameColor }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                         @if ($m['quantity'] > 1) {{ $m['quantity'] }}× @endif
                                                         {{ $m['name'] ?? ('type ' . $m['type_id']) }}
                                                     </span>
+                                                    <span style="font-size:0.6em; padding:1px 4px; border-radius:6px; border:1px solid {{ $badgeColor }}; color: {{ $badgeColor }};">{{ $badge }}</span>
                                                     <span style="color:#7a7a82; font-size:0.7em;">{{ $m['slot'] }}</span>
                                                 </div>
                                             @endforeach
