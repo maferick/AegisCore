@@ -241,15 +241,44 @@ class ComputeAutoDoctrinesCommand extends Command
                 if ($modRows !== []) DB::table('auto_doctrine_modules')->insert($modRows);
 
                 DB::table('auto_doctrine_adopters')->where('doctrine_id', $docId)->delete();
+                DB::table('auto_doctrine_adopter_modules')->where('doctrine_id', $docId)->delete();
                 $adopterRows = [];
+                $adopterModuleRows = [];
                 foreach ($family['corp_counts'] as $cid => $meta) {
                     $adopterRows[] = ['doctrine_id' => $docId, 'corporation_id' => $cid,
                         'observation_count' => $meta['n'],
                         'first_seen_at' => $meta['first'], 'last_seen_at' => $meta['last']];
+
+                    // Corp-level core modules: lower cutoff than
+                    // global (0.60 vs 0.80) so modules fielded in
+                    // the majority of this corp's losses of the
+                    // doctrine surface, even if only a subset.
+                    // Needs min 3 observations to avoid noise —
+                    // corps with 1-2 losses on a doctrine don't get
+                    // adopter-module rows.
+                    if ($meta['n'] < 3) continue;
+                    foreach (($meta['module_counts'] ?? []) as $mk => $count) {
+                        [$tid, $slot] = explode('|', $mk);
+                        $avg = $count / $meta['n'];
+                        if (min(1.0, $avg) < 0.60) continue;
+                        $adopterModuleRows[] = [
+                            'doctrine_id' => $docId,
+                            'corporation_id' => $cid,
+                            'type_id' => (int) $tid,
+                            'flag_category' => $slot,
+                            'quantity' => max(1, (int) round($avg)),
+                            'frequency' => round(min(1.0, $avg), 4),
+                        ];
+                    }
                 }
                 if ($adopterRows !== []) {
                     foreach (array_chunk($adopterRows, 500) as $chunk) {
                         DB::table('auto_doctrine_adopters')->insert($chunk);
+                    }
+                }
+                if ($adopterModuleRows !== []) {
+                    foreach (array_chunk($adopterModuleRows, 500) as $chunk) {
+                        DB::table('auto_doctrine_adopter_modules')->insert($chunk);
                     }
                 }
 
@@ -309,11 +338,18 @@ class ComputeAutoDoctrinesCommand extends Command
         }
         $cid = (int) $r->corporation_id;
         if (! isset($f['corp_counts'][$cid])) {
-            $f['corp_counts'][$cid] = ['n' => 0, 'first' => $r->killed_at, 'last' => $r->killed_at];
+            $f['corp_counts'][$cid] = ['n' => 0, 'first' => $r->killed_at, 'last' => $r->killed_at, 'module_counts' => []];
         }
         $f['corp_counts'][$cid]['n']++;
         if ($r->killed_at < $f['corp_counts'][$cid]['first']) $f['corp_counts'][$cid]['first'] = $r->killed_at;
         if ($r->killed_at > $f['corp_counts'][$cid]['last'])  $f['corp_counts'][$cid]['last']  = $r->killed_at;
+        // Per-corp module tally. Enables per-corp core re-extraction
+        // at emit time so "your corp's Maelstrom" can diverge from
+        // the global core.
+        foreach ($mods as [$type_id, $slot]) {
+            $k = "{$type_id}|{$slot}";
+            $f['corp_counts'][$cid]['module_counts'][$k] = ($f['corp_counts'][$cid]['module_counts'][$k] ?? 0) + 1;
+        }
         unset($f);
     }
 
@@ -369,6 +405,10 @@ class ComputeAutoDoctrinesCommand extends Command
                                 $T['corp_counts'][$cid]['n'] += $m['n'];
                                 if ($m['first'] < $T['corp_counts'][$cid]['first']) $T['corp_counts'][$cid]['first'] = $m['first'];
                                 if ($m['last']  > $T['corp_counts'][$cid]['last'])  $T['corp_counts'][$cid]['last']  = $m['last'];
+                                foreach (($m['module_counts'] ?? []) as $mk => $mv) {
+                                    $T['corp_counts'][$cid]['module_counts'][$mk] =
+                                        ($T['corp_counts'][$cid]['module_counts'][$mk] ?? 0) + $mv;
+                                }
                             }
                         }
                         unset($T, $families[$small]);
