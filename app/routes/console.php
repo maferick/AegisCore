@@ -233,3 +233,14 @@ Schedule::command('killmails:zkill-catchup')
     ->onOneServer()
     ->withoutOverlapping(60)
     ->name('zkill-catchup');
+
+// Spec 7 nightly refresh of character_role_historical_priors from
+// the last 90 days of Spec 4 feature rows + Spec 5 inferred-role
+// frequency + Spec 6 attestations. Cold-start pilots (<5 battles)
+// are pruned so only characters with meaningful signal get priors.
+Schedule::command('battle:refresh-priors')
+    ->dailyAt('03:15')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(120)
+    ->name('refresh-character-role-priors');
