@@ -11,14 +11,11 @@ use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
- * /portal/my-doctrines — shows the auto-detected, role-tied
- * doctrines of the current user's alliance. Scoped by
- * Auth::user()->characters()->first()->alliance_id so donors /
- * non-donors alike see only their own alliance's fits.
+ * /portal/my-doctrines — doctrines the viewer's corp has adopted.
  *
- * Filter: only is_active=1 rows are shown (confidence >= 0.70 + past
- * the per-role observation floor). Sub-threshold clusters exist but
- * are hidden — see /admin for full listing.
+ * Doctrines are global (one canonical row per fit). Scoping via
+ * auto_doctrine_adopters join filtered on viewer's corporation_id.
+ * Only is_active=1 doctrines show up (confidence + floor gate).
  */
 class MyDoctrines extends Page
 {
@@ -30,7 +27,7 @@ class MyDoctrines extends Page
 
     protected static ?int $navigationSort = 70;
 
-    protected static ?string $title = 'My Alliance Doctrines';
+    protected static ?string $title = 'My Corp Doctrines';
 
     protected string $view = 'filament.portal.pages.my-doctrines';
 
@@ -57,14 +54,18 @@ class MyDoctrines extends Page
             ->value('name') ?? ('Corp #' . $corpId);
 
         $rows = DB::table('auto_doctrines AS d')
+            ->join('auto_doctrine_adopters AS a', 'a.doctrine_id', '=', 'd.id')
             ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'd.hull_type_id')
-            ->where('d.corporation_id', $corpId)
             ->where('d.is_active', 1)
+            ->where('a.corporation_id', $corpId)
             ->orderBy('d.role_key')
-            ->orderByDesc('d.confidence')
+            ->orderByDesc('a.observation_count')
             ->select(
                 'd.id', 'd.hull_type_id', 'd.role_key', 'd.canonical_name',
-                'd.observation_count', 'd.confidence', 'd.last_seen_at',
+                'd.observation_count AS global_n',
+                'd.confidence', 'd.last_seen_at',
+                'a.observation_count AS corp_n',
+                'a.last_seen_at AS corp_last_seen',
                 'rit.name AS hull_name'
             )
             ->get();
@@ -85,9 +86,10 @@ class MyDoctrines extends Page
                 'hull_type_id' => $r->hull_type_id,
                 'hull_name' => $r->hull_name,
                 'label' => $r->canonical_name,
-                'n' => $r->observation_count,
+                'corp_n' => (int) $r->corp_n,
+                'global_n' => (int) $r->global_n,
                 'confidence' => (float) $r->confidence,
-                'last_seen' => $r->last_seen_at,
+                'corp_last_seen' => $r->corp_last_seen,
                 'modules' => ($modules->get($r->id) ?? collect())
                     ->sortBy([['flag_category', 'asc'], ['mod_name', 'asc']])
                     ->map(fn ($m) => [

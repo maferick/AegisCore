@@ -1,28 +1,28 @@
 <x-filament-panels::page>
-    @if ($alliance_id === null)
+    @if ($corp_id === null)
         <div class="fi-section rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
             <p class="text-sm text-gray-600 dark:text-gray-300">
-                No alliance detected on your linked EVE character. If your character recently joined an alliance,
+                No corporation detected on your linked EVE character. If your character recently joined a corp,
                 the ESI affiliation sync runs periodically — check back later.
             </p>
         </div>
     @else
         <div class="fi-section rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
             <div class="flex items-center gap-3 mb-4">
-                <img src="https://images.evetech.net/alliances/{{ $alliance_id }}/logo?size=64"
+                <img src="https://images.evetech.net/corporations/{{ $corp_id }}/logo?size=64"
                      class="w-10 h-10 rounded" alt="">
                 <div>
-                    <h2 class="text-lg font-semibold">{{ $alliance_name }}</h2>
+                    <h2 class="text-lg font-semibold">{{ $corp_name }}</h2>
                     <p class="text-xs text-gray-500">
-                        Doctrines inferred from the last 30 days of alliance losses, tied to Spec 5 battlefield role.
-                        Only fits we're <em>fairly certain</em> about are shown (confidence &ge; 0.70 + observation floor).
+                        Doctrines your corp has been seen flying recently, tied to battlefield role.
+                        Only fits we're <em>fairly certain</em> about are shown (confidence &ge; 0.70, observation floor reached).
                     </p>
                 </div>
             </div>
 
             @if (count($doctrines) === 0)
                 <p class="text-sm text-gray-500 italic">
-                    No doctrines passed the confidence threshold yet. Give it a few days of fights — clusters pile up quickly.
+                    No corp adoptions of active doctrines yet. Either your corp hasn't fielded a recognizable doctrine recently, or data accumulation is still below threshold.
                 </p>
             @else
                 @php
@@ -54,7 +54,7 @@
                             {{ $roleLabel($role) }}
                             <span style="color:#7a7a82; font-weight:400; letter-spacing:0; text-transform:none; font-size:0.8em;">· {{ $byRole->get($role)->count() }} doctrine(s)</span>
                         </h3>
-                        <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:0.75rem;">
+                        <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap:0.75rem;">
                             @foreach ($byRole->get($role) as $d)
                                 @php [$bandName, $bandColor] = $confBand($d['confidence']); @endphp
                                 <div style="border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02); border-radius:6px; padding:0.75rem;">
@@ -66,9 +66,8 @@
                                                 {{ $d['hull_name'] }}
                                             </div>
                                             <div style="font-size:0.7rem; color:#7a7a82;">
-                                                seen {{ $d['n'] }}× ·
+                                                your corp: {{ $d['corp_n'] }}× · global: {{ $d['global_n'] }}× ·
                                                 <span style="color: {{ $bandColor }};">{{ $bandName }}</span>
-                                                ({{ number_format($d['confidence'], 2) }})
                                             </div>
                                         </div>
                                     </div>
