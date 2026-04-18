@@ -186,6 +186,16 @@ class KillmailViewData
         $systemName = $km->solarSystem?->name ?? 'Unknown';
         $regionName = $km->region?->name ?? 'Unknown';
 
+        // Per-killmail role tag for every character on the mail, from
+        // killmail_pilot_role. `role_by_character` is a flat
+        // {character_id → role_key} dict the blade can read directly
+        // to render FC / Logi / Cmd / etc. badges next to pilot names.
+        $roleByCharacter = DB::table('killmail_pilot_role')
+            ->where('killmail_id', $km->killmail_id)
+            ->pluck('role_key', 'character_id')
+            ->map(fn ($v) => (string) $v)
+            ->all();
+
         return [
             'km' => $km,
             'names' => $names,
@@ -202,6 +212,7 @@ class KillmailViewData
             'itemsBySlot' => $itemsBySlot,
             'systemName' => $systemName,
             'regionName' => $regionName,
+            'roleByCharacter' => $roleByCharacter,
         ];
     }
 }

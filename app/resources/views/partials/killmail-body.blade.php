@@ -24,6 +24,34 @@
     ];
 
     $slotOrder = ['high','mid','low','rig','subsystem','service','drone_bay','fighter_bay','cargo','implant','other'];
+
+    // Per-killmail role tags — passed in from KillmailViewData as
+    // roleByCharacter[character_id => role_key]. Render as a small
+    // pill next to pilot names (victim + each attacker).
+    $roleByChar = $roleByCharacter ?? [];
+    $roleLabel = fn (string $r): string => match ($r) {
+        'fc' => 'FC', 'logi' => 'Logi', 'bomber' => 'Bomber',
+        'command' => 'Cmd', 'tackle' => 'Tackle', 'mainline_dps' => 'DPS',
+        default => '',
+    };
+    $roleStyle = fn (string $r): string => match ($r) {
+        'fc' => 'background:rgba(202,138,4,0.25);color:#fde047;border:1px solid rgba(250,204,21,0.35);',
+        'logi' => 'background:rgba(5,150,105,0.2);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);',
+        'bomber' => 'background:rgba(234,88,12,0.25);color:#fdba74;border:1px solid rgba(249,115,22,0.35);',
+        'command' => 'background:rgba(168,85,247,0.25);color:#f0abfc;border:1px solid rgba(192,132,252,0.35);',
+        'tackle' => 'background:rgba(8,145,178,0.25);color:#67e8f9;border:1px solid rgba(14,165,233,0.35);',
+        'mainline_dps' => 'background:rgba(30,64,175,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.3);',
+        default => '',
+    };
+    $roleBadge = function (?int $cid) use ($roleByChar, $roleLabel, $roleStyle): string {
+        if ($cid === null) return '';
+        $role = $roleByChar[$cid] ?? null;
+        if ($role === null) return '';
+        $label = $roleLabel($role);
+        if ($label === '') return '';
+        return '<span style="display:inline-block;padding:1px 5px;margin-left:5px;font-size:0.6rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;line-height:1;border-radius:8px;vertical-align:middle;'
+            . $roleStyle($role) . '">' . $label . '</span>';
+    };
 @endphp
 
 <style>
@@ -79,7 +107,7 @@
          alt="{{ $km->victim_ship_type_name }}" referrerpolicy="no-referrer"
          class="km-ship-render" width="96" height="96">
     <div style="flex:1;min-width:0;">
-        <div class="km-victim-name">{{ $victim['name'] }}</div>
+        <div class="km-victim-name">{{ $victim['name'] }}{!! $roleBadge($km->victim_character_id ? (int) $km->victim_character_id : null) !!}</div>
         <div class="km-victim-meta" style="margin-top: 0.25rem;">
             {{ $km->victim_ship_type_name ?? $typeNames[$km->victim_ship_type_id] ?? 'Unknown Ship' }}
             <span style="color: #3a3a42; margin: 0 0.3rem;">&middot;</span>
@@ -199,7 +227,7 @@
                     <div class="km-attacker-info">
                         <div class="km-attacker-name">
                             @if($att->character_id)
-                                {{ $names[$att->character_id] ?? 'Pilot #'.$att->character_id }}
+                                {{ $names[$att->character_id] ?? 'Pilot #'.$att->character_id }}{!! $roleBadge((int) $att->character_id) !!}
                             @elseif($att->faction_id)
                                 {{ $names[$att->faction_id] ?? 'Faction #'.$att->faction_id }}
                             @else
