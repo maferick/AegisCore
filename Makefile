@@ -45,6 +45,17 @@ help:
 	@echo "  make killmail-search        backfill OpenSearch killmail index from MariaDB (one-shot)"
 	@echo "  make theater-cluster        one-shot battle-theater clustering pass (see ADR-0006)"
 	@echo "                              overrides: THEATER_WINDOW_HOURS=720 | THEATER_MIN_PARTICIPANTS=5"
+	@echo ""
+	@echo "  Battle role scoring (Specs 2-7):"
+	@echo "    make battle-graph          BATTLE=<id> ALLIANCE=<id>   Spec 2 — Neo4j graph projection"
+	@echo "    make battle-partition      BATTLE=<id> ALLIANCE=<id>   Spec 3 — sub-fleet partitioning"
+	@echo "    make battle-features       BATTLE=<id> ALLIANCE=<id>   Spec 4 — feature extraction"
+	@echo "    make battle-score          BATTLE=<id> ALLIANCE=<id>   Spec 5/7 — role scoring"
+	@echo "    make battle-pipeline       BATTLE=<id> ALLIANCE=<id>   run 2→3→4→5 for one pair"
+	@echo "    make battle-refresh-priors                              Spec 7 — nightly priors (runs now)"
+	@echo "    make battle-evaluate      WEIGHT=<id>                   Spec 7 — calibration eval"
+	@echo "    make battle-promote       WEIGHT=<id> ROLES=logi,tackle Spec 7 — promote roles to production"
+	@echo "    make battle-seed-truth    USER=1                        seed 8-battle FC truth set"
 	@echo "  make outbox-relay           drain MariaDB outbox into InfluxDB (one-shot)"
 	@echo "  make market-status          show MariaDB + InfluxDB market-data coverage"
 	@echo "  make outbox-status          show outbox backlog + dead letters"
@@ -329,6 +340,59 @@ killmail-backfill:
 #   THEATER_MIN_PARTICIPANTS=5 make theater-cluster # looser threshold
 theater-cluster:
 	$(COMPOSE) --profile tools run --rm --build theater_cluster
+
+# =============================================================
+# Battle role scoring — Specs 2 through 7
+#   BATTLE=<theater_id> ALLIANCE=<alliance_id> required for
+#   per-pair targets; pipeline chains Specs 2→3→4→5 in order.
+# =============================================================
+battle-graph:
+	$(COMPOSE) --profile tools run --rm --build battle_graph run --battle-id "$(BATTLE)" --alliance-id "$(ALLIANCE)"
+
+battle-partition:
+	$(COMPOSE) --profile tools run --rm --build battle_partition run --battle-id "$(BATTLE)" --alliance-id "$(ALLIANCE)"
+
+battle-features:
+	$(COMPOSE) --profile tools run --rm --build battle_features run --battle-id "$(BATTLE)" --alliance-id "$(ALLIANCE)"
+
+battle-score:
+	$(COMPOSE) --profile tools run --rm --build battle_role_scoring run --battle-id "$(BATTLE)" --alliance-id "$(ALLIANCE)" --weight-label "$(WEIGHT_LABEL)"
+
+# Full pipeline for one (battle, alliance) pair. No parallelism —
+# each stage must finish before the next reads its output.
+battle-pipeline:
+	@test -n "$(BATTLE)"   || (echo "BATTLE=<theater_id> required" && exit 1)
+	@test -n "$(ALLIANCE)" || (echo "ALLIANCE=<alliance_id> required" && exit 1)
+	$(MAKE) battle-graph     BATTLE=$(BATTLE) ALLIANCE=$(ALLIANCE)
+	$(MAKE) battle-partition BATTLE=$(BATTLE) ALLIANCE=$(ALLIANCE)
+	$(MAKE) battle-features  BATTLE=$(BATTLE) ALLIANCE=$(ALLIANCE)
+	$(MAKE) battle-score     BATTLE=$(BATTLE) ALLIANCE=$(ALLIANCE) WEIGHT_LABEL=$(WEIGHT_LABEL)
+
+# Process every (theater, alliance) pair that has battle_sub_fleets
+# coverage but no Spec 4 features yet. Batched + capped so scheduler
+# invocations stay within budget. Used by the
+# Schedule::command('battle:process-pending') nightly sweep.
+battle-process-pending:
+	$(COMPOSE) exec -T php-fpm php artisan battle:process-pending $(BATTLE_PROCESS_ARGS)
+
+battle-refresh-priors:
+	$(COMPOSE) exec -T php-fpm php artisan battle:refresh-priors $(BATTLE_PRIORS_ARGS)
+
+battle-evaluate:
+	@test -n "$(WEIGHT)" || (echo "WEIGHT=<weight_version_id> required" && exit 1)
+	$(COMPOSE) exec -T php-fpm php artisan battle:evaluate-calibration --weight-version=$(WEIGHT)
+
+battle-promote:
+	@test -n "$(WEIGHT)" || (echo "WEIGHT=<weight_version_id> required" && exit 1)
+	@test -n "$(ROLES)"  || (echo "ROLES=<csv> required (logi,tackle,bomber,…)" && exit 1)
+	$(COMPOSE) exec -T php-fpm php artisan battle:promote-weight-version $(WEIGHT) --roles=$(ROLES)
+
+battle-seed-truth:
+	@test -n "$(USER)" || (echo "USER=<user_id> required" && exit 1)
+	$(COMPOSE) exec -T php-fpm php artisan battle:seed-truth-attestations --user-id=$(USER)
+
+# Default weight label if caller doesn't set one
+WEIGHT_LABEL ?= v1_calibrated_seed
 
 # One-shot R2Z2 live stream (runs until Ctrl-C). For ad-hoc testing.
 # The long-lived `killmail_stream` compose service handles production.

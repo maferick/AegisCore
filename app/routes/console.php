@@ -244,3 +244,9 @@ Schedule::command('battle:refresh-priors')
     ->onOneServer()
     ->withoutOverlapping(120)
     ->name('refresh-character-role-priors');
+
+// NB: battle:process-pending is NOT scheduled here — it shells
+// out to `docker compose run` for each (battle, alliance) pair,
+// and the Laravel scheduler container has no docker CLI / no
+// mounted docker socket. Invoke from the host via
+// `make battle-process-pending` (cron example in Makefile).
