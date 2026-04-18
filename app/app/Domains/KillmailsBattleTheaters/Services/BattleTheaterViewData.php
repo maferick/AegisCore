@@ -168,7 +168,8 @@ final class BattleTheaterViewData
         $killFeed = $this->buildKillFeed($killmailIds, $names, $shipNames);
         $composition = $this->buildComposition($participants, $sides, $shipsByCharacter, $shipGroupNames);
         $mostValuableKills = $this->buildMostValuableKills($killFeed, $sides);
-        $topDamage = $this->buildTopDamage($participants, $sides, $names, $shipsByCharacter, $shipNames);
+        $damageByCharacter = $this->buildDamageRollup($killmailIds);
+        $topDamage = $this->buildTopDamage($participants, $sides, $names, $shipsByCharacter, $damageByCharacter, $shipNames);
         $rosterBySide = $this->buildRosterBySide($allianceRows, $sides);
         $flagshipLogos = $this->buildFlagshipLogos($allianceRows);
         $headerStats = $this->buildHeaderStats($participants);
@@ -543,6 +544,38 @@ final class BattleTheaterViewData
                 $cid = (int) $row->victim_character_id;
                 $tid = (int) $row->victim_ship_type_id;
                 $out[$cid][$tid] = ($out[$cid][$tid] ?? 0) + 1;
+            });
+        return $out;
+    }
+
+    /**
+     * Per-character damage-by-ship: {character_id → {ship_type_id → damage_sum}}.
+     * Used by top-damage to pick the ship a pilot actually dealt damage
+     * in (e.g. reshipping between Monitor and Claymore — Monitor deals
+     * zero damage, so Claymore gets credit). Returns only ships with
+     * damage > 0.
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<int, array<int, int>>
+     */
+    private function buildDamageRollup(array $killmailIds): array
+    {
+        if ($killmailIds === []) {
+            return [];
+        }
+        $out = [];
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('character_id')
+            ->where('ship_type_id', '>', 0)
+            ->where('damage_done', '>', 0)
+            ->selectRaw('character_id, ship_type_id, SUM(damage_done) AS dmg')
+            ->groupBy('character_id', 'ship_type_id')
+            ->get()
+            ->each(function ($row) use (&$out): void {
+                $cid = (int) $row->character_id;
+                $tid = (int) $row->ship_type_id;
+                $out[$cid][$tid] = (int) $row->dmg;
             });
         return $out;
     }
@@ -1086,6 +1119,7 @@ final class BattleTheaterViewData
         BattleTheaterSideResolution $sides,
         Collection $names,
         array $shipsByCharacter,
+        array $damageByCharacter,
         Collection $shipNames,
     ): array {
         $bySide = [
@@ -1099,11 +1133,20 @@ final class BattleTheaterViewData
             if (! isset($bySide[$side])) {
                 continue;
             }
-            $hulls = $shipsByCharacter[$cid] ?? [];
+            // Prefer the hull the pilot actually dealt damage in — a
+            // Monitor flying pilot who reshipped into a Claymore should
+            // credit the Claymore here, since Monitor can't deal damage.
             $primaryTid = null;
-            if ($hulls !== []) {
-                arsort($hulls);
-                $primaryTid = (int) array_key_first($hulls);
+            $damageHulls = $damageByCharacter[$cid] ?? [];
+            if ($damageHulls !== []) {
+                arsort($damageHulls);
+                $primaryTid = (int) array_key_first($damageHulls);
+            } else {
+                $hulls = $shipsByCharacter[$cid] ?? [];
+                if ($hulls !== []) {
+                    arsort($hulls);
+                    $primaryTid = (int) array_key_first($hulls);
+                }
             }
             $bySide[$side][] = [
                 'character_id' => $cid,
