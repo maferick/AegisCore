@@ -38,6 +38,14 @@ use Illuminate\Support\Facades\DB;
 final class BattleTheaterSideResolver
 {
     public const SIDE_A = 'A';
+
+    /**
+     * Minimum number of pilots from the viewer's bloc on field before
+     * the viewer-affinity framing kicks in. Below this, the report
+     * falls through to neutral kill-data resolution so 1-2 strays
+     * don't label a 200-pilot fight as "ours".
+     */
+    private const VIEWER_BLOC_MIN_PILOTS = 5;
     public const SIDE_B = 'B';
     public const SIDE_C = 'C';
 
@@ -125,19 +133,20 @@ final class BattleTheaterSideResolver
         // when the operator hasn't explicitly tagged them.
         if ($viewerBlocId !== null) {
             // Only apply viewer-affinity framing if the viewer's bloc
-            // actually fielded pilots. Otherwise we were stamping
-            // "Side A: WinterCo / 0 pilots / 0 kills" on random fights
-            // the viewer's bloc never touched. Fall through to neutral
-            // kill-data resolution in that case.
-            $viewerBlocOnField = false;
+            // actually fielded a fleet. Random 1-2 pilots who happened
+            // to warp through shouldn't make the battle "ours" and
+            // shouldn't stamp "Side A: WinterCo / 2 pilots / 0 kills"
+            // on a 200-pilot fight the viewer's bloc never engaged.
+            // Fall through to neutral kill-data resolution below the
+            // threshold.
+            $viewerBlocPilots = 0;
             foreach ($participants as $p) {
                 $aid = (int) ($p->alliance_id ?? 0);
                 if ($aid > 0 && ($allianceToBloc[$aid] ?? null) === $viewerBlocId) {
-                    $viewerBlocOnField = true;
-                    break;
+                    $viewerBlocPilots++;
                 }
             }
-            if ($viewerBlocOnField) {
+            if ($viewerBlocPilots >= self::VIEWER_BLOC_MIN_PILOTS) {
                 return $this->resolveByViewerAffinity(
                     theater: $theater,
                     participants: $participants,

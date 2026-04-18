@@ -55,20 +55,28 @@ class Battles extends Page implements HasTable
             ->query(function () use ($viewerCorpId, $viewerAllianceIds): Builder {
                 $q = BattleTheater::query()->with(['primarySystem:id,name', 'region:id,name']);
                 if ($viewerCorpId !== null || $viewerAllianceIds !== []) {
-                    $sub = DB::table('battle_theater_participants')
-                        ->selectRaw('1')
+                    // Threshold for "actively involved" — a random
+                    // single pilot who happened to warp through shouldn't
+                    // flag the battle as ours. 5 or more pilots from
+                    // our corp / bloc alliances = a real deployment.
+                    $minInvolvedPilots = 5;
+                    $countSub = DB::table('battle_theater_participants')
+                        ->selectRaw('COUNT(DISTINCT battle_theater_participants.character_id)')
                         ->whereColumn('battle_theater_participants.theater_id', 'battle_theaters.id');
                     if ($viewerAllianceIds !== []) {
-                        $sub->where(function ($w) use ($viewerCorpId, $viewerAllianceIds): void {
+                        $countSub->where(function ($w) use ($viewerCorpId, $viewerAllianceIds): void {
                             $w->whereIn('battle_theater_participants.alliance_id', $viewerAllianceIds);
                             if ($viewerCorpId !== null) {
                                 $w->orWhere('battle_theater_participants.corporation_id', $viewerCorpId);
                             }
                         });
                     } elseif ($viewerCorpId !== null) {
-                        $sub->where('battle_theater_participants.corporation_id', $viewerCorpId);
+                        $countSub->where('battle_theater_participants.corporation_id', $viewerCorpId);
                     }
-                    $q->selectRaw('battle_theaters.*, EXISTS('.$sub->toSql().') AS viewer_involved', $sub->getBindings());
+                    $q->selectRaw(
+                        sprintf('battle_theaters.*, CASE WHEN (%s) >= ? THEN 1 ELSE 0 END AS viewer_involved', $countSub->toSql()),
+                        array_merge($countSub->getBindings(), [$minInvolvedPilots]),
+                    );
                 } else {
                     $q->selectRaw('battle_theaters.*, 0 AS viewer_involved');
                 }
