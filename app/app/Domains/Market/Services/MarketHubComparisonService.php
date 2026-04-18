@@ -31,7 +31,7 @@ final class MarketHubComparisonService
      *
      * @return array<int, array<string, array{price: float, volume: int, order_count: int}>>
      */
-    public function latestOrderbook(int $locationId, int $windowMinutes = 30): array
+    public function latestOrderbook(int $locationId, int $windowMinutes = 10): array
     {
         return Cache::remember(
             sprintf('market.orderbook.latest.%d.%d', $locationId, $windowMinutes),
@@ -174,13 +174,18 @@ final class MarketHubComparisonService
         $org = (string) config('aegiscore.influxdb.org');
         $token = (string) config('aegiscore.influxdb.token');
 
+        // Laravel's Http::post($url, $string) doesn't send a raw body —
+        // must use withBody() so Influx receives the Flux script as the
+        // request body rather than form-encoded. Without this, Influx
+        // returns 400 "Flux script returns no streaming data" because
+        // it never sees the `from(...)` pipeline.
         $response = Http::withHeaders([
                 'Authorization' => "Token {$token}",
-                'Content-Type' => 'application/vnd.flux',
                 'Accept' => 'application/csv',
             ])
-            ->timeout(15)
-            ->post("{$host}/api/v2/query?org=" . urlencode($org), $flux);
+            ->withBody($flux, 'application/vnd.flux')
+            ->timeout(45)
+            ->post("{$host}/api/v2/query?org=" . urlencode($org));
 
         if (! $response->ok()) {
             Log::warning('market-compare: influx query failed', [
@@ -208,7 +213,7 @@ final class MarketHubComparisonService
             if ($line === '') continue;
             // Annotation rows start with '#' in first column.
             if ($line[0] === '#') continue;
-            $cols = str_getcsv($line);
+            $cols = str_getcsv($line, ',', '"', '\\');
             if ($headers === null) {
                 $headers = $cols;
                 continue;
