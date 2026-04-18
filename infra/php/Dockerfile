@@ -48,6 +48,11 @@ RUN set -eux; \
     apk del .build-deps; \
     rm -rf /tmp/pear /tmp/* /var/cache/apk/*
 
+# FPM pool sizing override. Upstream default pm.max_children=5 throttles
+# the Filament admin + Livewire portal under real concurrency — see
+# fpm-pool.conf for rationale.
+COPY fpm-pool.conf /usr/local/etc/php-fpm.d/zz-aegiscore.conf
+
 # Composer for Laravel / Filament install.
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 

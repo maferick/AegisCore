@@ -85,7 +85,7 @@ final class ZkillSystemCatchupJob implements ShouldBeUnique, ShouldQueue
             $resp = Http::withHeaders([
                 'User-Agent' => self::USER_AGENT,
                 'Accept-Encoding' => 'gzip',
-            ])->timeout(30)->get(sprintf(
+            ])->timeout(60)->get(sprintf(
                 '%s/systemID/%d/pastSeconds/%d/',
                 self::ZKILL_BASE, $this->systemId, $past,
             ));
