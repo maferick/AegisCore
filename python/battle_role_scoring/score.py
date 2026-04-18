@@ -61,6 +61,25 @@ GUARANTEED_FC_SHIP_TYPE_IDS: set[int] = {
     45534,  # Monitor
 }
 
+# Hull-category → guaranteed role. These categories are seeded from the
+# SDE ship group in ship_class_category_mapping and capture tactical
+# function the scorer cannot infer from per-kill behavior alone:
+#   logi   → reps don't produce killmail damage rows, so pure armor/
+#            shield-logistics hulls score poorly on behavior.
+#   bomber → stealth bombers torp from stealth; outside of sub-fleet
+#            concentration priors their individual signature looks
+#            indistinguishable from low-damage DPS.
+#   command → command ships exist to boost/project; their signature is
+#             fleet presence, not per-kill damage or reps.
+# Hulls with genuinely ambiguous tactical function (tackle has inty +
+# dictor + ewar + AF frig all mixed) are NOT overridden here — behavior
+# still has to earn the tag.
+HULL_CATEGORY_GUARANTEED_ROLE: dict[str, str] = {
+    "logi": ROLE_LOGI,
+    "bomber": ROLE_BOMBER,
+    "command": ROLE_COMMAND,
+}
+
 # Default set of score classes that sum into `final`. Extending this
 # list is how future specs add new components (e.g. 'historical').
 ACTIVE_CLASSES = ("structural", "temporal", "hull", "historical")
@@ -403,6 +422,17 @@ def score_battle(
             winners[c] = (role, primary, second)
 
         per_sub_diag.append(diag)
+
+    # Hull-category overrides (logi / bomber / command). Applied before
+    # the Monitor FC override so the latter still has final say for
+    # Monitor pilots (Monitor hulls are tagged 'command' in the mapping).
+    for f in features:
+        cat = f.ship_class_category or ""
+        forced = HULL_CATEGORY_GUARANTEED_ROLE.get(cat)
+        if forced is None:
+            continue
+        forced_score = final_by_char[f.character_id].get(forced, 0.0)
+        winners[f.character_id] = (forced, forced_score, 0.0)
 
     # Monitor override: any pilot flying a GUARANTEED_FC_SHIP_TYPE_IDS
     # hull gets FC unconditionally, replacing any other role the
