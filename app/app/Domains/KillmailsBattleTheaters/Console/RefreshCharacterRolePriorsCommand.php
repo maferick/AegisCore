@@ -136,12 +136,17 @@ class RefreshCharacterRolePriorsCommand extends Command
             $fracCommand  = $battles > 0 ? ((int) $a->n_command) / $battles : 0.0;
             $fracLogi     = $battles > 0 ? ((int) $a->n_logi) / $battles : 0.0;
             $fracMainline = $battles > 0 ? ((int) $a->n_mainline) / $battles : 0.0;
+            $fracBomber   = $battles > 0 ? ((int) $a->n_bomber) / $battles : 0.0;
+            $fracTackle   = $battles > 0 ? ((int) $a->n_tackle) / $battles : 0.0;
             $fracSf0      = $battles > 0 ? ((int) $a->n_sf0) / $battles : 0.0;
             $avgDmg       = (float) ($a->avg_damage_share ?? 0.0);
 
-            $infFc  = ($inferredByCharRole[$charId]['fc']           ?? 0) / $battles;
-            $infLog = ($inferredByCharRole[$charId]['logi']         ?? 0) / $battles;
-            $infMl  = ($inferredByCharRole[$charId]['mainline_dps'] ?? 0) / $battles;
+            $infFc      = ($inferredByCharRole[$charId]['fc']           ?? 0) / $battles;
+            $infLog     = ($inferredByCharRole[$charId]['logi']         ?? 0) / $battles;
+            $infMl      = ($inferredByCharRole[$charId]['mainline_dps'] ?? 0) / $battles;
+            $infCmd     = ($inferredByCharRole[$charId]['command']      ?? 0) / $battles;
+            $infBomb    = ($inferredByCharRole[$charId]['bomber']       ?? 0) / $battles;
+            $infTackle  = ($inferredByCharRole[$charId]['tackle']       ?? 0) / $battles;
             $attestedFc = isset($attestedFcChars[$charId]) ? 1.0 : 0.0;
 
             $fcPrior = self::clamp01(
@@ -160,17 +165,37 @@ class RefreshCharacterRolePriorsCommand extends Command
                 + 0.15 * $avgDmg
                 + 0.15 * $infMl
             );
+            // Command / bomber / tackle priors use the same hull-fraction
+            // + inferred-history blend. Weights mirror the logi prior
+            // (hull signal is strong, behavior inference corroborates).
+            $commandPrior = self::clamp01(
+                0.70 * $fracCommand
+                + 0.30 * $infCmd
+            );
+            $bomberPrior = self::clamp01(
+                0.80 * $fracBomber
+                + 0.20 * $infBomb
+            );
+            $tacklePrior = self::clamp01(
+                0.70 * $fracTackle
+                + 0.30 * $infTackle
+            );
 
             $breakdown = [
                 'battles' => $battles,
                 'frac_command' => round($fracCommand, 4),
                 'frac_logi' => round($fracLogi, 4),
                 'frac_mainline' => round($fracMainline, 4),
+                'frac_bomber' => round($fracBomber, 4),
+                'frac_tackle' => round($fracTackle, 4),
                 'frac_sf0' => round($fracSf0, 4),
                 'avg_damage_share' => round($avgDmg, 4),
                 'inf_fc' => round($infFc, 4),
                 'inf_logi' => round($infLog, 4),
                 'inf_mainline' => round($infMl, 4),
+                'inf_command' => round($infCmd, 4),
+                'inf_bomber' => round($infBomb, 4),
+                'inf_tackle' => round($infTackle, 4),
                 'attested_fc' => (int) $attestedFc,
             ];
 
@@ -178,6 +203,9 @@ class RefreshCharacterRolePriorsCommand extends Command
                 'fc'           => $fcPrior,
                 'logi'         => $logiPrior,
                 'mainline_dps' => $mainlinePrior,
+                'command'      => $commandPrior,
+                'bomber'       => $bomberPrior,
+                'tackle'       => $tacklePrior,
             ] as $role => $val) {
                 $rows[] = [
                     'character_id' => $charId,
