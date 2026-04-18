@@ -29,14 +29,21 @@ class Dashboard extends BaseDashboard
     {
         $user = Auth::user();
         if ($user === null) {
-            return ['characters' => []];
+            return ['characters' => [], 'data_since' => null];
         }
         $characters = $user->characters()->get();
         $cards = [];
         foreach ($characters as $char) {
             $cards[] = $this->buildCharacterCard($char);
         }
-        return ['characters' => $cards];
+        // Earliest killmail we have — bounds every per-character stat
+        // below ("X kills since …"). Cached for a day so this doesn't
+        // scan on every dashboard load.
+        $dataSince = cache()->remember('dashboard.killmail.min_killed_at', 86400, function (): ?string {
+            $v = DB::table('killmails')->min('killed_at');
+            return $v ? (string) $v : null;
+        });
+        return ['characters' => $cards, 'data_since' => $dataSince];
     }
 
     /**
@@ -152,6 +159,70 @@ class Dashboard extends BaseDashboard
             ])
             ->all();
 
+        // Highlights: biggest kill / biggest loss + rolled ISK totals +
+        // solo kills + largest gang kill.
+        $biggestKill = DB::table('killmails AS k')
+            ->join('killmail_attackers AS ka', 'ka.killmail_id', '=', 'k.killmail_id')
+            ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'k.victim_ship_type_id')
+            ->where('ka.character_id', $cid)
+            ->orderByDesc('k.total_value')
+            ->limit(1)
+            ->selectRaw('k.killmail_id, k.total_value, k.victim_ship_type_id, rit.name AS ship_name, k.killed_at')
+            ->first();
+
+        $biggestLoss = DB::table('killmails AS k')
+            ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'k.victim_ship_type_id')
+            ->where('k.victim_character_id', $cid)
+            ->orderByDesc('k.total_value')
+            ->limit(1)
+            ->selectRaw('k.killmail_id, k.total_value, k.victim_ship_type_id, rit.name AS ship_name, k.killed_at')
+            ->first();
+
+        // Total ISK destroyed (damage-share weighted so split kills don't
+        // over-credit every attacker with the full value).
+        $iskDestroyedRaw = DB::table('killmail_attackers AS ka')
+            ->join('killmails AS k', 'k.killmail_id', '=', 'ka.killmail_id')
+            ->where('ka.character_id', $cid)
+            ->where('k.victim_damage_taken', '>', 0)
+            ->selectRaw('COALESCE(SUM(k.total_value * ka.damage_done / k.victim_damage_taken), 0) AS isk')
+            ->value('isk');
+
+        $iskLostRaw = DB::table('killmails')
+            ->where('victim_character_id', $cid)
+            ->sum('total_value');
+
+        $soloKills = DB::table('killmails AS k')
+            ->join('killmail_attackers AS ka', 'ka.killmail_id', '=', 'k.killmail_id')
+            ->where('ka.character_id', $cid)
+            ->where('k.attacker_count', 1)
+            ->count();
+
+        $largestGang = DB::table('killmails AS k')
+            ->join('killmail_attackers AS ka', 'ka.killmail_id', '=', 'k.killmail_id')
+            ->where('ka.character_id', $cid)
+            ->max('k.attacker_count');
+
+        $highlights = [
+            'biggest_kill' => $biggestKill ? [
+                'killmail_id' => (int) $biggestKill->killmail_id,
+                'isk' => (float) $biggestKill->total_value,
+                'ship_id' => (int) $biggestKill->victim_ship_type_id,
+                'ship_name' => (string) ($biggestKill->ship_name ?? "type {$biggestKill->victim_ship_type_id}"),
+                'killed_at' => (string) $biggestKill->killed_at,
+            ] : null,
+            'biggest_loss' => $biggestLoss ? [
+                'killmail_id' => (int) $biggestLoss->killmail_id,
+                'isk' => (float) $biggestLoss->total_value,
+                'ship_id' => (int) $biggestLoss->victim_ship_type_id,
+                'ship_name' => (string) ($biggestLoss->ship_name ?? "type {$biggestLoss->victim_ship_type_id}"),
+                'killed_at' => (string) $biggestLoss->killed_at,
+            ] : null,
+            'isk_destroyed' => (float) $iskDestroyedRaw,
+            'isk_lost' => (float) $iskLostRaw,
+            'solo_kills' => (int) $soloKills,
+            'largest_gang' => $largestGang ? (int) $largestGang : null,
+        ];
+
         return [
             'character_id' => $cid,
             'character_name' => $names[$cid] ?? $char->character_name ?? "Pilot #{$cid}",
@@ -164,6 +235,7 @@ class Dashboard extends BaseDashboard
             'kills' => $kills,
             'losses' => $losses,
             'top_hulls' => $topHulls,
+            'highlights' => $highlights,
         ];
     }
 }

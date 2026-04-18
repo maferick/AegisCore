@@ -1,4 +1,22 @@
 <x-filament-panels::page>
+    @php
+        $fmtIsk = function (float $v): string {
+            if ($v >= 1e12) return number_format($v / 1e12, 2) . ' T';
+            if ($v >= 1e9)  return number_format($v / 1e9, 2) . ' B';
+            if ($v >= 1e6)  return number_format($v / 1e6, 2) . ' M';
+            if ($v >= 1e3)  return number_format($v / 1e3, 1) . ' K';
+            return number_format($v, 0);
+        };
+    @endphp
+
+    @if (! empty($data_since))
+        <div style="font-size:0.7rem; color:#7a7a82; margin-bottom:0.75rem; font-style:italic;">
+            Kill + ISK stats cover killmails since
+            <span style="color:#cbd5e1;">{{ \Carbon\Carbon::parse($data_since)->format('Y-m-d') }}</span>
+            (our data floor). Earlier activity not counted.
+        </div>
+    @endif
+
     @if (empty($characters))
         <div class="fi-section rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
             <p class="text-sm text-gray-600 dark:text-gray-300">
@@ -36,6 +54,71 @@
                         <span><span style="color:#ff3838;">{{ number_format($c['losses']) }}</span> losses</span>
                     </div>
                 </div>
+            </div>
+
+            {{-- Highlights strip --}}
+            @php $h = $c['highlights'] ?? []; @endphp
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
+                <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">ISK destroyed</div>
+                    <div style="font-size:1.1rem; font-weight:600; color:#4ade80; margin-top:0.15rem;">
+                        {{ $fmtIsk($h['isk_destroyed'] ?? 0) }}
+                    </div>
+                </div>
+                <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">ISK lost</div>
+                    <div style="font-size:1.1rem; font-weight:600; color:#ff6b6b; margin-top:0.15rem;">
+                        {{ $fmtIsk($h['isk_lost'] ?? 0) }}
+                    </div>
+                </div>
+                @if (! empty($h['biggest_kill']))
+                    <a href="/portal/killmails/{{ $h['biggest_kill']['killmail_id'] }}" style="text-decoration:none; color:inherit;">
+                        <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:0.6rem 0.8rem; display:flex; gap:0.6rem; align-items:center;">
+                            <img src="https://images.evetech.net/types/{{ $h['biggest_kill']['ship_id'] }}/icon?size=32"
+                                 referrerpolicy="no-referrer" style="width:32px; height:32px; border-radius:4px; flex-shrink:0;" alt="">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Biggest kill</div>
+                                <div style="font-size:0.9rem; font-weight:600; color:#4ade80; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                    {{ $fmtIsk($h['biggest_kill']['isk']) }}
+                                </div>
+                                <div style="font-size:0.65rem; color:#9ca3af; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                    {{ $h['biggest_kill']['ship_name'] }}
+                                </div>
+                            </div>
+                        </div>
+                    </a>
+                @endif
+                @if (! empty($h['biggest_loss']))
+                    <a href="/portal/killmails/{{ $h['biggest_loss']['killmail_id'] }}" style="text-decoration:none; color:inherit;">
+                        <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem; display:flex; gap:0.6rem; align-items:center;">
+                            <img src="https://images.evetech.net/types/{{ $h['biggest_loss']['ship_id'] }}/icon?size=32"
+                                 referrerpolicy="no-referrer" style="width:32px; height:32px; border-radius:4px; flex-shrink:0;" alt="">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Biggest loss</div>
+                                <div style="font-size:0.9rem; font-weight:600; color:#ff6b6b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                    {{ $fmtIsk($h['biggest_loss']['isk']) }}
+                                </div>
+                                <div style="font-size:0.65rem; color:#9ca3af; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                    {{ $h['biggest_loss']['ship_name'] }}
+                                </div>
+                            </div>
+                        </div>
+                    </a>
+                @endif
+                <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Solo kills</div>
+                    <div style="font-size:1.1rem; font-weight:600; color:#e5e5e7; margin-top:0.15rem;">
+                        {{ number_format($h['solo_kills'] ?? 0) }}
+                    </div>
+                </div>
+                @if (! empty($h['largest_gang']))
+                    <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                        <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Largest gang kill</div>
+                        <div style="font-size:1.1rem; font-weight:600; color:#e5e5e7; margin-top:0.15rem;">
+                            {{ number_format($h['largest_gang']) }} pilots
+                        </div>
+                    </div>
+                @endif
             </div>
 
             @php
