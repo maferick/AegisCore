@@ -220,6 +220,12 @@ final class BattleTheaterViewData
                 $theater->id,
                 $participants->pluck('alliance_id')->filter()->unique()->values()->all(),
             ),
+            // Flat char_id → role_key dict used by the rosters + top-damage
+            // cards to render inline role badges next to pilot names.
+            'role_by_character' => $this->roleInferenceLoader->charRoleMap(
+                $theater->id,
+                $participants->pluck('alliance_id')->filter()->unique()->values()->all(),
+            ),
         ];
     }
 

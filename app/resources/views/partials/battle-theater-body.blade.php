@@ -53,6 +53,30 @@
         : ($v >= 1e3  ? number_format($v / 1e3, 1).' K'
         : number_format($v, 0))));
 
+    // Spec 6 inline role badges. Rendered next to pilot names on
+    // rosters + top-damage cards. Only FC / logi / mainline_dps
+    // assignments fire; every other pilot gets no badge (silent
+    // per Spec 5 epistemic stance).
+    $roleByChar = $role_by_character ?? [];
+    $roleLabel = fn (string $r): string => match ($r) {
+        'fc' => 'FC',
+        'logi' => 'Logi',
+        'mainline_dps' => 'DPS',
+        default => strtoupper($r),
+    };
+    $roleBadgeStyle = fn (string $r): string => match ($r) {
+        'fc' => 'background:rgba(202,138,4,0.25);color:#fde047;border:1px solid rgba(250,204,21,0.35);box-shadow:0 0 4px rgba(250,204,21,0.35);',
+        'logi' => 'background:rgba(5,150,105,0.2);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);',
+        'mainline_dps' => 'background:rgba(30,64,175,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.3);',
+        default => 'background:rgba(71,85,105,0.25);color:#cbd5e1;border:1px solid rgba(100,116,139,0.3);',
+    };
+    $roleBadge = function (int $cid) use ($roleByChar, $roleLabel, $roleBadgeStyle): string {
+        $role = $roleByChar[$cid] ?? null;
+        if ($role === null) return '';
+        return '<span style="display:inline-block;padding:1px 5px;margin-left:5px;font-size:0.6rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;line-height:1;border-radius:8px;vertical-align:middle;'
+            . $roleBadgeStyle($role) . '">' . $roleLabel($role) . '</span>';
+    };
+
     $blocA = $sides->sideABlocId ? ($blocs[$sides->sideABlocId]->display_name ?? null) : null;
     $blocB = $sides->sideBBlocId ? ($blocs[$sides->sideBBlocId]->display_name ?? null) : null;
     $flagA = $flagship_logos[S::SIDE_A] ?? null;
@@ -567,7 +591,7 @@
                         <img src="https://images.evetech.net/characters/{{ $r['character_id'] }}/portrait?size=64"
                              referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
                         <div class="km-attacker-info">
-                            <div class="km-attacker-name">{{ $r['character_name'] }}</div>
+                            <div class="km-attacker-name">{{ $r['character_name'] }}{!! $roleBadge((int) $r['character_id']) !!}</div>
                             <div class="km-attacker-corp">
                                 @if ($r['alliance_name']) {{ $r['alliance_name'] }} @endif
                             </div>
@@ -806,6 +830,7 @@
                         <div class="km-attacker-info">
                             <div class="km-attacker-name">
                                 {{ $cName }}
+                                {!! $roleBadge((int) $cid) !!}
                                 @if ($isFB) <span class="km-badge km-badge-red" style="margin-left: 4px;">FB × {{ $p->final_blows }}</span> @endif
                             </div>
                             <div class="km-attacker-corp">{{ $aName ?? '—' }}</div>
@@ -839,120 +864,53 @@
 </div>
 
 {{-- ================================================================
-     SUB-FLEET ROLE INFERENCE (Spec 6)
+     FC ATTESTATION STRIP (Spec 6, donor-only)
+
+     Compact per-sub-fleet strip with a "Mark FC" control for donor
+     users. Inline role badges next to pilot names elsewhere in the
+     report carry the visual burden of showing inferred roles; this
+     card exists only so donors can label truth data for Spec 7.
      ================================================================ --}}
+@auth
+@if (auth()->user()?->isDonor())
 @php
     $roleInference = $role_inference_by_alliance ?? [];
-    $hasAnyRoles = false;
-    foreach ($roleInference as $byAlly) {
-        foreach ($byAlly as $sf) {
-            if ($sf['roles']['fc'] !== null || ! empty($sf['roles']['logi']) || $sf['roles']['mainline_dps'] !== null) {
-                $hasAnyRoles = true;
-                break 2;
-            }
-        }
-    }
-    $bandColor = function (string $band): string {
-        return match ($band) {
-            'high' => '#4ade80',
-            'medium' => '#e5a900',
-            default => '#9ca3af',
-        };
-    };
-    $allianceName = function (int $aid) use ($names) {
-        return $names[$aid] ?? ('Alliance #' . $aid);
-    };
+    $allianceName = fn (int $aid) => $names[$aid] ?? ('Alliance #' . $aid);
 @endphp
-
-@if ($hasAnyRoles)
+@if (! empty($roleInference))
 <div class="km-card" style="margin-bottom: 1.5rem;">
-    <h3>Inferred roles <span class="muted">· Spec 5 v0, uncalibrated</span></h3>
-    <p class="muted" style="font-size:.85em; margin:.25rem 0 .75rem;">
-        Sub-fleet-scoped role guesses. Sparse by design — the system stays silent when it isn't sure.
-        Confidence bands: <span style="color:#4ade80;">high</span> ≥ 0.80 · <span style="color:#e5a900;">medium</span> 0.62–0.79 · <span style="color:#9ca3af;">low</span> &lt; 0.62.
+    <h3>Mark FC <span class="muted">· donor calibration feed</span></h3>
+    <p class="muted" style="font-size:.8em; margin:.25rem 0 .5rem;">
+        Your marks are private (only you see them). They train Spec 7 calibration.
     </p>
     @foreach ($roleInference as $allianceId => $subFleets)
-        @php
-            $anyRoles = false;
-            foreach ($subFleets as $sf) {
-                if ($sf['roles']['fc'] !== null || ! empty($sf['roles']['logi']) || $sf['roles']['mainline_dps'] !== null) {
-                    $anyRoles = true;
-                    break;
-                }
-            }
-        @endphp
-        @if (! $anyRoles) @continue @endif
-        <div style="margin-bottom:1rem;">
-            <div style="color:#e5e5e7; font-weight:500; margin-bottom:.35rem;">{{ $allianceName((int)$allianceId) }}</div>
-            @foreach ($subFleets as $sfid => $sf)
-                @php
-                    $fc = $sf['roles']['fc'];
-                    $logi = $sf['roles']['logi'];
-                    $ml = $sf['roles']['mainline_dps'];
-                @endphp
-                @if ($fc === null && empty($logi) && $ml === null) @continue @endif
-                <div style="padding:.5rem .75rem; margin-bottom:.5rem; background:rgba(255,255,255,0.02); border-left:3px solid #3b3f48; border-radius:0 4px 4px 0;">
-                    <div style="font-size:.9em; color:#9ca3af; margin-bottom:.3rem;">
-                        Sub-fleet {{ $sfid }} · {{ $sf['member_count'] }} pilots
-                    </div>
-
-                    @if ($fc !== null)
-                        <div style="font-size:.85em;">
-                            <strong style="color:#e5e5e7;">FC:</strong>
-                            <span style="color:#e5e5e7;">{{ $fc['character_name'] }}</span>
-                            <span style="color: {{ $bandColor($fc['confidence_band']) }}; font-size:.9em; margin-left:.4rem;">
-                                {{ $fc['confidence_band'] }} ({{ number_format($fc['confidence'], 2) }})
-                            </span>
-                        </div>
-                    @else
-                        <div style="font-size:.85em; color:#7a7a82;">FC: <em>uncertain</em></div>
-                    @endif
-
-                    @auth
-                        @livewire('battle-fc-attest',
-                            [
-                                'battleId' => $theater->id,
-                                'allianceId' => (int) $allianceId,
-                                'subFleetId' => (int) $sfid,
-                                'partitionAlgoVersion' => (int) $sf['partition_algo_version'],
-                                'candidates' => collect($sf['members'] ?? [])->map(fn($m) => [
-                                    'character_id' => $m['character_id'],
-                                    'character_name' => $m['character_name'],
-                                    'ship_name' => $m['ship_name'] ?? null,
-                                    'ship_class_category' => $m['ship_class_category'] ?? null,
-                                ])->all(),
-                            ],
-                            key('fc-attest-'.$theater->id.'-'.$allianceId.'-'.$sfid)
-                        )
-                    @endauth
-
-                    @if (! empty($logi))
-                        <div style="font-size:.85em; margin-top:.3rem;">
-                            <strong style="color:#e5e5e7;">Logi ({{ count($logi) }}):</strong>
-                            <span style="color:#9ca3af;">
-                                @foreach (collect($logi)->sortByDesc('confidence')->take(8) as $lpilot)
-                                    {{ $lpilot['character_name'] }}@if (! $loop->last),@endif
-                                @endforeach
-                                @if (count($logi) > 8) <em>+{{ count($logi) - 8 }} more</em>@endif
-                            </span>
-                        </div>
-                    @endif
-
-                    @if ($ml !== null)
-                        <div style="font-size:.85em; margin-top:.3rem;">
-                            <strong style="color:#e5e5e7;">Mainline anchor:</strong>
-                            <span style="color:#e5e5e7;">{{ $ml['character_name'] }}</span>
-                            <span style="color: {{ $bandColor($ml['confidence_band']) }}; font-size:.9em; margin-left:.4rem;">
-                                {{ $ml['confidence_band'] }} ({{ number_format($ml['confidence'], 2) }})
-                            </span>
-                        </div>
-                    @endif
+        @foreach ($subFleets as $sfid => $sf)
+            <div style="padding:.35rem .5rem; margin-bottom:.35rem; background:rgba(255,255,255,0.02); border-left:2px solid #3b3f48; border-radius:0 3px 3px 0;">
+                <div style="font-size:.8em; color:#9ca3af;">
+                    {{ $allianceName((int)$allianceId) }} · Sub-fleet {{ $sfid }} · {{ $sf['member_count'] }}p
                 </div>
-            @endforeach
-        </div>
+                @livewire('battle-fc-attest',
+                    [
+                        'battleId' => $theater->id,
+                        'allianceId' => (int) $allianceId,
+                        'subFleetId' => (int) $sfid,
+                        'partitionAlgoVersion' => (int) $sf['partition_algo_version'],
+                        'candidates' => collect($sf['members'] ?? [])->map(fn($m) => [
+                            'character_id' => $m['character_id'],
+                            'character_name' => $m['character_name'],
+                            'ship_name' => $m['ship_name'] ?? null,
+                            'ship_class_category' => $m['ship_class_category'] ?? null,
+                        ])->all(),
+                    ],
+                    key('fc-attest-'.$theater->id.'-'.$allianceId.'-'.$sfid)
+                )
+            </div>
+        @endforeach
     @endforeach
 </div>
 @endif
+@endif
+@endauth
 
 {{-- ================================================================
      SYSTEMS

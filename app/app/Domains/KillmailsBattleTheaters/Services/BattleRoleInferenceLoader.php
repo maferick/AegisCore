@@ -147,4 +147,30 @@ final class BattleRoleInferenceLoader
             ->first();
         return $row ? (int) $row->weight_version : null;
     }
+
+    /**
+     * Flat character_id → role_key map for inline badge rendering
+     * ("FC" / "Logi" / "DPS" pills next to pilot names in rosters +
+     * top-damage lists). Built from the active weight_version's
+     * inference rows.
+     *
+     * @return array<int, string>
+     */
+    public function charRoleMap(int $battleId, array $allianceIds): array
+    {
+        if ($allianceIds === []) {
+            return [];
+        }
+        $weightVersion = $this->resolveWeightVersion();
+        if ($weightVersion === null) {
+            return [];
+        }
+        return DB::table('battle_character_role_inference')
+            ->where('battle_id', $battleId)
+            ->whereIn('alliance_id', $allianceIds)
+            ->where('weight_version', $weightVersion)
+            ->pluck('primary_role_key', 'character_id')
+            ->map(fn ($v) => (string) $v)
+            ->all();
+    }
 }
