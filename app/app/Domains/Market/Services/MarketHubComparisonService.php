@@ -27,26 +27,31 @@ final class MarketHubComparisonService
     /**
      * Categories we exclude from the overview because they're not
      * fleet-ops / supply-chain relevant:
-     *   25  Asteroid (raw ores — logistics ship ore refined, not a
-     *                  fleet-ops market item; floods "missing" list)
+     *   8   Charge (ammo, scripts — fleets carry own, not market item)
+     *   25  Asteroid (raw ores — mining chain, not fleet ops)
      *   30  Apparel (clothing, tattoos, portraits)
-     *   42  Planetary Resources (raw PI input, miners buy on-site)
-     *   43  Planetary Commodities (PI chain goods, industrialist domain)
+     *   42  Planetary Resources (raw PI input)
+     *   43  Planetary Commodities (PI chain goods)
      *   63  Special Edition Assets (collectibles)
      *   91  SKINs (cosmetics)
      *   2118 Personalization (ship SKIN design elements)
      */
-    private const EXCLUDED_CATEGORIES = [25, 30, 42, 43, 63, 91, 2118];
+    private const EXCLUDED_CATEGORIES = [8, 25, 30, 42, 43, 63, 91, 2118];
 
     /**
      * Specific groups within otherwise-useful categories that are
-     * player/mission trash, not logistics. Keeps the rest of
-     * Commodity (filaments, mutaplasmids, construction components,
-     * etc.) visible.
+     * player/mission trash or mining-chain inputs, not fleet logistics.
+     * Keeps the rest of Commodity (filaments, mutaplasmids, capital-
+     * construction components) visible.
      *   280  General — Tobacco, Spirits, Antibiotics, Quafe
      *   526  Commodities — mission loot, corpses, books, vouchers
+     *   422  Gas Isotopes (Material cat — raw gas, harvester output)
+     *   427  Moon Materials (raw moon goo pre-reaction)
+     *   967  Wormhole Minerals (raw, site-harvested)
+     *   4168 Compressed Gas (Celestial cat — harvester yields)
+     *   4932 Unrefined Mineral (raw)
      */
-    private const EXCLUDED_GROUPS = [280, 526];
+    private const EXCLUDED_GROUPS = [280, 526, 422, 427, 967, 4168, 4932];
 
     /**
      * Best price per (type_id, side) for a hub. Keyed by the hub's
