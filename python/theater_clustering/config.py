@@ -21,6 +21,7 @@ class Config:
     # cadence). Overrideable via env for operator tuning without a
     # deploy.
     proximity_seconds: int          # default 2700 (45 min)
+    quiet_split_seconds: int        # default 1200 (20 min) — split cluster when killmail tempo drops
     min_participants: int           # default 10
     lock_after_hours: int           # default 48
     window_hours: int               # default 48 — candidate window per pass
@@ -43,6 +44,7 @@ class Config:
             db_username=env("DB_USERNAME", required=True),
             db_password=env("DB_PASSWORD", required=True),
             proximity_seconds=int(env("THEATER_PROXIMITY_SECONDS", "2700") or "2700"),
+            quiet_split_seconds=int(env("THEATER_QUIET_SPLIT_SECONDS", "1200") or "1200"),
             min_participants=int(env("THEATER_MIN_PARTICIPANTS", "10") or "10"),
             lock_after_hours=int(env("THEATER_LOCK_AFTER_HOURS", "48") or "48"),
             window_hours=int(env("THEATER_WINDOW_HOURS", "48") or "48"),

@@ -87,6 +87,7 @@ def cluster_killmails(
     attackers_by_killmail: dict[int, list[Attacker]],
     proximity_seconds: int,
     min_participants: int,
+    quiet_split_seconds: int = 1200,
 ) -> list[Cluster]:
     """Return the set of clusters meeting the min-participants threshold.
 
@@ -131,19 +132,90 @@ def cluster_killmails(
             uf.union(km_i.killmail_id, km_j.killmail_id)
 
     # 3. Build cluster payloads and apply the participant threshold.
+    #    Before emitting, chronologically walk each cluster and split
+    #    whenever consecutive killmails are farther apart than
+    #    quiet_split_seconds. A fleet going quiet for 20+ min almost
+    #    always means the op ended and a new one later is a distinct
+    #    event, even if the union-find proximity window bridged it.
+    #
+    #    TiDi compensation: at ≥1000-pilot fights the server applies
+    #    time dilation (CCP's mechanic — slows gameplay when systems
+    #    overload, down to 10% realtime). Under heavy TiDi one kill
+    #    can take 5-10 minutes, so the natural gap between killmails
+    #    stretches. Scale the split threshold with cluster participant
+    #    count to avoid splitting legitimate Keepstar/supercap fights.
     kms_by_id = {km.killmail_id: km for km in killmails}
     raw_clusters: list[Cluster] = []
     for _root, member_ids in uf.groups().items():
-        cluster = Cluster()
+        # Pre-count unique participants across the whole union-find
+        # cluster so TiDi scaling uses the full-fight size, not a
+        # subset.
+        all_participants = set()
         for kid in member_ids:
-            cluster.killmail_ids.add(kid)
             km = kms_by_id[kid]
             if km.victim_character_id:
-                cluster.participant_character_ids.add(km.victim_character_id)
+                all_participants.add(km.victim_character_id)
             for a in attackers_by_killmail.get(kid, ()):
                 if a.character_id:
-                    cluster.participant_character_ids.add(a.character_id)
-        if len(cluster.participant_character_ids) >= min_participants:
-            raw_clusters.append(cluster)
+                    all_participants.add(a.character_id)
+        threshold = _tidi_scaled_split(quiet_split_seconds, len(all_participants))
+
+        sub_clusters = _split_on_tempo(
+            member_ids, kms_by_id, attackers_by_killmail, threshold
+        )
+        for cluster in sub_clusters:
+            if len(cluster.participant_character_ids) >= min_participants:
+                raw_clusters.append(cluster)
 
     return raw_clusters
+
+
+def _tidi_scaled_split(base_seconds: int, participant_count: int) -> int:
+    """Return quiet-split threshold scaled for TiDi-heavy fights.
+
+    Breakpoints are empirical: most EVE fights stay under 500 pilots
+    and see ~zero TiDi, so base (1200s) is fine. 500-1000 pilots
+    triggers moderate TiDi (50-25% realtime); double. 1000-2000 pilots
+    sees heavy TiDi (25-10%); triple. 2000+ (Keepstar / World War
+    Bee territory) sustains 10% TiDi — one kill per 5-10 min is
+    normal, so fold an extra-wide window."""
+    if participant_count >= 2000:
+        return base_seconds * 6   # 120 min baseline @ 1200s default
+    if participant_count >= 1000:
+        return base_seconds * 3   # 60 min baseline
+    if participant_count >= 500:
+        return base_seconds * 2   # 40 min baseline
+    return base_seconds
+
+
+def _split_on_tempo(
+    member_ids: list[int],
+    kms_by_id: dict[int, Killmail],
+    attackers_by_killmail: dict[int, list[Attacker]],
+    quiet_split_seconds: int,
+) -> list[Cluster]:
+    """Walk member killmails chronologically. Start a new cluster whenever
+    the gap between consecutive killmails exceeds quiet_split_seconds.
+    Keeps participant set accurate within each sub-cluster."""
+    if not member_ids:
+        return []
+    ordered = sorted(member_ids, key=lambda kid: kms_by_id[kid].killed_at)
+    clusters: list[Cluster] = []
+    current = Cluster()
+    last_ts = None
+    for kid in ordered:
+        km = kms_by_id[kid]
+        if last_ts is not None and (km.killed_at - last_ts).total_seconds() > quiet_split_seconds:
+            if current.killmail_ids:
+                clusters.append(current)
+            current = Cluster()
+        current.killmail_ids.add(kid)
+        if km.victim_character_id:
+            current.participant_character_ids.add(km.victim_character_id)
+        for a in attackers_by_killmail.get(kid, ()):
+            if a.character_id:
+                current.participant_character_ids.add(a.character_id)
+        last_ts = km.killed_at
+    if current.killmail_ids:
+        clusters.append(current)
+    return clusters
