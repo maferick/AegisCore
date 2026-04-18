@@ -43,22 +43,22 @@ class MyDoctrines extends Page
     {
         $user = Auth::user();
         if ($user === null) {
-            return ['doctrines' => [], 'alliance_name' => null, 'alliance_id' => null];
+            return ['doctrines' => [], 'corp_name' => null, 'corp_id' => null];
         }
 
-        $allianceId = (int) ($user->characters()->whereNotNull('alliance_id')->value('alliance_id') ?? 0);
-        if ($allianceId <= 0) {
-            return ['doctrines' => [], 'alliance_name' => null, 'alliance_id' => null];
+        $corpId = (int) ($user->characters()->whereNotNull('corporation_id')->value('corporation_id') ?? 0);
+        if ($corpId <= 0) {
+            return ['doctrines' => [], 'corp_name' => null, 'corp_id' => null];
         }
 
-        $allianceName = DB::table('esi_entity_names')
-            ->where('entity_id', $allianceId)
-            ->where('category', 'alliance')
-            ->value('name') ?? ('Alliance #' . $allianceId);
+        $corpName = DB::table('esi_entity_names')
+            ->where('entity_id', $corpId)
+            ->where('category', 'corporation')
+            ->value('name') ?? ('Corp #' . $corpId);
 
         $rows = DB::table('auto_doctrines AS d')
             ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'd.hull_type_id')
-            ->where('d.alliance_id', $allianceId)
+            ->where('d.corporation_id', $corpId)
             ->where('d.is_active', 1)
             ->orderBy('d.role_key')
             ->orderByDesc('d.confidence')
@@ -102,8 +102,8 @@ class MyDoctrines extends Page
 
         return [
             'doctrines' => $doctrines,
-            'alliance_id' => $allianceId,
-            'alliance_name' => $allianceName,
+            'corp_id' => $corpId,
+            'corp_name' => $corpName,
         ];
     }
 }

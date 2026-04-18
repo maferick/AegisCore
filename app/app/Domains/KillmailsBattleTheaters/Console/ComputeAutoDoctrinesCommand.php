@@ -13,14 +13,15 @@ use Illuminate\Support\Facades\DB;
  * Derives doctrines from the last N days of killmails where the
  * victim had both:
  *   - a Spec 5 role_inference row under the default weight_version
- *   - a non-zero alliance_id on the killmail
+ *   - a non-zero corporation_id on the killmail
  *
  * Unlike SupplyCore's per-hull clusterer, this runs per
- * (alliance_id, hull_type_id, role_key) triple. Same hull + same
- * fit flying on a mainline_dps pilot is a different doctrine than
- * the identical fit seen on an "other" alt. This is the "less
- * overlap" requirement: the role axis separates clusters that
- * SupplyCore used to merge.
+ * (corporation_id, hull_type_id, role_key) triple. Corp is the
+ * doctrine unit: member corps of the same alliance run distinct
+ * fits (one corp on Muninns, another on Ferox, etc) and clustering
+ * at alliance granularity merges them. Role axis adds the second
+ * discriminator — identical fit flying on a mainline_dps pilot is
+ * a different doctrine than the same fit on a tackle alt.
  *
  * Output: only doctrines where confidence >= STRICT_CONFIDENCE
  * (default 0.70) AND observation_count >= the tiered activation
@@ -75,7 +76,7 @@ class ComputeAutoDoctrinesCommand extends Command
         //    Spec 5 role inference.
         $rows = DB::select("
             SELECT k.killmail_id, k.killed_at, k.victim_character_id AS character_id,
-                   k.victim_alliance_id AS alliance_id,
+                   k.victim_corporation_id AS corporation_id,
                    k.victim_ship_type_id AS hull_type_id,
                    i.primary_role_key AS role_key
               FROM killmails k
@@ -86,7 +87,7 @@ class ComputeAutoDoctrinesCommand extends Command
                AND i.character_id = k.victim_character_id
                AND i.weight_version = ?
              WHERE k.killed_at >= ?
-               AND k.victim_alliance_id > 0
+               AND k.victim_corporation_id > 0
                AND k.victim_character_id IS NOT NULL
                AND k.victim_ship_type_id IS NOT NULL
         ", [$wvId, $since]);
@@ -120,7 +121,7 @@ class ComputeAutoDoctrinesCommand extends Command
             if ($mods === []) {
                 continue;
             }
-            $key = $r->alliance_id . '|' . $r->hull_type_id . '|' . $r->role_key;
+            $key = $r->corporation_id . '|' . $r->hull_type_id . '|' . $r->role_key;
             $fp = self::fingerprint($mods);
             $clusters[$key] ??= [];
             $clusters[$key][$fp] ??= [
@@ -130,7 +131,7 @@ class ComputeAutoDoctrinesCommand extends Command
                 'first_seen' => $r->killed_at,
                 'last_seen' => $r->killed_at,
                 'kills' => [],
-                'alliance_id' => (int) $r->alliance_id,
+                'corporation_id' => (int) $r->corporation_id,
                 'hull_type_id' => (int) $r->hull_type_id,
                 'role_key' => (string) $r->role_key,
             ];
@@ -188,12 +189,12 @@ class ComputeAutoDoctrinesCommand extends Command
                     $canonical = self::canonicalFingerprint($core);
 
                     $hullName = DB::table('ref_item_types')->where('id', $family['hull_type_id'])->value('name') ?? 'Unknown';
-                    $allianceName = DB::table('esi_entity_names')
-                        ->where('entity_id', $family['alliance_id'])
-                        ->where('category', 'alliance')
-                        ->value('name') ?? ('Alliance #' . $family['alliance_id']);
+                    $corpName = DB::table('esi_entity_names')
+                        ->where('entity_id', $family['corporation_id'])
+                        ->where('category', 'corporation')
+                        ->value('name') ?? ('Corp #' . $family['corporation_id']);
                     $roleLabel = self::roleLabel($family['role_key']);
-                    $label = mb_substr("{$hullName} · {$roleLabel} · {$allianceName}", 0, 191);
+                    $label = mb_substr("{$hullName} · {$roleLabel} · {$corpName}", 0, 191);
 
                     $confidence = self::confidenceFn($family['observation_count']);
                     $floor = self::floorFor($family);
@@ -201,7 +202,7 @@ class ComputeAutoDoctrinesCommand extends Command
 
                     DB::table('auto_doctrines')->upsert(
                         [[
-                            'alliance_id' => $family['alliance_id'],
+                            'corporation_id' => $family['corporation_id'],
                             'hull_type_id' => $family['hull_type_id'],
                             'role_key' => $family['role_key'],
                             'canonical_fingerprint' => $canonical,
@@ -214,11 +215,11 @@ class ComputeAutoDoctrinesCommand extends Command
                             'computed_at' => $now,
                             'updated_at' => $now,
                         ]],
-                        ['alliance_id', 'hull_type_id', 'role_key', 'canonical_fingerprint'],
+                        ['corporation_id', 'hull_type_id', 'role_key', 'canonical_fingerprint'],
                         ['canonical_name', 'observation_count', 'confidence', 'is_active', 'last_seen_at', 'computed_at'],
                     );
                     $docId = (int) DB::table('auto_doctrines')
-                        ->where('alliance_id', $family['alliance_id'])
+                        ->where('corporation_id', $family['corporation_id'])
                         ->where('hull_type_id', $family['hull_type_id'])
                         ->where('role_key', $family['role_key'])
                         ->where('canonical_fingerprint', $canonical)
