@@ -116,6 +116,24 @@
         $tid = (int) array_key_first($rows);
         return ['type_id' => $tid, 'name' => $ship_names[$tid] ?? '#'.$tid];
     };
+    // Every hull the pilot appeared in during the battle, highest-count
+    // first. Multi-ship pilots (Richard in Monitor + Claymore, pilots
+    // who got podded and reshipped, etc.) need to show the full list
+    // so the reader sees the whole picture, not just the mode hull.
+    $allShipsOf = function (int $characterId) use ($ships_by_character, $ship_names): array {
+        $rows = $ships_by_character[$characterId] ?? [];
+        if ($rows === []) return [];
+        arsort($rows);
+        $out = [];
+        foreach ($rows as $tid => $n) {
+            $out[] = [
+                'type_id' => (int) $tid,
+                'name' => $ship_names[(int) $tid] ?? '#'.$tid,
+                'count' => (int) $n,
+            ];
+        }
+        return $out;
+    };
 
     $tA = $side_totals[S::SIDE_A];
     $tB = $side_totals[S::SIDE_B];
@@ -615,7 +633,17 @@
                             <div class="km-attacker-corp">
                                 @if ($r['alliance_name']) {{ $r['alliance_name'] }} @endif
                             </div>
-                            @if ($r['ship_type_id'])
+                            @if (! empty($r['ships_flown']))
+                                <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+                                    @foreach ($r['ships_flown'] as $s)
+                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }} · {{ number_format($s['damage']) }} dmg">
+                                            <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
+                                                 referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
+                                            {{ $s['name'] }}@if ($s['count'] > 1)<span style="color:#7a7a82;font-size:0.7em;"> ×{{ $s['count'] }}</span>@endif@if ($s['damage'] > 0)<span style="color:#9ca0a8;font-size:0.7em;"> ({{ number_format($s['damage']) }})</span>@endif
+                                        </span>
+                                    @endforeach
+                                </div>
+                            @elseif ($r['ship_type_id'])
                                 <div class="km-attacker-ship">
                                     <img src="https://images.evetech.net/types/{{ $r['ship_type_id'] }}/icon?size=32"
                                          referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
@@ -856,6 +884,7 @@
                         $cid       = (int) $p->character_id;
                         $cName     = $names[$cid] ?? 'Character #'.$cid;
                         $aName     = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : null;
+                        $allShips  = $allShipsOf($cid);
                         $ship      = $primaryShipOf($cid);
                         $isFB      = $p->final_blows > 0;
                         $lossKm    = $lossKmByChar[$cid] ?? null;
@@ -873,11 +902,15 @@
                                 @if ($isFB) <span class="km-badge km-badge-red" style="margin-left: 4px;">FB × {{ $p->final_blows }}</span> @endif
                             </div>
                             <div class="km-attacker-corp">{{ $aName ?? '—' }}</div>
-                            @if ($ship['type_id'])
-                                <div class="km-attacker-ship">
-                                    <img src="https://images.evetech.net/types/{{ $ship['type_id'] }}/icon?size=32"
-                                         referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                    {{ $ship['name'] }}
+                            @if ($allShips !== [])
+                                <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+                                    @foreach ($allShips as $s)
+                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }}">
+                                            <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
+                                                 referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
+                                            {{ $s['name'] }}@if ($s['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $s['count'] }}</span>@endif
+                                        </span>
+                                    @endforeach
                                 </div>
                             @endif
                         </div>

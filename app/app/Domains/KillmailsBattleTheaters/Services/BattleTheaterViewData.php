@@ -1184,6 +1184,23 @@ final class BattleTheaterViewData
                 }
             }
             $loss = $losses[$cid] ?? ['damage_taken' => 0, 'isk_lost' => 0.0, 'ship_losses' => 0, 'pod_losses' => 0];
+            // Every hull the pilot flew + damage attribution per hull.
+            // Lets the blade render the full reship chain with per-ship
+            // damage so reports aren't reduced to a single-hull fiction.
+            $shipsFlown = [];
+            $hulls = $shipsByCharacter[$cid] ?? [];
+            $damageHulls = $damageByCharacter[$cid] ?? [];
+            $allTids = array_unique(array_merge(array_keys($hulls), array_keys($damageHulls)));
+            foreach ($allTids as $tid) {
+                $shipsFlown[] = [
+                    'type_id' => (int) $tid,
+                    'name' => $shipNames[(int) $tid] ?? '#'.$tid,
+                    'count' => (int) ($hulls[$tid] ?? 0),
+                    'damage' => (int) ($damageHulls[$tid] ?? 0),
+                ];
+            }
+            usort($shipsFlown, fn ($a, $b) => $b['damage'] <=> $a['damage'] ?: $b['count'] <=> $a['count']);
+
             $bySide[$side][] = [
                 'character_id' => $cid,
                 'character_name' => $names[$cid] ?? 'Character #'.$cid,
@@ -1198,6 +1215,7 @@ final class BattleTheaterViewData
                 'pod_losses' => (int) $loss['pod_losses'],
                 'ship_type_id' => $primaryTid,
                 'ship_name' => $primaryTid ? ($shipNames[$primaryTid] ?? '#'.$primaryTid) : null,
+                'ships_flown' => $shipsFlown,
             ];
         }
         foreach ($bySide as $k => $rows) {
