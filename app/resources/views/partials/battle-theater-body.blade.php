@@ -629,6 +629,17 @@
                                 dmg · {{ $r['kills'] }}k
                                 @if ($r['final_blows'] > 0) / {{ $r['final_blows'] }}fb @endif
                             </div>
+                            @if (! empty($r['damage_taken']) || ! empty($r['isk_lost']))
+                                <div style="font-size:0.6rem;color:#9ca0a8;margin-top:3px;">
+                                    @if (! empty($r['damage_taken'])) took {{ number_format($r['damage_taken']) }} @endif
+                                    @if (! empty($r['isk_lost']))
+                                        · lost {{ $formatIsk((float) $r['isk_lost']) }}
+                                    @endif
+                                    @if (! empty($r['pod_losses']))
+                                        · pod{{ $r['pod_losses'] > 1 ? 's' : '' }}: {{ $r['pod_losses'] }}
+                                    @endif
+                                </div>
+                            @endif
                         </div>
                     </div>
                 @endforeach

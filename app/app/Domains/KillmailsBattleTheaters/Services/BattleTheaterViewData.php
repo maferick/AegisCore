@@ -169,7 +169,8 @@ final class BattleTheaterViewData
         $composition = $this->buildComposition($participants, $sides, $shipsByCharacter, $shipGroupNames);
         $mostValuableKills = $this->buildMostValuableKills($killFeed, $sides);
         $damageByCharacter = $this->buildDamageRollup($killmailIds);
-        $topDamage = $this->buildTopDamage($participants, $sides, $names, $shipsByCharacter, $damageByCharacter, $shipNames);
+        $losses = $this->buildLossRollup($killmailIds);
+        $topDamage = $this->buildTopDamage($participants, $sides, $names, $shipsByCharacter, $damageByCharacter, $losses, $shipNames);
         $rosterBySide = $this->buildRosterBySide($allianceRows, $sides);
         $flagshipLogos = $this->buildFlagshipLogos($allianceRows);
         $headerStats = $this->buildHeaderStats($participants);
@@ -549,6 +550,42 @@ final class BattleTheaterViewData
     }
 
     /**
+     * Per-character loss rollup in this battle:
+     *   {character_id → [damage_taken, isk_lost, ship_losses, pod_losses]}
+     * damage_taken  — damage the pilot soaked on their own killmails.
+     * isk_lost      — total_value of ship losses + pod losses.
+     * ship_losses   — count of non-capsule victim rows.
+     * pod_losses    — count of capsule victim rows.
+     *
+     * @param  list<int>  $killmailIds
+     * @return array<int, array{damage_taken:int,isk_lost:float,ship_losses:int,pod_losses:int}>
+     */
+    private function buildLossRollup(array $killmailIds): array
+    {
+        if ($killmailIds === []) {
+            return [];
+        }
+        $out = [];
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('victim_character_id')
+            ->selectRaw('victim_character_id AS cid, victim_damage_taken AS dmg, total_value AS isk, victim_ship_group_id AS gid')
+            ->get()
+            ->each(function ($row) use (&$out): void {
+                $cid = (int) $row->cid;
+                $out[$cid] = $out[$cid] ?? ['damage_taken' => 0, 'isk_lost' => 0.0, 'ship_losses' => 0, 'pod_losses' => 0];
+                $out[$cid]['damage_taken'] += (int) $row->dmg;
+                $out[$cid]['isk_lost'] += (float) $row->isk;
+                if ((int) $row->gid === 29) {
+                    $out[$cid]['pod_losses']++;
+                } else {
+                    $out[$cid]['ship_losses']++;
+                }
+            });
+        return $out;
+    }
+
+    /**
      * Per-character damage-by-ship: {character_id → {ship_type_id → damage_sum}}.
      * Used by top-damage to pick the ship a pilot actually dealt damage
      * in (e.g. reshipping between Monitor and Claymore — Monitor deals
@@ -607,13 +644,16 @@ final class BattleTheaterViewData
             ->get()
             ->keyBy('killmail_id');
 
-        // Collapse capsules into their parent ship kill. For each
-        // capsule km (ref_item_groups.id=29), find the same pilot's
-        // most recent non-capsule kill in the same theater within
-        // 120s; attach the capsule's totalValue to that ship's feed
-        // row and skip emitting the capsule as a separate row.
-        // Standalone pods (no matching ship kill in window) stay
-        // visible.
+        // Collapse capsules into their parent ship kill. Standalone
+        // pod kills are noise on battle reports — a pod-only row
+        // inflates the kill count and rarely tells you anything the
+        // ship loss hadn't already told you. For each capsule km
+        // (ref_item_groups.id=29), find the same pilot's nearest
+        // non-capsule loss *in the same battle* and attach. Prefer
+        // the nearest-earlier ship loss (pod follows ship); fall back
+        // to the nearest-later one when the pod arrived before the
+        // ship row was ingested. Standalone pods (no matching ship
+        // loss in the battle at all) stay visible.
         $capsuleSkip = [];                 // km_id => true
         $podAttachment = [];               // parent_km_id => ['ship_type_id' => X, 'total_value' => Y]
         $rowsByKm = $rows->keyBy('killmail_id');
@@ -626,22 +666,16 @@ final class BattleTheaterViewData
             }
             $capsuleAt = strtotime((string) $r->killed_at);
             $parent = null;
+            $bestDelta = PHP_INT_MAX;
             foreach ($rows as $other) {
-                if ((int) $other->killmail_id === (int) $r->killmail_id) {
-                    continue;
+                if ((int) $other->killmail_id === (int) $r->killmail_id) continue;
+                if ((int) ($other->ship_group_id ?? 0) === 29) continue;
+                if ((int) ($other->victim_character_id ?? 0) !== (int) $r->victim_character_id) continue;
+                $delta = abs($capsuleAt - strtotime((string) $other->killed_at));
+                if ($delta < $bestDelta) {
+                    $bestDelta = $delta;
+                    $parent = $other;
                 }
-                if ((int) ($other->ship_group_id ?? 0) === 29) {
-                    continue;
-                }
-                if ((int) ($other->victim_character_id ?? 0) !== (int) $r->victim_character_id) {
-                    continue;
-                }
-                $delta = $capsuleAt - strtotime((string) $other->killed_at);
-                if ($delta < 0 || $delta > 120) {
-                    continue;
-                }
-                $parent = $other;
-                break;
             }
             if ($parent !== null) {
                 $capsuleSkip[(int) $r->killmail_id] = true;
@@ -1120,6 +1154,7 @@ final class BattleTheaterViewData
         Collection $names,
         array $shipsByCharacter,
         array $damageByCharacter,
+        array $losses,
         Collection $shipNames,
     ): array {
         $bySide = [
@@ -1148,6 +1183,7 @@ final class BattleTheaterViewData
                     $primaryTid = (int) array_key_first($hulls);
                 }
             }
+            $loss = $losses[$cid] ?? ['damage_taken' => 0, 'isk_lost' => 0.0, 'ship_losses' => 0, 'pod_losses' => 0];
             $bySide[$side][] = [
                 'character_id' => $cid,
                 'character_name' => $names[$cid] ?? 'Character #'.$cid,
@@ -1156,6 +1192,10 @@ final class BattleTheaterViewData
                 'damage_done' => (int) $p->damage_done,
                 'kills' => (int) $p->kills,
                 'final_blows' => (int) $p->final_blows,
+                'damage_taken' => (int) $loss['damage_taken'],
+                'isk_lost' => (float) $loss['isk_lost'],
+                'ship_losses' => (int) $loss['ship_losses'],
+                'pod_losses' => (int) $loss['pod_losses'],
                 'ship_type_id' => $primaryTid,
                 'ship_name' => $primaryTid ? ($shipNames[$primaryTid] ?? '#'.$primaryTid) : null,
             ];
