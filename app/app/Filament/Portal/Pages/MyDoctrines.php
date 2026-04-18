@@ -220,28 +220,48 @@ class MyDoctrines extends Page
     }
 
     /**
-     * Per (hull, role), mark each doctrine as 'primary' or 'tail':
-     *   primary = share >= 0.50 (signature fit), OR
-     *             top-3 by scope_n AND share >= 0.15 (adopted common fit).
-     * Everything else goes into the expandable tail.
+     * Per role, mark each doctrine as 'primary' or 'tail'.
+     *
+     * Primary requires:
+     *   scope_n >= floor   (floor = max(10, role_leader_scope * 0.10))
+     *   AND (share >= 0.50  OR  (top-3 for its hull AND share >= 0.15))
+     *
+     * The role-wide scope floor prevents 9/18 = 50% share tying for
+     * primary rank alongside real doctrines with hundreds of scope
+     * observations. Tiny scopes still get a 10× floor rather than
+     * 0 so they don't surface one-off fits as doctrine.
      *
      * @param array<int,array<string,mixed>> $docs
      * @return array<int,array<string,mixed>>
      */
     private function classifyBuckets(array $docs): array
     {
-        $groups = [];
-        foreach ($docs as $i => $d) {
-            $groups[$d['role'] . '|' . $d['hull_type_id']][] = $i;
+        $leaderByRole = [];
+        foreach ($docs as $d) {
+            $r = $d['role'];
+            if (! isset($leaderByRole[$r]) || $d['scope_n'] > $leaderByRole[$r]) {
+                $leaderByRole[$r] = $d['scope_n'];
+            }
         }
-        foreach ($groups as $idxs) {
+        $floorByRole = [];
+        foreach ($leaderByRole as $r => $leader) {
+            $floorByRole[$r] = max(10, (int) ceil($leader * 0.10));
+        }
+
+        $hullGroups = [];
+        foreach ($docs as $i => $d) {
+            $hullGroups[$d['role'] . '|' . $d['hull_type_id']][] = $i;
+        }
+        foreach ($hullGroups as $idxs) {
             usort($idxs, fn ($a, $b) => $docs[$b]['scope_n'] <=> $docs[$a]['scope_n']);
             $rank = 0;
             foreach ($idxs as $i) {
                 $d = $docs[$i];
+                $floor = $floorByRole[$d['role']] ?? 10;
+                $meetsFloor = $d['scope_n'] >= $floor;
                 $isSignature = $d['share'] >= 0.50;
                 $isTopAdopted = $rank < 3 && $d['share'] >= 0.15;
-                $docs[$i]['bucket'] = ($isSignature || $isTopAdopted) ? 'primary' : 'tail';
+                $docs[$i]['bucket'] = ($meetsFloor && ($isSignature || $isTopAdopted)) ? 'primary' : 'tail';
                 $rank++;
             }
         }
