@@ -178,14 +178,18 @@ class Dashboard extends BaseDashboard
             ->selectRaw('k.killmail_id, k.total_value, k.victim_ship_type_id, rit.name AS ship_name, k.killed_at')
             ->first();
 
-        // Total ISK destroyed (damage-share weighted so split kills don't
-        // over-credit every attacker with the full value).
-        $iskDestroyedRaw = DB::table('killmail_attackers AS ka')
-            ->join('killmails AS k', 'k.killmail_id', '=', 'ka.killmail_id')
-            ->where('ka.character_id', $cid)
-            ->where('k.victim_damage_taken', '>', 0)
-            ->selectRaw('COALESCE(SUM(k.total_value * ka.damage_done / k.victim_damage_taken), 0) AS isk')
-            ->value('isk');
+        // Total ISK destroyed — full kill value per killmail the pilot
+        // was on, not damage-share weighted. Tackle / logi / ewar /
+        // bomber-assist pilots contribute zero damage but they're what
+        // let the kill happen; crediting only damage dealers erases
+        // every non-DPS role. Matches zKillboard convention.
+        $iskDestroyedRaw = DB::table('killmails AS k')
+            ->whereIn('k.killmail_id', function ($q) use ($cid): void {
+                $q->select('killmail_id')
+                    ->from('killmail_attackers')
+                    ->where('character_id', $cid);
+            })
+            ->sum('k.total_value');
 
         $iskLostRaw = DB::table('killmails')
             ->where('victim_character_id', $cid)

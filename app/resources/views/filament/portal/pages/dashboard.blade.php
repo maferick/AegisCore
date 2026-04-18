@@ -59,11 +59,12 @@
             {{-- Highlights strip --}}
             @php $h = $c['highlights'] ?? []; @endphp
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
-                <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:0.6rem 0.8rem;" title="Full value of every killmail you appear on (zKill convention). Differs from battle-report side totals — those count each killmail once per side; this counts it once per pilot.">
                     <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">ISK destroyed</div>
                     <div style="font-size:1.1rem; font-weight:600; color:#4ade80; margin-top:0.15rem;">
                         {{ $fmtIsk($h['isk_destroyed'] ?? 0) }}
                     </div>
+                    <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.15rem;">full KM value, every kill you're on</div>
                 </div>
                 <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
                     <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">ISK lost</div>
