@@ -1,0 +1,22 @@
+chk	chars_with_12	chars_with_wrong_count
+score row count per char	665	0
+chk	out_of_range
+final score bounds	0
+chk	chars_with_one_row	chars_with_multiple
+inference row count per char	36	0
+chk	confidence_band	n
+confidence_band values	high	24
+confidence_band values	low	2
+confidence_band values	medium	10
+chk	out_of_range
+confidence bounds	0
+chk	orphans
+inference orphans	0
+battle_id	alliance_id	primary_role_key	n	avg_score	avg_conf
+40365	99011978	mainline_dps	1	0.5301	0.5434
+40374	99003581	logi	4	0.7027	0.6645
+40537	1900696668	logi	4	0.6885	0.6539
+40541	99011223	mainline_dps	1	0.5750	0.6000
+40553	99011223	logi	13	0.8984	0.8113
+40553	99011223	mainline_dps	1	0.6620	0.6461
+40605	99012122	logi	12	0.8855	0.8016
