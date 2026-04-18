@@ -226,7 +226,29 @@ final class BattleTheaterViewData
                 $theater->id,
                 $participants->pluck('alliance_id')->filter()->unique()->values()->all(),
             ),
+            // Per-killmail role: (killmail_id → character_id → role_key)
+            // sourced from killmail_pilot_role. Lets the kill feed render
+            // the role the pilot was flying on THIS killmail rather than
+            // the battle-level aggregate.
+            'role_by_killmail_character' => $this->loadKillmailRoleMap($theater->id),
         ];
+    }
+
+    /**
+     * @return array<int, array<int, string>>
+     */
+    private function loadKillmailRoleMap(int $theaterId): array
+    {
+        $rows = DB::table('killmail_pilot_role AS kpr')
+            ->join('battle_theater_killmails AS btk', 'btk.killmail_id', '=', 'kpr.killmail_id')
+            ->where('btk.theater_id', $theaterId)
+            ->select('kpr.killmail_id', 'kpr.character_id', 'kpr.role_key')
+            ->get();
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r->killmail_id][(int) $r->character_id] = (string) $r->role_key;
+        }
+        return $out;
     }
 
     /**

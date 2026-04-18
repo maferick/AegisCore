@@ -58,16 +58,24 @@
     // assignments fire; every other pilot gets no badge (silent
     // per Spec 5 epistemic stance).
     $roleByChar = $role_by_character ?? [];
+    $roleByKmChar = $role_by_killmail_character ?? [];
     $roleLabel = fn (string $r): string => match ($r) {
         'fc' => 'FC',
         'logi' => 'Logi',
         'mainline_dps' => 'DPS',
+        'tackle' => 'Tackle',
+        'bomber' => 'Bomber',
+        'command' => 'Cmd',
+        'other' => '',
         default => strtoupper($r),
     };
     $roleBadgeStyle = fn (string $r): string => match ($r) {
         'fc' => 'background:rgba(202,138,4,0.25);color:#fde047;border:1px solid rgba(250,204,21,0.35);box-shadow:0 0 4px rgba(250,204,21,0.35);',
         'logi' => 'background:rgba(5,150,105,0.2);color:#6ee7b7;border:1px solid rgba(16,185,129,0.3);',
         'mainline_dps' => 'background:rgba(30,64,175,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.3);',
+        'tackle' => 'background:rgba(8,145,178,0.25);color:#67e8f9;border:1px solid rgba(14,165,233,0.35);',
+        'bomber' => 'background:rgba(234,88,12,0.25);color:#fdba74;border:1px solid rgba(249,115,22,0.35);',
+        'command' => 'background:rgba(168,85,247,0.25);color:#f0abfc;border:1px solid rgba(192,132,252,0.35);',
         default => 'background:rgba(71,85,105,0.25);color:#cbd5e1;border:1px solid rgba(100,116,139,0.3);',
     };
     $roleBadge = function (int $cid) use ($roleByChar, $roleLabel, $roleBadgeStyle): string {
@@ -75,6 +83,18 @@
         if ($role === null) return '';
         return '<span style="display:inline-block;padding:1px 5px;margin-left:5px;font-size:0.6rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;line-height:1;border-radius:8px;vertical-align:middle;'
             . $roleBadgeStyle($role) . '">' . $roleLabel($role) . '</span>';
+    };
+    // Per-killmail badge: uses killmail_pilot_role so a reshipping pilot
+    // shows the role they had on THIS killmail rather than the battle
+    // aggregate. Falls back to no badge when the pilot's ship on this
+    // killmail has no role mapping ('other' or unmapped hull).
+    $roleBadgeForKm = function (int $kmId, int $cid) use ($roleByKmChar, $roleLabel, $roleBadgeStyle): string {
+        $role = $roleByKmChar[$kmId][$cid] ?? null;
+        if ($role === null || $role === 'other') return '';
+        $label = $roleLabel($role);
+        if ($label === '') return '';
+        return '<span style="display:inline-block;padding:1px 5px;margin-left:5px;font-size:0.6rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;line-height:1;border-radius:8px;vertical-align:middle;'
+            . $roleBadgeStyle($role) . '">' . $label . '</span>';
     };
 
     $blocA = $sides->sideABlocId ? ($blocs[$sides->sideABlocId]->display_name ?? null) : null;
@@ -732,7 +752,12 @@
             @endif
 
             <div class="km-attacker-info">
-                <div class="km-attacker-name">{{ $km['victim_name'] }}</div>
+                <div class="km-attacker-name">
+                    {{ $km['victim_name'] }}
+                    @if ($km['victim_id'])
+                        {!! $roleBadgeForKm((int) $km['killmail_id'], (int) $km['victim_id']) !!}
+                    @endif
+                </div>
                 <div class="km-attacker-corp">
                     lost a <span style="color:#e5e5e7;">{{ $km['ship_name'] }}</span>@if (! empty($km['pod_ship_type_id']))<span style="color:#9ca0a8;"> + Capsule</span>@endif
                     @if ($km['victim_alliance_id'])
@@ -744,6 +769,9 @@
                     <div class="km-attacker-ship">
                         final blow:
                         <span style="color:#e5e5e7;">{{ $km['final_blow_name'] }}</span>
+                        @if (! empty($km['final_blow_char_id']))
+                            {!! $roleBadgeForKm((int) $km['killmail_id'], (int) $km['final_blow_char_id']) !!}
+                        @endif
                         @if ($km['final_blow_alliance_id'])
                             ({{ $names[$km['final_blow_alliance_id']] ?? '#'.$km['final_blow_alliance_id'] }})
                         @endif
