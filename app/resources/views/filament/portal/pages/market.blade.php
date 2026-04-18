@@ -64,11 +64,11 @@
                         @foreach ($markup as $r)
                             <tr style="border-top:1px solid rgba(255,255,255,0.05);">
                                 <td style="padding:0.35rem 0.5rem; color:#e5e5e7;">
-                                    <span style="display:inline-flex; align-items:center; gap:0.4rem;">
+                                    <a href="/portal/market/{{ $r['type_id'] }}" style="display:inline-flex; align-items:center; gap:0.4rem; color:#e5e5e7; text-decoration:none;">
                                         <img src="https://images.evetech.net/types/{{ $r['type_id'] }}/icon?size=32"
                                              referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:3px;" alt="">
                                         {{ $r['type_name'] }}
-                                    </span>
+                                    </a>
                                 </td>
                                 <td style="padding:0.35rem 0.5rem; text-align:right; color:#fca5a5;">{{ $fmtIsk($r['hub_sell_price']) }}</td>
                                 <td style="padding:0.35rem 0.5rem; text-align:right; color:#9ca3af;">{{ $fmtIsk($r['jita_sell_price']) }}</td>
@@ -101,11 +101,11 @@
                         @foreach ($cheaper as $r)
                             <tr style="border-top:1px solid rgba(255,255,255,0.05);">
                                 <td style="padding:0.35rem 0.5rem; color:#e5e5e7;">
-                                    <span style="display:inline-flex; align-items:center; gap:0.4rem;">
+                                    <a href="/portal/market/{{ $r['type_id'] }}" style="display:inline-flex; align-items:center; gap:0.4rem; color:#e5e5e7; text-decoration:none;">
                                         <img src="https://images.evetech.net/types/{{ $r['type_id'] }}/icon?size=32"
                                              referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:3px;" alt="">
                                         {{ $r['type_name'] }}
-                                    </span>
+                                    </a>
                                 </td>
                                 <td style="padding:0.35rem 0.5rem; text-align:right; color:#86efac;">{{ $fmtIsk($r['hub_sell_price']) }}</td>
                                 <td style="padding:0.35rem 0.5rem; text-align:right; color:#9ca3af;">{{ $fmtIsk($r['jita_sell_price']) }}</td>
@@ -136,11 +136,11 @@
                         @foreach ($missing as $r)
                             <tr style="border-top:1px solid rgba(255,255,255,0.05);">
                                 <td style="padding:0.35rem 0.5rem; color:#e5e5e7;">
-                                    <span style="display:inline-flex; align-items:center; gap:0.4rem;">
+                                    <a href="/portal/market/{{ $r['type_id'] }}" style="display:inline-flex; align-items:center; gap:0.4rem; color:#e5e5e7; text-decoration:none;">
                                         <img src="https://images.evetech.net/types/{{ $r['type_id'] }}/icon?size=32"
                                              referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:3px;" alt="">
                                         {{ $r['type_name'] }}
-                                    </span>
+                                    </a>
                                 </td>
                                 <td style="padding:0.35rem 0.5rem; text-align:right; color:#9ca3af;">{{ $fmtIsk($r['jita_sell_price']) }}</td>
                                 <td style="padding:0.35rem 0.5rem; text-align:right; color:#cbd5e1;">{{ number_format($r['jita_sell_volume'] ?? 0) }}</td>

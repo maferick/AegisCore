@@ -25,6 +25,26 @@ final class MarketHubComparisonService
     private const CACHE_TTL_SECONDS = 300;
 
     /**
+     * Categories we exclude from the overview because they're not
+     * fleet-ops / supply-chain relevant:
+     *   30  Apparel (clothing, tattoos, portraits)
+     *   63  Special Edition Assets (collectibles)
+     *   91  SKINs (cosmetics)
+     *   2118 Personalization (ship SKIN design elements)
+     */
+    private const EXCLUDED_CATEGORIES = [30, 63, 91, 2118];
+
+    /**
+     * Specific groups within otherwise-useful categories that are
+     * player/mission trash, not logistics. Keeps the rest of
+     * Commodity (filaments, mutaplasmids, construction components,
+     * etc.) visible.
+     *   280  General — Tobacco, Spirits, Antibiotics, Quafe
+     *   526  Commodities — mission loot, corpses, books, vouchers
+     */
+    private const EXCLUDED_GROUPS = [280, 526];
+
+    /**
      * Best price per (type_id, side) for a hub. Keyed by the hub's
      * location_id (e.g. 60003760 for Jita IV-4). Returns
      *   [type_id => ['sell' => ['price'=>..., 'volume'=>...], 'buy' => ...]]
@@ -102,11 +122,17 @@ final class MarketHubComparisonService
         $allTypeIds = array_values(array_unique(array_merge(array_keys($hub), array_keys($jita))));
         if ($allTypeIds === []) return [];
 
-        // Resolve names once.
-        $names = DB::table('ref_item_types')
-            ->whereIn('id', $allTypeIds)
-            ->pluck('name', 'id')
-            ->all();
+        // Resolve names + filter noise categories/groups in one pass.
+        $rows = DB::table('ref_item_types AS rit')
+            ->join('ref_item_groups AS rig', 'rig.id', '=', 'rit.group_id')
+            ->whereIn('rit.id', $allTypeIds)
+            ->whereNotIn('rig.category_id', self::EXCLUDED_CATEGORIES)
+            ->whereNotIn('rit.group_id', self::EXCLUDED_GROUPS)
+            ->select('rit.id', 'rit.name')
+            ->get();
+        $names = $rows->pluck('name', 'id')->all();
+        // After filtering, only keep the type_ids we kept.
+        $allTypeIds = array_map('intval', array_keys($names));
 
         $out = [];
         foreach ($allTypeIds as $tid) {
