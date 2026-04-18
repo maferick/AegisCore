@@ -39,11 +39,12 @@
             </div>
 
             @php
-                // Equal-height history lists. Both sides share the same
-                // max-height scroll container + identical row paddings
-                // so the two columns render as a matched pair.
-                $listStyle = 'display:flex; flex-direction:column; gap:0.35rem; max-height:240px; overflow-y:auto; padding-right:0.25rem;';
-                $rowStyle  = 'display:flex; gap:0.5rem; align-items:center; padding:0.35rem 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:0.8rem;';
+                // Equal-sized history lists. Scaled up from the earlier
+                // mismatch: 28px avatars + roomier padding + 360px
+                // scroll container. Both columns share these values
+                // so they render as a matched pair.
+                $listStyle = 'display:flex; flex-direction:column; gap:0.5rem; max-height:360px; overflow-y:auto; padding-right:0.25rem;';
+                $rowStyle  = 'display:flex; gap:0.6rem; align-items:center; padding:0.45rem 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:0.85rem;';
             @endphp
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem; align-items:stretch;">
                 {{-- Alliance history --}}
@@ -57,7 +58,7 @@
                                 <div style="{{ $rowStyle }}">
                                     <img src="https://images.evetech.net/alliances/{{ $a['alliance_id'] }}/logo?size=32"
                                          referrerpolicy="no-referrer"
-                                         style="width:22px; height:22px; border-radius:3px; flex-shrink:0;" alt="">
+                                         style="width:28px; height:28px; border-radius:4px; flex-shrink:0;" alt="">
                                     <div style="flex:1; min-width:0;">
                                         <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                             {{ $a['alliance_name'] }}
@@ -83,7 +84,7 @@
                                 <div style="{{ $rowStyle }}">
                                     <img src="https://images.evetech.net/corporations/{{ $row['corp_id'] }}/logo?size=32"
                                          referrerpolicy="no-referrer"
-                                         style="width:22px; height:22px; border-radius:3px; flex-shrink:0;" alt="">
+                                         style="width:28px; height:28px; border-radius:4px; flex-shrink:0;" alt="">
                                     <div style="flex:1; min-width:0;">
                                         <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                             {{ $row['corp_name'] }}
