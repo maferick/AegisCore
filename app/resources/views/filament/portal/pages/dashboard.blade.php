@@ -191,16 +191,23 @@
 
             {{-- Top hulls --}}
             @if (! empty($c['top_hulls']))
-                <div style="margin-top:1rem;">
-                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.5rem;">Top hulls flown</h3>
-                    <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+                <div style="margin-top:1.25rem;">
+                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Top hulls flown</h3>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem;">
                         @foreach ($c['top_hulls'] as $h)
-                            <span style="display:inline-flex; align-items:center; gap:0.4rem; font-size:0.8rem;">
-                                <img src="https://images.evetech.net/types/{{ $h['type_id'] }}/icon?size=32"
-                                     referrerpolicy="no-referrer" style="width:22px;height:22px;border-radius:3px;" alt="">
-                                {{ $h['name'] }}
-                                <span style="color:#7a7a82; font-size:0.85em;">×{{ number_format($h['n']) }}</span>
-                            </span>
+                            <div style="display:flex; gap:0.75rem; align-items:center; padding:0.7rem 0.9rem; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:6px;">
+                                <img src="https://images.evetech.net/types/{{ $h['type_id'] }}/icon?size=64"
+                                     referrerpolicy="no-referrer"
+                                     style="width:48px; height:48px; border-radius:6px; flex-shrink:0;" alt="">
+                                <div style="flex:1; min-width:0;">
+                                    <div style="font-size:0.95rem; font-weight:600; color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        {{ $h['name'] }}
+                                    </div>
+                                    <div style="font-size:0.78rem; color:#9ca3af; margin-top:0.1rem;">
+                                        ×<span style="color:#4fd0d0; font-weight:600;">{{ number_format($h['n']) }}</span>
+                                    </div>
+                                </div>
+                            </div>
                         @endforeach
                     </div>
                 </div>
