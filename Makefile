@@ -401,6 +401,11 @@ battle-seed-truth:
 	@test -n "$(USER)" || (echo "USER=<user_id> required" && exit 1)
 	$(COMPOSE) exec -T php-fpm php artisan battle:seed-truth-attestations --user-id=$(USER)
 
+# Spec 8 — role-tied auto-doctrine detection.
+# Overrides: DOCTRINE_ARGS="--window-days=14 --strict-confidence=0.80 --dry-run"
+battle-doctrines:
+	$(COMPOSE) exec -T php-fpm php artisan battle:compute-auto-doctrines $(DOCTRINE_ARGS)
+
 # Default weight label if caller doesn't set one
 WEIGHT_LABEL ?= v1_calibrated_seed
 

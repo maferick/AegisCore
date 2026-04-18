@@ -245,6 +245,16 @@ Schedule::command('battle:refresh-priors')
     ->withoutOverlapping(120)
     ->name('refresh-character-role-priors');
 
+// Spec 8 role-tied doctrine auto-detector. Runs 45 minutes after
+// the priors refresh so Spec 5 re-runs triggered by new priors
+// have time to settle.
+Schedule::command('battle:compute-auto-doctrines')
+    ->dailyAt('04:00')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(120)
+    ->name('compute-auto-doctrines');
+
 // NB: battle:process-pending is NOT scheduled here — it shells
 // out to `docker compose run` for each (battle, alliance) pair,
 // and the Laravel scheduler container has no docker CLI / no
