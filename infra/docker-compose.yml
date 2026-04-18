@@ -1162,7 +1162,7 @@ services:
       # Shared secret checked on every POST. Laravel sends the same
       # value via X-Intel-Copilot-Token. Leave empty in pure-dev env
       # to disable auth (Docker-network isolation is still the outer ring).
-      INTEL_COPILOT_API_TOKEN: "${INTEL_COPILOT_API_TOKEN}"
+      INTEL_COPILOT_API_TOKEN: "${INTEL_COPILOT_API_TOKEN:-}"
       # LLM provider — pick 'ollama' for the local model (zero per-request
       # cost, nothing leaves the stack) or 'claude' for the Anthropic API.
       # Unset = auto: prefer Ollama when OLLAMA_URL is set, else Claude
