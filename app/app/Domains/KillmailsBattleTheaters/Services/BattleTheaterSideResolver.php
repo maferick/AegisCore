@@ -124,14 +124,29 @@ final class BattleTheaterSideResolver
         // so the resolver can still place blobby third parties even
         // when the operator hasn't explicitly tagged them.
         if ($viewerBlocId !== null) {
-            return $this->resolveByViewerAffinity(
-                theater: $theater,
-                participants: $participants,
-                allianceToBloc: $allianceToBloc,
-                iskPerBloc: $iskPerBloc,
-                viewer: $viewer,
-                viewerBlocId: $viewerBlocId,
-            );
+            // Only apply viewer-affinity framing if the viewer's bloc
+            // actually fielded pilots. Otherwise we were stamping
+            // "Side A: WinterCo / 0 pilots / 0 kills" on random fights
+            // the viewer's bloc never touched. Fall through to neutral
+            // kill-data resolution in that case.
+            $viewerBlocOnField = false;
+            foreach ($participants as $p) {
+                $aid = (int) ($p->alliance_id ?? 0);
+                if ($aid > 0 && ($allianceToBloc[$aid] ?? null) === $viewerBlocId) {
+                    $viewerBlocOnField = true;
+                    break;
+                }
+            }
+            if ($viewerBlocOnField) {
+                return $this->resolveByViewerAffinity(
+                    theater: $theater,
+                    participants: $participants,
+                    allianceToBloc: $allianceToBloc,
+                    iskPerBloc: $iskPerBloc,
+                    viewer: $viewer,
+                    viewerBlocId: $viewerBlocId,
+                );
+            }
         }
 
         // Anonymous / no-viewer-bloc path — everything below treats

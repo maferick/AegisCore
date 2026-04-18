@@ -13,6 +13,8 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
@@ -45,10 +47,35 @@ class Battles extends Page implements HasTable
 
     public function table(Table $table): Table
     {
+        // Resolve viewer's corp / alliance / bloc-sibling alliances once
+        // so the table can tag battles the viewer actually fought in.
+        [$viewerCorpId, $viewerAllianceIds] = $this->resolveViewerEntities();
+
         return $table
-            ->query(fn (): Builder => BattleTheater::query()
-                ->with(['primarySystem:id,name', 'region:id,name']))
+            ->query(function () use ($viewerCorpId, $viewerAllianceIds): Builder {
+                $q = BattleTheater::query()->with(['primarySystem:id,name', 'region:id,name']);
+                if ($viewerCorpId !== null || $viewerAllianceIds !== []) {
+                    $sub = DB::table('battle_theater_participants')
+                        ->selectRaw('1')
+                        ->whereColumn('battle_theater_participants.theater_id', 'battle_theaters.id');
+                    if ($viewerAllianceIds !== []) {
+                        $sub->where(function ($w) use ($viewerCorpId, $viewerAllianceIds): void {
+                            $w->whereIn('battle_theater_participants.alliance_id', $viewerAllianceIds);
+                            if ($viewerCorpId !== null) {
+                                $w->orWhere('battle_theater_participants.corporation_id', $viewerCorpId);
+                            }
+                        });
+                    } elseif ($viewerCorpId !== null) {
+                        $sub->where('battle_theater_participants.corporation_id', $viewerCorpId);
+                    }
+                    $q->selectRaw('battle_theaters.*, EXISTS('.$sub->toSql().') AS viewer_involved', $sub->getBindings());
+                } else {
+                    $q->selectRaw('battle_theaters.*, 0 AS viewer_involved');
+                }
+                return $q;
+            })
             ->defaultSort('end_time', 'desc')
+            ->recordClasses(fn (BattleTheater $r): ?string => ((int) ($r->viewer_involved ?? 0) === 1) ? 'bt-involved-row' : null)
             ->columns([
                 TextColumn::make('label')
                     ->label('Battle')
@@ -98,6 +125,46 @@ class Battles extends Page implements HasTable
                     ->toggleable(),
             ])
             ->recordUrl(fn (BattleTheater $record): string => BattleTheaterDetail::getUrl(['record' => $record->id]));
+    }
+
+    /**
+     * @return array{0: int|null, 1: list<int>}  [viewerCorpId, viewerAllianceIds]
+     *
+     * viewerAllianceIds includes the viewer's own alliance plus every
+     * alliance tagged with the same bloc_id in coalition_entity_labels,
+     * so the blue highlight fires for any bloc-friendly participation —
+     * not just the viewer's own alliance.
+     */
+    private function resolveViewerEntities(): array
+    {
+        $user = Auth::user();
+        if ($user === null) return [null, []];
+        $char = $user->characters()->first();
+        if ($char === null) return [null, []];
+
+        $corpId = (int) ($char->corporation_id ?? 0) ?: null;
+        $allyId = (int) ($char->alliance_id ?? 0) ?: null;
+
+        $allianceIds = [];
+        if ($allyId !== null) {
+            $allianceIds[] = $allyId;
+            $blocId = DB::table('coalition_entity_labels')
+                ->where('entity_type', 'alliance')
+                ->where('entity_id', $allyId)
+                ->where('is_active', 1)
+                ->value('bloc_id');
+            if ($blocId) {
+                $siblings = DB::table('coalition_entity_labels')
+                    ->where('entity_type', 'alliance')
+                    ->where('bloc_id', $blocId)
+                    ->where('is_active', 1)
+                    ->pluck('entity_id')
+                    ->map(fn ($v) => (int) $v)
+                    ->all();
+                $allianceIds = array_values(array_unique(array_merge($allianceIds, $siblings)));
+            }
+        }
+        return [$corpId, $allianceIds];
     }
 
     /**
