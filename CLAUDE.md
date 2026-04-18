@@ -53,3 +53,29 @@ Add new ADR rather than mutate overlay of existing one.
 ## Auto-memory
 
 Persistent notes in `/root/.claude/projects/-opt-AegisCore/memory/` (index at `MEMORY.md`). Feedback that survives sessions — user preferences, incident reasons, external system refs — goes there, not here.
+
+## Autonomy
+
+Default: execute without confirmation. Commit when done. Only stop to ask when:
+
+- **Destructive + irreversible**: `rm -rf`, force-push to main, `DROP TABLE` on populated tables, amending published commits, `git reset --hard` over uncommitted work, InnoDB config change (→ `make safe-restart-mariadb` only).
+- **Spec ambiguity with >1 reasonable reading** that materially changes output (not cosmetic).
+- **External side effects**: PR create, Slack/email, production deploy, pushing to remote branches other than already-tracked.
+- **Novel dual-use security context** without clear authorization.
+
+For everything else (code writes, migrations the user asked for, running workers, rebuilds, commits to local branches, verification artifacts): decide, execute, report. No "want me to proceed?" preambles.
+
+## Shortcut decisions
+
+Pre-approved defaults — apply without asking:
+
+- **Schema PK bugs uncovered mid-spec**: migrate to fix, don't defer. Mirror the Spec 3 fix pattern for battle_sub_fleets.
+- **Latent Spec 1 issues surfaced by later specs**: fix forward (new migration), commit separately with the reason called out in commit msg.
+- **v0 coefficient tuning**: never during implementation, even if first-run looks wrong. Document observations in `verification/<spec>/diagnostic_first_run.md` for the calibration spec.
+- **Verification artifacts**: always commit to `verification/<spec>/` (README + semantic_checks.sql + run_batch.sh + hand audits). Force-add `/tmp/` log captures that are gitignored.
+- **Truth-set / ground-truth files**: caveman prose acceptable, no formatting review needed.
+- **Env var warnings on `docker compose` invocations**: silence with `${VAR:-}` default rather than editing `.env`.
+- **`'other'` / NULL distinction in category enums**: `'other'` = known-but-outside-scope (first-class); `NULL` = unobserved. Never conflate.
+- **Idempotency before commit**: every new worker gets a re-run byte-identical check before the feature commit.
+- **FK / CHECK failures mid-migration**: investigate the referenced table first (role keys, column types), don't silently relax the constraint.
+- **Caveman mode**: stays active until explicit "stop caveman" or "normal mode". Tool call planning allowed to be verbose, user-facing output stays terse.
