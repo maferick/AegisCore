@@ -267,9 +267,17 @@ return [
         ],
         'prod' => [
             'supervisor-1' => [
-                'maxProcesses' => 5,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
+                // 15 workers sustain enough ESI concurrency to drain
+                // the 1-2k backlogs that follow each big battle sweep
+                // in ~1h without coming near the 100-errors-per-60s
+                // global budget. Successful calls burn zero error
+                // credit; per-route 429s are rare on the endpoints we
+                // hit (character/corp/alliance history + zkill catchup).
+                // Revisit if error_limit stays warm under sustained
+                // load.
+                'maxProcesses' => 15,
+                'balanceMaxShift' => 3,
+                'balanceCooldown' => 2,
             ],
         ],
         // Vendor-default fallbacks — in case someone sets APP_ENV to
@@ -277,9 +285,9 @@ return [
         // with `APP_ENV=production php artisan horizon`).
         'production' => [
             'supervisor-1' => [
-                'maxProcesses' => 5,
-                'balanceMaxShift' => 1,
-                'balanceCooldown' => 3,
+                'maxProcesses' => 15,
+                'balanceMaxShift' => 3,
+                'balanceCooldown' => 2,
             ],
         ],
         'local' => [
