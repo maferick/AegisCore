@@ -11,24 +11,21 @@ use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
- * /portal/my-doctrines — doctrines the viewer's corp has adopted.
+ * /portal/my-doctrines — three-tier doctrine view:
+ *   - My Corp      (corp-scoped adopters)
+ *   - My Alliance  (alliance-scoped adopters)
+ *   - My Bloc      (bloc-scoped adopters via coalition_entity_labels)
  *
- * Doctrines are global (one canonical row per fit). Scoping via
- * auto_doctrine_adopters join filtered on viewer's corporation_id.
- * Only is_active=1 doctrines show up (confidence + floor gate).
+ * Each card shows global vs adopter-scope module deltas + an
+ * EFT-format export block + buyall shopping list for copy-paste.
  */
 class MyDoctrines extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-clipboard-document-list';
-
     protected static ?string $navigationLabel = 'My Doctrines';
-
     protected static string|UnitEnum|null $navigationGroup = 'Account';
-
     protected static ?int $navigationSort = 70;
-
-    protected static ?string $title = 'My Corp Doctrines';
-
+    protected static ?string $title = 'My Doctrines';
     protected string $view = 'filament.portal.pages.my-doctrines';
 
     public static function shouldRegisterNavigation(): bool
@@ -40,40 +37,80 @@ class MyDoctrines extends Page
     {
         $user = Auth::user();
         if ($user === null) {
-            return ['doctrines' => [], 'corp_name' => null, 'corp_id' => null];
+            return $this->empty(null, null, null);
+        }
+        $char = $user->characters()->first();
+        if ($char === null) {
+            return $this->empty(null, null, null);
         }
 
-        $corpId = (int) ($user->characters()->whereNotNull('corporation_id')->value('corporation_id') ?? 0);
-        if ($corpId <= 0) {
-            return ['doctrines' => [], 'corp_name' => null, 'corp_id' => null];
+        $corpId = (int) ($char->corporation_id ?? 0);
+        $allianceId = (int) ($char->alliance_id ?? 0);
+        $blocId = null;
+        if ($allianceId > 0) {
+            $blocId = DB::table('coalition_entity_labels')
+                ->where('entity_type', 'alliance')
+                ->where('entity_id', $allianceId)
+                ->where('is_active', 1)
+                ->value('bloc_id');
+            $blocId = $blocId ? (int) $blocId : null;
         }
 
-        $corpName = DB::table('esi_entity_names')
-            ->where('entity_id', $corpId)
-            ->where('category', 'corporation')
-            ->value('name') ?? ('Corp #' . $corpId);
+        $corpName = $corpId > 0
+            ? (DB::table('esi_entity_names')->where('entity_id', $corpId)->where('category', 'corporation')->value('name') ?? ('Corp #' . $corpId))
+            : null;
+        $allianceName = $allianceId > 0
+            ? (DB::table('esi_entity_names')->where('entity_id', $allianceId)->where('category', 'alliance')->value('name') ?? ('Alliance #' . $allianceId))
+            : null;
+        $blocName = $blocId
+            ? (DB::table('coalition_blocs')->where('id', $blocId)->value('display_name') ?? ('Bloc #' . $blocId))
+            : null;
 
-        $rows = DB::table('auto_doctrines AS d')
-            ->join('auto_doctrine_adopters AS a', 'a.doctrine_id', '=', 'd.id')
+        return [
+            'corp_id' => $corpId ?: null,
+            'corp_name' => $corpName,
+            'alliance_id' => $allianceId ?: null,
+            'alliance_name' => $allianceName,
+            'bloc_id' => $blocId,
+            'bloc_name' => $blocName,
+            'corp_doctrines' => $corpId ? $this->loadDoctrines('auto_doctrine_adopters', 'corporation_id', $corpId, $corpId) : [],
+            'alliance_doctrines' => $allianceId ? $this->loadDoctrines('auto_doctrine_alliance_adopters', 'alliance_id', $allianceId, $corpId) : [],
+            'bloc_doctrines' => $blocId ? $this->loadDoctrines('auto_doctrine_bloc_adopters', 'bloc_id', $blocId, $corpId) : [],
+        ];
+    }
+
+    private function empty(?int $cid, ?int $aid, ?int $bid): array
+    {
+        return [
+            'corp_id' => $cid, 'corp_name' => null,
+            'alliance_id' => $aid, 'alliance_name' => null,
+            'bloc_id' => $bid, 'bloc_name' => null,
+            'corp_doctrines' => [], 'alliance_doctrines' => [], 'bloc_doctrines' => [],
+        ];
+    }
+
+    private function loadDoctrines(string $table, string $scopeColumn, int $scopeId, int $viewerCorpId): array
+    {
+        $rows = DB::table("{$table} AS a")
+            ->join('auto_doctrines AS d', 'd.id', '=', 'a.doctrine_id')
             ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'd.hull_type_id')
             ->where('d.is_active', 1)
-            ->where('a.corporation_id', $corpId)
+            ->where("a.{$scopeColumn}", $scopeId)
             ->orderBy('d.role_key')
             ->orderByDesc('a.observation_count')
             ->select(
                 'd.id', 'd.hull_type_id', 'd.role_key', 'd.canonical_name',
                 'd.observation_count AS global_n',
                 'd.confidence', 'd.last_seen_at',
-                'a.observation_count AS corp_n',
-                'a.last_seen_at AS corp_last_seen',
+                'a.observation_count AS scope_n',
+                'a.last_seen_at AS scope_last_seen',
                 'rit.name AS hull_name'
             )
             ->get();
 
+        if ($rows->isEmpty()) return [];
         $ids = $rows->pluck('id')->all();
 
-        // Global core modules (what ≥80% of ALL corps fielding the
-        // doctrine have in common).
         $globalModules = DB::table('auto_doctrine_modules AS m')
             ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'm.type_id')
             ->whereIn('m.doctrine_id', $ids)
@@ -81,84 +118,102 @@ class MyDoctrines extends Page
             ->get()
             ->groupBy('doctrine_id');
 
-        // This corp's own core modules per doctrine (≥60% cutoff, needs
-        // ≥3 observations). Lets the view surface corp-specific
-        // variations that diverge from the global core.
-        $corpModules = DB::table('auto_doctrine_adopter_modules AS m')
-            ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'm.type_id')
-            ->whereIn('m.doctrine_id', $ids)
-            ->where('m.corporation_id', $corpId)
-            ->select('m.doctrine_id', 'm.type_id', 'm.flag_category', 'm.quantity', 'm.frequency', 'rit.name AS mod_name')
-            ->get()
-            ->groupBy('doctrine_id');
+        $corpModules = collect();
+        if ($viewerCorpId > 0) {
+            $corpModules = DB::table('auto_doctrine_adopter_modules AS m')
+                ->leftJoin('ref_item_types AS rit', 'rit.id', '=', 'm.type_id')
+                ->whereIn('m.doctrine_id', $ids)
+                ->where('m.corporation_id', $viewerCorpId)
+                ->select('m.doctrine_id', 'm.type_id', 'm.flag_category', 'm.quantity', 'm.frequency', 'rit.name AS mod_name')
+                ->get()
+                ->groupBy('doctrine_id');
+        }
 
-        $doctrines = [];
+        $out = [];
         foreach ($rows as $r) {
             $globals = $globalModules->get($r->id) ?? collect();
             $corps   = $corpModules->get($r->id) ?? collect();
 
-            // Merge global + corp — render each module with "global"
-            // and "your corp" flags so the blade can show a single
-            // consolidated list without duplicates.
             $byKey = [];
             foreach ($globals as $m) {
                 $k = "{$m->type_id}|{$m->flag_category}";
                 $byKey[$k] = [
-                    'type_id' => $m->type_id,
+                    'type_id' => (int) $m->type_id,
                     'name' => $m->mod_name,
                     'slot' => $m->flag_category,
                     'quantity' => (int) $m->quantity,
-                    'global' => true,
-                    'corp'   => false,
-                    'global_freq' => (float) $m->frequency,
-                    'corp_freq' => null,
+                    'global' => true, 'corp' => false,
                 ];
             }
             foreach ($corps as $m) {
                 $k = "{$m->type_id}|{$m->flag_category}";
                 if (isset($byKey[$k])) {
                     $byKey[$k]['corp'] = true;
-                    $byKey[$k]['corp_freq'] = (float) $m->frequency;
-                    // Prefer the corp's quantity if it diverges; the
-                    // corp number is what they actually fly.
                     $byKey[$k]['quantity'] = (int) $m->quantity;
                 } else {
                     $byKey[$k] = [
-                        'type_id' => $m->type_id,
+                        'type_id' => (int) $m->type_id,
                         'name' => $m->mod_name,
                         'slot' => $m->flag_category,
                         'quantity' => (int) $m->quantity,
-                        'global' => false,
-                        'corp'   => true,
-                        'global_freq' => null,
-                        'corp_freq' => (float) $m->frequency,
+                        'global' => false, 'corp' => true,
                     ];
                 }
             }
-            $merged = collect(array_values($byKey))
+
+            $modules = collect(array_values($byKey))
                 ->sortBy([['slot', 'asc'], ['name', 'asc']])
                 ->values()
                 ->all();
 
-            $doctrines[] = [
+            $out[] = [
                 'id' => $r->id,
                 'role' => $r->role_key,
-                'hull_type_id' => $r->hull_type_id,
+                'hull_type_id' => (int) $r->hull_type_id,
                 'hull_name' => $r->hull_name,
                 'label' => $r->canonical_name,
-                'corp_n' => (int) $r->corp_n,
+                'scope_n' => (int) $r->scope_n,
                 'global_n' => (int) $r->global_n,
                 'confidence' => (float) $r->confidence,
-                'corp_last_seen' => $r->corp_last_seen,
-                'modules' => $merged,
+                'modules' => $modules,
                 'has_corp_variant' => $corps->isNotEmpty(),
+                'eft' => $this->toEft($r->hull_name ?? 'Unknown', $modules),
+                'buyall' => $this->toBuyall($modules),
             ];
         }
+        return $out;
+    }
 
-        return [
-            'doctrines' => $doctrines,
-            'corp_id' => $corpId,
-            'corp_name' => $corpName,
-        ];
+    private function toEft(string $hullName, array $modules): string
+    {
+        $order = ['low', 'mid', 'high', 'rig', 'subsystem'];
+        $bySlot = [];
+        foreach ($modules as $m) {
+            $bySlot[$m['slot']][] = $m;
+        }
+        $lines = ["[{$hullName}, AegisCore auto-doctrine]"];
+        foreach ($order as $slot) {
+            $rows = $bySlot[$slot] ?? [];
+            if ($rows === []) { $lines[] = ''; continue; }
+            $blk = [];
+            foreach ($rows as $m) {
+                $name = $m['name'] ?? ('type ' . $m['type_id']);
+                for ($i = 0; $i < max(1, $m['quantity']); $i++) $blk[] = $name;
+            }
+            $lines[] = implode("\n", $blk);
+            $lines[] = '';
+        }
+        return rtrim(implode("\n", $lines));
+    }
+
+    private function toBuyall(array $modules): string
+    {
+        $lines = [];
+        foreach ($modules as $m) {
+            $name = $m['name'] ?? ('type ' . $m['type_id']);
+            $q = max(1, $m['quantity']);
+            $lines[] = "{$q} {$name}";
+        }
+        return implode("\n", $lines);
     }
 }

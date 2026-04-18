@@ -161,6 +161,12 @@ class ComputeAutoDoctrinesCommand extends Command
                 $this->foldKillIntoClusters($r, $role, $mods);
             }
 
+            // Resolve alliance_id → bloc_id for everyone in this batch
+            // once, so per-kill lookup stays O(1) on the next pass.
+            // (Actual alliance + bloc adoption bucketing happens in
+            // foldKillIntoClusters via the alliance_id on $r; bloc
+            // resolution is done lazily at emit time.)
+
             $this->info(sprintf('Processed %d kms (last_id=%d; total %d)', count($rows), $lastId, $totalRows));
             unset($rows, $modulesByKm, $inferenceMap, $theaterByKm);
         }
@@ -282,6 +288,53 @@ class ComputeAutoDoctrinesCommand extends Command
                     }
                 }
 
+                // Alliance adopters
+                DB::table('auto_doctrine_alliance_adopters')->where('doctrine_id', $docId)->delete();
+                $allianceRows = [];
+                foreach (($family['alliance_counts'] ?? []) as $aid => $meta) {
+                    $allianceRows[] = ['doctrine_id' => $docId, 'alliance_id' => $aid,
+                        'observation_count' => $meta['n'],
+                        'first_seen_at' => $meta['first'], 'last_seen_at' => $meta['last']];
+                }
+                if ($allianceRows !== []) {
+                    foreach (array_chunk($allianceRows, 500) as $chunk) {
+                        DB::table('auto_doctrine_alliance_adopters')->insert($chunk);
+                    }
+                }
+
+                // Bloc adopters: for each alliance, lookup its bloc
+                // via coalition_entity_labels and aggregate.
+                if (($family['alliance_counts'] ?? []) !== []) {
+                    $blocMap = DB::table('coalition_entity_labels')
+                        ->where('entity_type', 'alliance')
+                        ->where('is_active', 1)
+                        ->whereIn('entity_id', array_keys($family['alliance_counts']))
+                        ->whereNotNull('bloc_id')
+                        ->pluck('bloc_id', 'entity_id')
+                        ->all();
+                    $blocAgg = [];
+                    foreach ($family['alliance_counts'] as $aid => $meta) {
+                        $bid = $blocMap[$aid] ?? null;
+                        if ($bid === null) continue;
+                        if (! isset($blocAgg[$bid])) {
+                            $blocAgg[$bid] = ['n' => 0, 'first' => $meta['first'], 'last' => $meta['last']];
+                        }
+                        $blocAgg[$bid]['n'] += $meta['n'];
+                        if ($meta['first'] < $blocAgg[$bid]['first']) $blocAgg[$bid]['first'] = $meta['first'];
+                        if ($meta['last']  > $blocAgg[$bid]['last'])  $blocAgg[$bid]['last']  = $meta['last'];
+                    }
+                    DB::table('auto_doctrine_bloc_adopters')->where('doctrine_id', $docId)->delete();
+                    $blocRows = [];
+                    foreach ($blocAgg as $bid => $meta) {
+                        $blocRows[] = ['doctrine_id' => $docId, 'bloc_id' => $bid,
+                            'observation_count' => $meta['n'],
+                            'first_seen_at' => $meta['first'], 'last_seen_at' => $meta['last']];
+                    }
+                    if ($blocRows !== []) {
+                        DB::table('auto_doctrine_bloc_adopters')->insert($blocRows);
+                    }
+                }
+
                 // Pilot evidence list retained but capped per doctrine
                 // to keep the table bounded.
                 DB::table('auto_doctrine_pilots')->where('doctrine_id', $docId)->delete();
@@ -312,7 +365,7 @@ class ComputeAutoDoctrinesCommand extends Command
                 'module_counts' => [], 'module_set' => [],
                 'observation_count' => 0,
                 'first_seen' => $r->killed_at, 'last_seen' => $r->killed_at,
-                'kills' => [], 'corp_counts' => [],
+                'kills' => [], 'corp_counts' => [], 'alliance_counts' => [],
                 'hull_type_id' => (int) $r->hull_type_id,
                 'role_key' => $role,
             ];
@@ -349,6 +402,17 @@ class ComputeAutoDoctrinesCommand extends Command
         foreach ($mods as [$type_id, $slot]) {
             $k = "{$type_id}|{$slot}";
             $f['corp_counts'][$cid]['module_counts'][$k] = ($f['corp_counts'][$cid]['module_counts'][$k] ?? 0) + 1;
+        }
+
+        // Alliance tally (zero alliance_id = no alliance; skip).
+        $aid = (int) ($r->alliance_id ?? 0);
+        if ($aid > 0) {
+            if (! isset($f['alliance_counts'][$aid])) {
+                $f['alliance_counts'][$aid] = ['n' => 0, 'first' => $r->killed_at, 'last' => $r->killed_at];
+            }
+            $f['alliance_counts'][$aid]['n']++;
+            if ($r->killed_at < $f['alliance_counts'][$aid]['first']) $f['alliance_counts'][$aid]['first'] = $r->killed_at;
+            if ($r->killed_at > $f['alliance_counts'][$aid]['last'])  $f['alliance_counts'][$aid]['last']  = $r->killed_at;
         }
         unset($f);
     }
@@ -409,6 +473,14 @@ class ComputeAutoDoctrinesCommand extends Command
                                     $T['corp_counts'][$cid]['module_counts'][$mk] =
                                         ($T['corp_counts'][$cid]['module_counts'][$mk] ?? 0) + $mv;
                                 }
+                            }
+                        }
+                        foreach (($S['alliance_counts'] ?? []) as $aid => $m) {
+                            if (! isset($T['alliance_counts'][$aid])) $T['alliance_counts'][$aid] = $m;
+                            else {
+                                $T['alliance_counts'][$aid]['n'] += $m['n'];
+                                if ($m['first'] < $T['alliance_counts'][$aid]['first']) $T['alliance_counts'][$aid]['first'] = $m['first'];
+                                if ($m['last']  > $T['alliance_counts'][$aid]['last'])  $T['alliance_counts'][$aid]['last']  = $m['last'];
                             }
                         }
                         unset($T, $families[$small]);
