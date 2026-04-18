@@ -25,7 +25,10 @@ use Illuminate\Support\Facades\DB;
  */
 final class BattleTheaterViewData
 {
-    public function __construct(private readonly BattleTheaterSideResolver $sideResolver) {}
+    public function __construct(
+        private readonly BattleTheaterSideResolver $sideResolver,
+        private readonly BattleRoleInferenceLoader $roleInferenceLoader = new BattleRoleInferenceLoader(),
+    ) {}
 
     /**
      * @return array<string, mixed>
@@ -211,6 +214,12 @@ final class BattleTheaterViewData
             // dropdown to change / clear it.
             'overrides' => $overrides,
             'hide_bloc_names' => $hideBlocNames,
+            // Spec 6: per-(alliance, sub_fleet) inferred roles from
+            // Spec 5. Null-safe: empty array when no scoring has run.
+            'role_inference_by_alliance' => $this->roleInferenceLoader->load(
+                $theater->id,
+                $participants->pluck('alliance_id')->filter()->unique()->values()->all(),
+            ),
         ];
     }
 
