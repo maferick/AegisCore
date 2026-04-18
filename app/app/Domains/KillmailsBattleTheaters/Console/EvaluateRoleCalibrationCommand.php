@@ -40,7 +40,10 @@ class EvaluateRoleCalibrationCommand extends Command
                             {--weight-version= : Weight version id to evaluate (required)}
                             {--fc-threshold=0.75 : FC accuracy required to pass}
                             {--logi-threshold=0.80 : Logi F1 required to pass}
-                            {--mainline-threshold=0.60 : Mainline accuracy required to pass}';
+                            {--mainline-threshold=0.60 : Mainline accuracy required to pass}
+                            {--tackle-threshold=0.70 : Tackle F1 required to pass}
+                            {--bomber-threshold=0.80 : Bomber F1 required to pass}
+                            {--command-threshold=0.60 : Command accuracy required to pass}';
 
     protected $description = 'Spec 7 job B — score Spec 5 inference under a weight_version against attestations, write calibration_runs row per role.';
 
@@ -61,6 +64,9 @@ class EvaluateRoleCalibrationCommand extends Command
             'fc' => (float) $this->option('fc-threshold'),
             'logi' => (float) $this->option('logi-threshold'),
             'mainline_dps' => (float) $this->option('mainline-threshold'),
+            'tackle' => (float) $this->option('tackle-threshold'),
+            'bomber' => (float) $this->option('bomber-threshold'),
+            'command' => (float) $this->option('command-threshold'),
         ];
 
         $now = now();
@@ -169,6 +175,92 @@ class EvaluateRoleCalibrationCommand extends Command
             'passed' => $logiF1 >= $thresholds['logi'] ? 1 : 0,
             'notes' => sprintf('logi derived truth: tp=%d fp=%d fn=%d precision=%.4f recall=%.4f f1=%.4f',
                 $tp, $fp, $fn, $logiPrec, $logiRec, $logiF1),
+        ];
+
+        // ------------------------------------------------------------------
+        // Tackle + bomber: hull-category derived truth (same pattern as logi)
+        // ------------------------------------------------------------------
+        foreach (['tackle', 'bomber'] as $role) {
+            $rows = DB::table('battle_character_role_features AS f')
+                ->leftJoin('battle_character_role_inference AS i', function ($j) use ($wv) {
+                    $j->on('i.battle_id', '=', 'f.battle_id')
+                      ->on('i.alliance_id', '=', 'f.alliance_id')
+                      ->on('i.sub_fleet_id', '=', 'f.sub_fleet_id')
+                      ->on('i.character_id', '=', 'f.character_id')
+                      ->on('i.partition_algo_version', '=', 'f.partition_algo_version')
+                      ->where('i.weight_version', '=', $wv);
+                })
+                ->selectRaw("
+                    f.ship_class_category = ? AS is_true,
+                    i.primary_role_key = ? AS is_pred
+                ", [$role, $role])
+                ->get();
+            $tp = 0; $fp = 0; $fn = 0;
+            foreach ($rows as $r) {
+                $t = (int) $r->is_true; $p = (int) $r->is_pred;
+                if ($t === 1 && $p === 1) $tp++;
+                elseif ($t === 0 && $p === 1) $fp++;
+                elseif ($t === 1 && $p === 0) $fn++;
+            }
+            $prec = ($tp + $fp) > 0 ? $tp / ($tp + $fp) : 0.0;
+            $rec  = ($tp + $fn) > 0 ? $tp / ($tp + $fn) : 0.0;
+            $f1   = ($prec + $rec) > 0 ? 2 * $prec * $rec / ($prec + $rec) : 0.0;
+            $inserts[] = [
+                'weight_version' => $wv,
+                'role_key' => $role,
+                'evaluated_at' => $now,
+                'attestation_count' => $tp + $fn,
+                'correct_count' => $tp,
+                'accuracy' => round($f1, 4),
+                'threshold' => round($thresholds[$role], 4),
+                'passed' => $f1 >= $thresholds[$role] ? 1 : 0,
+                'notes' => sprintf('%s derived truth: tp=%d fp=%d fn=%d p=%.4f r=%.4f f1=%.4f',
+                    $role, $tp, $fp, $fn, $prec, $rec, $f1),
+            ];
+        }
+
+        // ------------------------------------------------------------------
+        // Command: top-degree_centrality pilot per sub-fleet WHERE
+        // ship_class_category='command' is the "true" command anchor.
+        // ------------------------------------------------------------------
+        $commandTruth = DB::select("
+            SELECT t.battle_id, t.alliance_id, t.sub_fleet_id, t.partition_algo_version, t.character_id
+              FROM (
+                  SELECT f.*,
+                         ROW_NUMBER() OVER (
+                             PARTITION BY f.battle_id, f.alliance_id, f.sub_fleet_id, f.partition_algo_version
+                             ORDER BY f.degree_centrality DESC, f.character_id ASC
+                         ) rn
+                    FROM battle_character_role_features f
+                   WHERE f.ship_class_category = 'command'
+              ) t
+             WHERE t.rn = 1
+        ");
+        $cmdCount = 0; $cmdCorrect = 0;
+        foreach ($commandTruth as $t) {
+            $cmdCount++;
+            $inf = DB::table('battle_character_role_inference')
+                ->where('battle_id', $t->battle_id)
+                ->where('alliance_id', $t->alliance_id)
+                ->where('sub_fleet_id', $t->sub_fleet_id)
+                ->where('partition_algo_version', $t->partition_algo_version)
+                ->where('weight_version', $wv)
+                ->where('primary_role_key', 'command')
+                ->first();
+            if ($inf === null) continue;
+            if ((int) $inf->character_id === (int) $t->character_id) $cmdCorrect++;
+        }
+        $cmdAccuracy = $cmdCount > 0 ? $cmdCorrect / $cmdCount : 0.0;
+        $inserts[] = [
+            'weight_version' => $wv,
+            'role_key' => 'command',
+            'evaluated_at' => $now,
+            'attestation_count' => $cmdCount,
+            'correct_count' => $cmdCorrect,
+            'accuracy' => round($cmdAccuracy, 4),
+            'threshold' => round($thresholds['command'], 4),
+            'passed' => $cmdAccuracy >= $thresholds['command'] ? 1 : 0,
+            'notes' => 'command vs top-degree command-hull per sub-fleet',
         ];
 
         // ------------------------------------------------------------------
