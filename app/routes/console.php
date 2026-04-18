@@ -255,6 +255,16 @@ Schedule::command('battle:compute-auto-doctrines')
     ->withoutOverlapping(120)
     ->name('compute-auto-doctrines');
 
+// Per-killmail pilot role tags. Cheap join on hull-category mapping,
+// runs hourly so new killmails get a role tag within the hour and
+// ship_class_category_mapping updates propagate the same day.
+Schedule::command('killmails:compute-pilot-roles')
+    ->hourlyAt(22)
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('killmail-pilot-roles');
+
 // NB: battle:process-pending is NOT scheduled here — it shells
 // out to `docker compose run` for each (battle, alliance) pair,
 // and the Laravel scheduler container has no docker CLI / no
