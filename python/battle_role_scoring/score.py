@@ -41,6 +41,18 @@ ROLE_LOGI = "logi"
 ROLE_MAINLINE = "mainline_dps"
 ROLES = (ROLE_FC, ROLE_LOGI, ROLE_MAINLINE)
 
+# Hulls that the role-scorer unconditionally assigns FC to, bypassing
+# threshold + gap. Rationale: a Monitor applies zero damage and is
+# effectively invulnerable, so it has near-zero behavioral signal —
+# the only reason to fly one is to command a fleet. Multiple Monitors
+# in one sub-fleet all get FC (co-FC semantics).
+#
+# Extend this set when another structurally-silent command hull with
+# equally strong prior intent ships (e.g. future monitor variants).
+GUARANTEED_FC_SHIP_TYPE_IDS: set[int] = {
+    45534,  # Monitor
+}
+
 # Default set of score classes that sum into `final`. Extending this
 # list is how future specs add new components (e.g. 'historical').
 ACTIVE_CLASSES = ("structural", "temporal", "hull", "historical")
@@ -376,6 +388,16 @@ def score_battle(
             "mainline_gap_to_second": round(ml_top - ml_second, 4),
             "mainline_assigned": ml_assigned_cid is not None,
         })
+
+    # Monitor override: any pilot flying a GUARANTEED_FC_SHIP_TYPE_IDS
+    # hull gets FC unconditionally, replacing any other role the
+    # single-winner rule would have picked. Multiple Monitor pilots in
+    # the same sub-fleet all get FC (co-FC semantics) — this is the
+    # only path that bypasses the gap requirement.
+    for f in features:
+        if f.ship_type_id in GUARANTEED_FC_SHIP_TYPE_IDS:
+            fc_score = final_by_char[f.character_id][ROLE_FC]
+            winners[f.character_id] = (ROLE_FC, fc_score, 0.0)
 
     # Materialize inference rows.
     inferences: list[InferenceRow] = []

@@ -21,6 +21,7 @@ import pymysql
 class FeatureRow:
     character_id: int
     sub_fleet_id: int
+    ship_type_id: int | None
     ship_class_category: str | None
     is_in_subfleet_0: bool
     damage_share: float
@@ -46,7 +47,7 @@ def load_features(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT character_id, sub_fleet_id, ship_class_category, is_in_subfleet_0,
+            SELECT character_id, sub_fleet_id, ship_type_id, ship_class_category, is_in_subfleet_0,
                    damage_share, kill_participation_rate, presence_span,
                    early_presence, late_presence, death_order_pct,
                    degree_centrality, pagerank,
@@ -66,6 +67,7 @@ def load_features(
         FeatureRow(
             character_id=int(r["character_id"]),
             sub_fleet_id=int(r["sub_fleet_id"]),
+            ship_type_id=(int(r["ship_type_id"]) if r["ship_type_id"] is not None else None),
             ship_class_category=(str(r["ship_class_category"]) if r["ship_class_category"] is not None else None),
             is_in_subfleet_0=bool(r["is_in_subfleet_0"]),
             damage_share=float(r["damage_share"]),
