@@ -123,22 +123,23 @@
             </div>
 
             @php
-                // Equal-sized history lists. Scaled up from the earlier
-                // mismatch: 28px avatars + roomier padding + 360px
-                // scroll container. Both columns share these values
-                // so they render as a matched pair.
-                $listStyle = 'display:flex; flex-direction:column; gap:0.5rem; max-height:360px; overflow-y:auto; padding-right:0.25rem;';
+                // Show last 6 entries of each so both columns fit on
+                // screen without scroll. Shared style for matched
+                // visual rhythm.
+                $recentAlliances = array_slice($c['alliances_timeline'], 0, 6);
+                $recentCorps = array_slice($c['corp_timeline'], 0, 6);
+                $listStyle = 'display:flex; flex-direction:column; gap:0.5rem;';
                 $rowStyle  = 'display:flex; gap:0.6rem; align-items:center; padding:0.45rem 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:0.85rem;';
             @endphp
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.25rem; align-items:stretch;">
                 {{-- Alliance history --}}
                 <div>
                     <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Alliance history</h3>
-                    @if (empty($c['alliances_timeline']))
+                    @if (empty($recentAlliances))
                         <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">No prior alliance data cached yet.</p>
                     @else
                         <div style="{{ $listStyle }}">
-                            @foreach ($c['alliances_timeline'] as $a)
+                            @foreach ($recentAlliances as $a)
                                 <div style="{{ $rowStyle }}">
                                     <img src="https://images.evetech.net/alliances/{{ $a['alliance_id'] }}/logo?size=32"
                                          referrerpolicy="no-referrer"
@@ -154,17 +155,22 @@
                                 </div>
                             @endforeach
                         </div>
+                        @if (count($c['alliances_timeline']) > 6)
+                            <div style="font-size:0.68rem; color:#7a7a82; margin-top:0.4rem; font-style:italic;">
+                                +{{ count($c['alliances_timeline']) - 6 }} older
+                            </div>
+                        @endif
                     @endif
                 </div>
 
                 {{-- Corp history --}}
                 <div>
                     <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Corporation history</h3>
-                    @if (empty($c['corp_timeline']))
+                    @if (empty($recentCorps))
                         <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">No corp history cached yet.</p>
                     @else
                         <div style="{{ $listStyle }}">
-                            @foreach ($c['corp_timeline'] as $row)
+                            @foreach ($recentCorps as $row)
                                 <div style="{{ $rowStyle }}">
                                     <img src="https://images.evetech.net/corporations/{{ $row['corp_id'] }}/logo?size=32"
                                          referrerpolicy="no-referrer"
@@ -185,6 +191,11 @@
                                 </div>
                             @endforeach
                         </div>
+                        @if (count($c['corp_timeline']) > 6)
+                            <div style="font-size:0.68rem; color:#7a7a82; margin-top:0.4rem; font-style:italic;">
+                                +{{ count($c['corp_timeline']) - 6 }} older
+                            </div>
+                        @endif
                     @endif
                 </div>
             </div>
