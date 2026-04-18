@@ -343,10 +343,12 @@ def score_battle(
     coefs: dict[str, float],
     active_classes: tuple[str, ...] = ACTIVE_CLASSES,
     priors: dict[tuple[int, str], float] | None = None,
+    monitor_pilots: set[int] | None = None,
 ) -> ScoringResult:
     thresholds = load_thresholds(coefs)
     scores: list[ScoreRow] = []
     priors = priors or {}
+    monitor_pilots = monitor_pilots or set()
 
     # Per-character, per-role: compute decomposed scores.
     # final_by_char[char_id][role] = ScoreDecomposition
@@ -434,13 +436,17 @@ def score_battle(
         forced_score = final_by_char[f.character_id].get(forced, 0.0)
         winners[f.character_id] = (forced, forced_score, 0.0)
 
-    # Monitor override: any pilot flying a GUARANTEED_FC_SHIP_TYPE_IDS
-    # hull gets FC unconditionally, replacing any other role the
-    # single-winner rule would have picked. Multiple Monitor pilots in
-    # the same sub-fleet all get FC (co-FC semantics) — this is the
-    # only path that bypasses the gap requirement.
+    # Monitor override: drives off killmail truth (monitor_pilots) rather
+    # than the mode-aggregated features.ship_type_id, so pilots who
+    # reshipped (Monitor → Claymore) still get FC — the killmail is
+    # authoritative. Falls back to features.ship_type_id for safety when
+    # monitor_pilots wasn't supplied.
     for f in features:
-        if f.ship_type_id in GUARANTEED_FC_SHIP_TYPE_IDS:
+        is_monitor = (
+            f.character_id in monitor_pilots
+            or f.ship_type_id in GUARANTEED_FC_SHIP_TYPE_IDS
+        )
+        if is_monitor:
             fc_score = final_by_char[f.character_id][ROLE_FC]
             winners[f.character_id] = (ROLE_FC, fc_score, 0.0)
 

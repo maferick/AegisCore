@@ -160,6 +160,36 @@ def load_historical_priors(
     }
 
 
+def load_monitor_pilots(
+    conn: pymysql.connections.Connection,
+    battle_id: int,
+    alliance_id: int,
+) -> set[int]:
+    """Characters from this alliance who flew a Monitor (or any other
+    GUARANTEED_FC_SHIP_TYPE_IDS hull) on at least one killmail in the
+    battle, read straight from killmail_attackers.
+
+    Using killmail truth rather than the aggregated features.ship_type_id
+    means pilots who reshipped (Monitor → Claymore, etc.) still get FC
+    regardless of which hull the feature mode picked. A pilot flying
+    Monitor for even one kill was commanding; that dominates any DPS
+    reship observed later in the same fight."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ka.character_id
+              FROM battle_theater_killmails btk
+              JOIN killmail_attackers ka ON ka.killmail_id = btk.killmail_id
+             WHERE btk.theater_id = %s
+               AND ka.alliance_id = %s
+               AND ka.ship_type_id = 45534
+            """,
+            (battle_id, alliance_id),
+        )
+        rows = cur.fetchall()
+    return {int(r["character_id"]) for r in rows}
+
+
 def features_exist(
     conn: pymysql.connections.Connection,
     battle_id: int,

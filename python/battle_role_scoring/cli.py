@@ -26,7 +26,7 @@ from battle_role_scoring.db import (
 )
 from battle_role_scoring.inputs import (
     features_exist, load_coefficients, load_features, load_historical_priors,
-    resolve_weight_version_id,
+    load_monitor_pilots, resolve_weight_version_id,
 )
 from battle_role_scoring.log import get
 from battle_role_scoring.persist import write_scores_and_inference
@@ -105,14 +105,21 @@ def run(args: argparse.Namespace) -> int:
                     coefs = load_coefficients(conn, wv_id)
                     char_ids = [f.character_id for f in features]
                     priors = load_historical_priors(conn, char_ids)
+                    monitor_pilots = load_monitor_pilots(conn, args.battle_id, args.alliance_id)
                     log.info(
                         "inputs loaded",
                         features=len(features), coefficients=len(coefs),
                         priors=len(priors),
+                        monitor_pilots=len(monitor_pilots),
                         active_classes=list(ACTIVE_CLASSES),
                     )
 
-                    result = score_battle(features, coefs, active_classes=ACTIVE_CLASSES, priors=priors)
+                    result = score_battle(
+                        features, coefs,
+                        active_classes=ACTIVE_CLASSES,
+                        priors=priors,
+                        monitor_pilots=monitor_pilots,
+                    )
 
                     for diag in result.per_sub_fleet_diagnostics:
                         log.info("sub_fleet diagnostic", **diag)

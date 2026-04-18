@@ -76,28 +76,22 @@ class ExtractResult:
     zero_damage_sub_fleets: list[int]
 
 
-_PRIORITY_SHIP_TYPE_IDS: frozenset[int] = frozenset({
-    45534,  # Monitor — guaranteed FC hull. If a pilot ever flew one
-            # in this battle, that intent dominates any DPS reship.
-})
-
-
 def _primary_ship(
     char_attacker_events: list[AttackerEvent],
 ) -> int | None:
-    """Mode ship_type_id across char's attacker events. Priority hulls
-    (Monitor, etc.) win regardless of count — a pilot who flew Monitor
-    for even one kill was commanding the fleet, even if they reshipped
-    later. Otherwise mode with lowest-id tie-break."""
+    """Mode ship_type_id across char's attacker events. Tie-break by
+    lowest ship_type_id. None if the char never appeared as attacker
+    with a non-null ship_type_id.
+
+    Role-level overrides (Monitor → FC, etc.) live in battle_role_scoring
+    where they read killmail truth directly; this keeps features honest
+    to the aggregate behavior signal."""
     counts: Counter[int] = Counter()
     for e in char_attacker_events:
         if e.ship_type_id is not None:
             counts[e.ship_type_id] += 1
     if not counts:
         return None
-    for priority_id in _PRIORITY_SHIP_TYPE_IDS:
-        if priority_id in counts:
-            return priority_id
     max_c = max(counts.values())
     return min(sid for sid, c in counts.items() if c == max_c)
 
