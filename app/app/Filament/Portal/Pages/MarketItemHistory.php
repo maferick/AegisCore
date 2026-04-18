@@ -78,14 +78,14 @@ class MarketItemHistory extends Page
             'own_hub' => $ownHub ? [
                 'name' => (string) ($ownHub->structure_name ?? "Hub #{$ownHub->location_id}"),
                 'region_id' => (int) $ownHub->region_id,
-                'sell' => $hubEntry['sell'] ?? null,
-                'buy' => $hubEntry['buy'] ?? null,
+                'sell' => is_array($hubEntry) ? ($hubEntry['sell'] ?? null) : null,
+                'buy' => is_array($hubEntry) ? ($hubEntry['buy'] ?? null) : null,
             ] : null,
             'jita' => $jita ? [
                 'name' => (string) ($jita->structure_name ?? 'Jita IV-4'),
                 'region_id' => (int) $jita->region_id,
-                'sell' => $jitaEntry['sell'] ?? null,
-                'buy' => $jitaEntry['buy'] ?? null,
+                'sell' => is_array($jitaEntry) ? ($jitaEntry['sell'] ?? null) : null,
+                'buy' => is_array($jitaEntry) ? ($jitaEntry['buy'] ?? null) : null,
             ] : null,
             'history_region' => $historyRegion,
             'history' => $history,

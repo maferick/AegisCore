@@ -23,28 +23,34 @@
                 <div style="flex:1;">
                     <h2 class="text-xl font-semibold">{{ $type['name'] }}</h2>
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-top:0.75rem;">
+                        @php
+                            $hSell = is_array($own_hub['sell'] ?? null) ? $own_hub['sell'] : null;
+                            $hBuy  = is_array($own_hub['buy'] ?? null)  ? $own_hub['buy']  : null;
+                            $jSell = is_array($jita['sell'] ?? null)    ? $jita['sell']    : null;
+                            $jBuy  = is_array($jita['buy'] ?? null)     ? $jita['buy']     : null;
+                        @endphp
                         @if (! empty($own_hub))
                             <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
                                 <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Our hub sell</div>
-                                <div style="font-size:1.05rem; font-weight:600; color:#fca5a5;">{{ $fmtIsk($own_hub['sell']['price'] ?? null) }}</div>
-                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($own_hub['sell']['volume'] ?? 0) }}</div>
+                                <div style="font-size:1.05rem; font-weight:600; color:#fca5a5;">{{ $fmtIsk($hSell['price'] ?? null) }}</div>
+                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($hSell['volume'] ?? 0) }}</div>
                             </div>
                             <div style="background:rgba(34,197,94,0.05); border:1px solid rgba(34,197,94,0.15); border-radius:6px; padding:0.6rem 0.8rem;">
                                 <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Our hub buy</div>
-                                <div style="font-size:1.05rem; font-weight:600; color:#86efac;">{{ $fmtIsk($own_hub['buy']['price'] ?? null) }}</div>
-                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($own_hub['buy']['volume'] ?? 0) }}</div>
+                                <div style="font-size:1.05rem; font-weight:600; color:#86efac;">{{ $fmtIsk($hBuy['price'] ?? null) }}</div>
+                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($hBuy['volume'] ?? 0) }}</div>
                             </div>
                         @endif
                         @if (! empty($jita))
                             <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
                                 <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Jita sell</div>
-                                <div style="font-size:1.05rem; font-weight:600; color:#cbd5e1;">{{ $fmtIsk($jita['sell']['price'] ?? null) }}</div>
-                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($jita['sell']['volume'] ?? 0) }}</div>
+                                <div style="font-size:1.05rem; font-weight:600; color:#cbd5e1;">{{ $fmtIsk($jSell['price'] ?? null) }}</div>
+                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($jSell['volume'] ?? 0) }}</div>
                             </div>
                             <div style="background:rgba(148,163,184,0.05); border:1px solid rgba(148,163,184,0.15); border-radius:6px; padding:0.6rem 0.8rem;">
                                 <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Jita buy</div>
-                                <div style="font-size:1.05rem; font-weight:600; color:#cbd5e1;">{{ $fmtIsk($jita['buy']['price'] ?? null) }}</div>
-                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($jita['buy']['volume'] ?? 0) }}</div>
+                                <div style="font-size:1.05rem; font-weight:600; color:#cbd5e1;">{{ $fmtIsk($jBuy['price'] ?? null) }}</div>
+                                <div style="font-size:0.66rem; color:#7a7a82;">qty: {{ number_format($jBuy['volume'] ?? 0) }}</div>
                             </div>
                         @endif
                     </div>
