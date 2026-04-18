@@ -9,10 +9,12 @@ use BackedEnum;
 use Filament\Pages\Page;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ViewColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use UnitEnum;
@@ -99,6 +101,13 @@ class Battles extends Page implements HasTable
                     ->sortable()
                     ->description(fn (BattleTheater $r): string => $r->start_time?->diffForHumans($r->end_time, short: true) ?? ''),
 
+                ViewColumn::make('top_sides')
+                    ->label('Top sides')
+                    ->view('filament.portal.columns.battle-top-sides')
+                    ->viewData(fn (BattleTheater $r): array => [
+                        'sides' => $this->topSidesFor((int) $r->id),
+                    ]),
+
                 TextColumn::make('total_kills')
                     ->label('Kills')
                     ->numeric()
@@ -133,6 +142,105 @@ class Battles extends Page implements HasTable
                     ->toggleable(),
             ])
             ->recordUrl(fn (BattleTheater $record): string => BattleTheaterDetail::getUrl(['record' => $record->id]));
+    }
+
+    /**
+     * Top-2 alliances on each side of a theater, by pilot count, for
+     * the list thumbnail strip. "Side" here is approximated from the
+     * kill graph — we take the two biggest alliances (most pilots),
+     * then fold every remaining alliance onto whichever of the two
+     * anchors their kills oppose the most. Skipping the full
+     * BattleTheaterSideResolver (expensive Neo4j / standings lookups)
+     * keeps the list page cheap.
+     *
+     * @return array{sideA: list<array{alliance_id: int, name: string, pilots: int}>, sideB: list<array{alliance_id: int, name: string, pilots: int}>}
+     */
+    private function topSidesFor(int $theaterId): array
+    {
+        $rows = DB::table('battle_theater_participants AS p')
+            ->leftJoin('esi_entity_names AS n', function ($j): void {
+                $j->on('n.entity_id', '=', 'p.alliance_id')
+                  ->where('n.category', 'alliance');
+            })
+            ->where('p.theater_id', $theaterId)
+            ->where('p.alliance_id', '>', 0)
+            ->selectRaw('p.alliance_id, n.name AS alliance_name, COUNT(DISTINCT p.character_id) AS pilots')
+            ->groupBy('p.alliance_id', 'n.name')
+            ->orderByDesc('pilots')
+            ->limit(6)
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return ['sideA' => [], 'sideB' => []];
+        }
+
+        $anchors = $rows->take(2)->pluck('alliance_id')->map(fn ($v) => (int) $v)->all();
+        if (count($anchors) < 2) {
+            // Only one alliance on field → everyone's Side A.
+            return [
+                'sideA' => $rows->take(2)->map($this->aMap())->all(),
+                'sideB' => [],
+            ];
+        }
+        [$anchorA, $anchorB] = $anchors;
+
+        // Kill graph between anchorA and the rest, anchorB and the rest,
+        // to decide which anchor each remaining alliance sided with.
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theaterId)
+            ->pluck('killmail_id')
+            ->all();
+
+        $killEdges = collect();
+        if ($killmailIds !== []) {
+            $killEdges = DB::table('killmails AS k')
+                ->join('killmail_attackers AS ka', 'ka.killmail_id', '=', 'k.killmail_id')
+                ->whereIn('k.killmail_id', $killmailIds)
+                ->whereNotNull('k.victim_alliance_id')
+                ->whereNotNull('ka.alliance_id')
+                ->selectRaw('k.victim_alliance_id AS victim, ka.alliance_id AS attacker, COUNT(*) AS n')
+                ->groupBy('k.victim_alliance_id', 'ka.alliance_id')
+                ->get();
+        }
+
+        $side = [$anchorA => 'A', $anchorB => 'B'];
+        foreach ($rows->skip(2) as $r) {
+            $aid = (int) $r->alliance_id;
+            $supportsA = 0; $supportsB = 0;
+            foreach ($killEdges as $e) {
+                if ((int) $e->attacker === $aid && (int) $e->victim === $anchorB) $supportsA += (int) $e->n;
+                if ((int) $e->attacker === $anchorB && (int) $e->victim === $aid) $supportsA += (int) $e->n;
+                if ((int) $e->attacker === $aid && (int) $e->victim === $anchorA) $supportsB += (int) $e->n;
+                if ((int) $e->attacker === $anchorA && (int) $e->victim === $aid) $supportsB += (int) $e->n;
+            }
+            if ($supportsA > $supportsB) $side[$aid] = 'A';
+            elseif ($supportsB > $supportsA) $side[$aid] = 'B';
+            // ties: leave unassigned so they don't crowd the card
+        }
+
+        $out = ['sideA' => [], 'sideB' => []];
+        foreach ($rows as $r) {
+            $aid = (int) $r->alliance_id;
+            $bucket = $side[$aid] ?? null;
+            if ($bucket === null) continue;
+            $key = $bucket === 'A' ? 'sideA' : 'sideB';
+            if (count($out[$key]) >= 2) continue;
+            $out[$key][] = [
+                'alliance_id' => $aid,
+                'name' => (string) ($r->alliance_name ?? "#$aid"),
+                'pilots' => (int) $r->pilots,
+            ];
+        }
+        return $out;
+    }
+
+    private function aMap(): callable
+    {
+        return fn ($r): array => [
+            'alliance_id' => (int) $r->alliance_id,
+            'name' => (string) ($r->alliance_name ?? '#'.$r->alliance_id),
+            'pilots' => (int) $r->pilots,
+        ];
     }
 
     /**
