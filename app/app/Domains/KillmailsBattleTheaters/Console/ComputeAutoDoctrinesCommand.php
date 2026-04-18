@@ -10,48 +10,42 @@ use Illuminate\Support\Facades\DB;
 /**
  * Spec 8 — role-tied auto-doctrine detection.
  *
- * Derives doctrines from the last N days of killmails where the
- * victim had both:
- *   - a Spec 5 role_inference row under the default weight_version
- *   - a non-zero corporation_id on the killmail
+ * Streams every loss killmail in window (~485k over 30d), resolves
+ * each to (hull, role), and folds into a bounded in-memory cluster
+ * state keyed by (hull_type_id, role_key, fingerprint). Fuzzy merge
+ * + core-module extraction + UPSERT at the end.
  *
- * Unlike SupplyCore's per-hull clusterer, this runs per
- * (corporation_id, hull_type_id, role_key) triple. Corp is the
- * doctrine unit: member corps of the same alliance run distinct
- * fits (one corp on Muninns, another on Ferox, etc) and clustering
- * at alliance granularity merges them. Role axis adds the second
- * discriminator — identical fit flying on a mainline_dps pilot is
- * a different doctrine than the same fit on a tackle alt.
+ * Role resolution per killmail:
+ *   (a) Spec 5 role_inference if the pilot has one for this theater
+ *   (b) ship_class_category hull fallback otherwise:
+ *       logi → logi · bomber → bomber · command → command
+ *       (Monitor hull → fc) · tackle → tackle · mainline → mainline_dps
+ *       (uncategorized / 'other' → skip)
  *
- * Output: only doctrines where confidence >= STRICT_CONFIDENCE
- * (default 0.70) AND observation_count >= the tiered activation
- * floor are flagged is_active=1. Other rows persist for diagnostics
- * but the UI filters on is_active.
+ * Doctrine identity is GLOBAL: a fit flown by multiple corps is one
+ * doctrine with many adopters. Per-corp adoption counts land in
+ * auto_doctrine_adopters for Portal scoping.
  */
 class ComputeAutoDoctrinesCommand extends Command
 {
     protected $signature = 'battle:compute-auto-doctrines
-                            {--window-days=30 : Rolling window in days}
-                            {--jaccard=0.65 : Jaccard threshold for fuzzy cluster merge}
-                            {--core-frequency=0.80 : Module freq cutoff for "core" membership}
-                            {--strict-confidence=0.70 : Min confidence to flag is_active}
-                            {--dry-run : Print stats, no writes}';
+                            {--window-days=30}
+                            {--jaccard=0.65}
+                            {--core-frequency=0.80}
+                            {--strict-confidence=0.70}
+                            {--batch-size=5000}
+                            {--dry-run}';
 
-    protected $description = 'Spec 8 — derive role-tied doctrines from the last N days of killmails.';
+    protected $description = 'Spec 8 — global role-tied doctrine clusters + per-corp adoption.';
 
-    // Tiered observation_count floors. A cluster below its floor stays
-    // is_active=0 even if confidence passes. Command/FC ships fly in
-    // tiny numbers so 2 is enough signal; capitals 5; subcaps 10 since
-    // the role axis already filters noise.
-    private const FLOOR_BY_ROLE = [
-        'fc' => 2,
-        'command' => 2,
-    ];
+    private const FLOOR_BY_ROLE = ['fc' => 2, 'command' => 2];
     private const FLOOR_CAPITAL = 5;
     private const FLOOR_DEFAULT = 10;
-
-    /** EVE group IDs for capitals (dread, carrier, super, titan, FAX). */
     private const CAPITAL_HULL_GROUPS = [485, 547, 659, 30, 1538];
+    private const MONITOR_TYPE_ID = 45534;
+
+    /** @var array<string, array> Cluster state across batches. Key = "$hull|$role|$fp". */
+    private array $clusters = [];
 
     public function handle(): int
     {
@@ -59,252 +53,326 @@ class ComputeAutoDoctrinesCommand extends Command
         $jaccard = (float) $this->option('jaccard');
         $coreFreq = (float) $this->option('core-frequency');
         $strictConf = (float) $this->option('strict-confidence');
+        $batchSize = (int) $this->option('batch-size');
         $dryRun = (bool) $this->option('dry-run');
 
         $defaultWeight = DB::table('battle_role_weight_versions')->where('is_default', 1)->first();
-        if ($defaultWeight === null) {
-            $this->error('No default weight_version; promote one first.');
-            return self::FAILURE;
+        $wvId = $defaultWeight ? (int) $defaultWeight->weight_version : 0;
+        if ($wvId > 0) {
+            $this->info("Spec 5 inference source: weight_version={$wvId} ({$defaultWeight->label})");
+        } else {
+            $this->warn('No default weight_version — hull-fallback only.');
         }
-        $wvId = (int) $defaultWeight->weight_version;
-        $this->info("Using weight_version={$wvId} ({$defaultWeight->label}).");
 
         $since = now()->subDays($windowDays);
+        $hullCatMap = DB::table('ship_class_category_mapping')->pluck('category', 'ship_type_id')->all();
 
-        // 1. Collect (alliance, hull, role) candidate rows from
-        //    killmails where the victim has both an alliance and a
-        //    Spec 5 role inference.
-        $rows = DB::select("
-            SELECT k.killmail_id, k.killed_at, k.victim_character_id AS character_id,
-                   k.victim_corporation_id AS corporation_id,
-                   k.victim_ship_type_id AS hull_type_id,
-                   i.primary_role_key AS role_key
-              FROM killmails k
-              JOIN battle_theater_killmails btk ON btk.killmail_id = k.killmail_id
-              JOIN battle_character_role_inference i
-                ON i.battle_id = btk.theater_id
-               AND i.alliance_id = k.victim_alliance_id
-               AND i.character_id = k.victim_character_id
-               AND i.weight_version = ?
-             WHERE k.killed_at >= ?
-               AND k.victim_corporation_id > 0
-               AND k.victim_character_id IS NOT NULL
-               AND k.victim_ship_type_id IS NOT NULL
-        ", [$wvId, $since]);
+        // Stream loss killmails in ascending killed_at batches using
+        // a cursor-on-killmail_id pagination so big-window runs don't
+        // load the whole 485k-row set at once.
+        $lastId = 0;
+        $totalRows = 0;
+        $src = ['spec5' => 0, 'fallback' => 0, 'skipped' => 0, 'no_modules' => 0];
 
-        $this->info('Candidate loss killmails: ' . count($rows));
-        if ($rows === []) {
-            return self::SUCCESS;
-        }
+        while (true) {
+            $rows = DB::select("
+                SELECT k.killmail_id, k.killed_at, k.victim_character_id AS character_id,
+                       k.victim_corporation_id AS corporation_id,
+                       k.victim_ship_type_id AS hull_type_id,
+                       k.victim_alliance_id AS alliance_id
+                  FROM killmails k
+                 WHERE k.killed_at >= ?
+                   AND k.killmail_id > ?
+                   AND k.victim_corporation_id > 0
+                   AND k.victim_character_id IS NOT NULL
+                   AND k.victim_ship_type_id IS NOT NULL
+                 ORDER BY k.killmail_id ASC
+                 LIMIT ?
+            ", [$since, $lastId, $batchSize]);
+            if ($rows === []) break;
 
-        // 2. Pull fitted modules. Use slot_category enum; keep high/
-        //    mid/low/rig/subsystem.
-        $killmailIds = array_unique(array_map(fn ($r) => (int) $r->killmail_id, $rows));
-        $items = DB::table('killmail_items')
-            ->whereIn('killmail_id', $killmailIds)
-            ->whereIn('slot_category', ['high', 'mid', 'low', 'rig', 'subsystem'])
-            ->whereIn('category_id', [7, 32]) // Module, Subsystem
-            ->select('killmail_id', 'type_id', 'slot_category')
-            ->get();
+            $lastId = (int) end($rows)->killmail_id;
+            $totalRows += count($rows);
 
-        $modulesByKm = [];
-        foreach ($items as $it) {
-            $modulesByKm[(int) $it->killmail_id][] = [(int) $it->type_id, (string) $it->slot_category];
-        }
+            $kmIds = array_map(fn ($r) => (int) $r->killmail_id, $rows);
+            $charIds = array_values(array_unique(array_map(fn ($r) => (int) $r->character_id, $rows)));
 
-        // 3. Group by (alliance, hull, role) + cluster by fingerprint.
-        //    fingerprint = md5 of sorted multiset of (type_id, slot).
-        $clusters = []; // $clusters[$key][$fp] = ['module_counts' => [...], 'kills' => [...]]
-        foreach ($rows as $r) {
-            $kmid = (int) $r->killmail_id;
-            $mods = $modulesByKm[$kmid] ?? [];
-            if ($mods === []) {
-                continue;
+            // Theater lookup for this batch.
+            $theaterByKm = [];
+            if ($kmIds !== []) {
+                $ph = implode(',', array_fill(0, count($kmIds), '?'));
+                foreach (DB::select(
+                    "SELECT killmail_id, theater_id FROM battle_theater_killmails WHERE killmail_id IN ({$ph})",
+                    $kmIds,
+                ) as $m) {
+                    $theaterByKm[(int) $m->killmail_id] = (int) $m->theater_id;
+                }
             }
-            $key = $r->corporation_id . '|' . $r->hull_type_id . '|' . $r->role_key;
-            $fp = self::fingerprint($mods);
-            $clusters[$key] ??= [];
-            $clusters[$key][$fp] ??= [
-                'module_counts' => [],
-                'module_set' => [],
-                'observation_count' => 0,
-                'first_seen' => $r->killed_at,
-                'last_seen' => $r->killed_at,
-                'kills' => [],
-                'corporation_id' => (int) $r->corporation_id,
-                'hull_type_id' => (int) $r->hull_type_id,
-                'role_key' => (string) $r->role_key,
-            ];
-            $family = &$clusters[$key][$fp];
-            $family['observation_count']++;
-            foreach ($mods as [$type_id, $slot]) {
-                $k = "{$type_id}|{$slot}";
-                $family['module_counts'][$k] = ($family['module_counts'][$k] ?? 0) + 1;
-                $family['module_set'][$k] = true;
+
+            // Inference lookup — limit to the chars in this batch.
+            $inferenceMap = [];
+            if ($wvId > 0 && $charIds !== []) {
+                $ph = implode(',', array_fill(0, count($charIds), '?'));
+                foreach (DB::select(
+                    "SELECT battle_id, alliance_id, character_id, primary_role_key
+                       FROM battle_character_role_inference
+                      WHERE weight_version = ?
+                        AND character_id IN ({$ph})",
+                    array_merge([$wvId], $charIds),
+                ) as $i) {
+                    $inferenceMap["{$i->battle_id}|{$i->alliance_id}|{$i->character_id}"] = (string) $i->primary_role_key;
+                }
             }
-            if ($r->killed_at < $family['first_seen']) $family['first_seen'] = $r->killed_at;
-            if ($r->killed_at > $family['last_seen'])  $family['last_seen']  = $r->killed_at;
-            $family['kills'][] = [
-                'killmail_id' => $kmid,
-                'character_id' => (int) $r->character_id,
-                'battle_id' => $this->theaterForKill($kmid),
-                'seen_at' => $r->killed_at,
-            ];
-            unset($family);
+
+            // Module lookup for this batch.
+            $modulesByKm = [];
+            if ($kmIds !== []) {
+                $ph = implode(',', array_fill(0, count($kmIds), '?'));
+                foreach (DB::select(
+                    "SELECT killmail_id, type_id, slot_category
+                       FROM killmail_items
+                      WHERE killmail_id IN ({$ph})
+                        AND slot_category IN ('high','mid','low','rig','subsystem')
+                        AND category_id IN (7, 32)",
+                    $kmIds,
+                ) as $it) {
+                    $modulesByKm[(int) $it->killmail_id][] = [(int) $it->type_id, (string) $it->slot_category];
+                }
+            }
+
+            // Fold each killmail into the cluster state.
+            foreach ($rows as $r) {
+                $kmid = (int) $r->killmail_id;
+                $mods = $modulesByKm[$kmid] ?? [];
+                if ($mods === []) { $src['no_modules']++; continue; }
+
+                $role = null;
+                $theater = $theaterByKm[$kmid] ?? 0;
+                if ($theater > 0) {
+                    $role = $inferenceMap["{$theater}|" . (int) $r->alliance_id . '|' . (int) $r->character_id] ?? null;
+                }
+                if ($role !== null) $src['spec5']++;
+                else {
+                    $role = self::hullFallbackRole((int) $r->hull_type_id, $hullCatMap);
+                    if ($role !== null) $src['fallback']++;
+                }
+                if ($role === null) { $src['skipped']++; continue; }
+
+                $this->foldKillIntoClusters($r, $role, $mods);
+            }
+
+            $this->info(sprintf('Processed %d kms (last_id=%d; total %d)', count($rows), $lastId, $totalRows));
+            unset($rows, $modulesByKm, $inferenceMap, $theaterByKm);
         }
 
-        // 4. Fuzzy merge within each (alliance, hull, role) group.
-        foreach ($clusters as $key => $families) {
-            $clusters[$key] = self::fuzzyMerge($families, $jaccard);
-        }
+        $this->info(sprintf('Role sources: spec5=%d fallback=%d skipped=%d no_modules=%d',
+            $src['spec5'], $src['fallback'], $src['skipped'], $src['no_modules']));
 
-        // 5. Emit doctrines.
-        $now = now();
-        $emitted = 0; $skipped = 0; $active = 0;
-        $allDoctrineIds = [];
+        // Fuzzy merge per (hull, role). Group fingerprints by their
+        // (hull, role) prefix so we don't compare across groups.
+        $groups = [];
+        foreach ($this->clusters as $compositeKey => $family) {
+            [$hull, $role, $_fp] = explode('|', $compositeKey, 3);
+            $groupKey = "{$hull}|{$role}";
+            $groups[$groupKey][$compositeKey] = $family;
+        }
+        $merged = [];
+        foreach ($groups as $gKey => $fams) {
+            $after = self::fuzzyMerge($fams, $jaccard);
+            $merged = array_merge($merged, $after);
+        }
+        $this->info(sprintf('Pre-merge clusters: %d · Post-merge: %d', count($this->clusters), count($merged)));
 
         if ($dryRun) {
-            foreach ($clusters as $key => $families) {
-                foreach ($families as $fp => $family) {
-                    $this->line(sprintf(
-                        '  %s fp=%s… n=%d conf=%.2f',
-                        $key, substr($fp, 0, 8), $family['observation_count'],
-                        self::confidenceFn($family['observation_count']),
-                    ));
-                }
+            foreach ($merged as $key => $family) {
+                $this->line(sprintf('  %s n=%d conf=%.2f adopters=%d',
+                    $key, $family['observation_count'],
+                    self::confidenceFn($family['observation_count']),
+                    count($family['corp_counts']),
+                ));
             }
             return self::SUCCESS;
         }
 
-        DB::transaction(function () use (
-            $clusters, $now, $coreFreq, $strictConf, &$emitted, &$skipped, &$active, &$allDoctrineIds
-        ) {
-            foreach ($clusters as $families) {
-                foreach ($families as $family) {
-                    $core = self::coreModules($family, $coreFreq);
-                    if ($core === []) {
-                        $skipped++;
-                        continue;
-                    }
-                    $canonical = self::canonicalFingerprint($core);
+        $now = now();
+        $emitted = 0; $active = 0; $skipped = 0;
 
-                    $hullName = DB::table('ref_item_types')->where('id', $family['hull_type_id'])->value('name') ?? 'Unknown';
-                    $corpName = DB::table('esi_entity_names')
-                        ->where('entity_id', $family['corporation_id'])
-                        ->where('category', 'corporation')
-                        ->value('name') ?? ('Corp #' . $family['corporation_id']);
-                    $roleLabel = self::roleLabel($family['role_key']);
-                    $label = mb_substr("{$hullName} · {$roleLabel} · {$corpName}", 0, 191);
+        foreach ($merged as $family) {
+            $core = self::coreModules($family, $coreFreq);
+            if ($core === []) { $skipped++; continue; }
 
-                    $confidence = self::confidenceFn($family['observation_count']);
-                    $floor = self::floorFor($family);
-                    $isActive = ($confidence >= $strictConf && $family['observation_count'] >= $floor) ? 1 : 0;
+            $canonical = self::canonicalFingerprint($core);
+            $hullName = DB::table('ref_item_types')->where('id', $family['hull_type_id'])->value('name') ?? 'Unknown';
+            $label = mb_substr("{$hullName} · " . self::roleLabel($family['role_key']), 0, 191);
+            $confidence = self::confidenceFn($family['observation_count']);
+            $floor = self::floorFor($family);
+            $isActive = ($confidence >= $strictConf && $family['observation_count'] >= $floor) ? 1 : 0;
 
-                    DB::table('auto_doctrines')->upsert(
-                        [[
-                            'corporation_id' => $family['corporation_id'],
-                            'hull_type_id' => $family['hull_type_id'],
-                            'role_key' => $family['role_key'],
-                            'canonical_fingerprint' => $canonical,
-                            'canonical_name' => $label,
-                            'observation_count' => $family['observation_count'],
-                            'confidence' => round($confidence, 4),
-                            'is_active' => $isActive,
-                            'first_seen_at' => $family['first_seen'],
-                            'last_seen_at' => $family['last_seen'],
-                            'computed_at' => $now,
-                            'updated_at' => $now,
-                        ]],
-                        ['corporation_id', 'hull_type_id', 'role_key', 'canonical_fingerprint'],
-                        ['canonical_name', 'observation_count', 'confidence', 'is_active', 'last_seen_at', 'computed_at'],
-                    );
-                    $docId = (int) DB::table('auto_doctrines')
-                        ->where('corporation_id', $family['corporation_id'])
-                        ->where('hull_type_id', $family['hull_type_id'])
-                        ->where('role_key', $family['role_key'])
-                        ->where('canonical_fingerprint', $canonical)
-                        ->value('id');
-                    $allDoctrineIds[] = $docId;
+            DB::transaction(function () use ($family, $canonical, $label, $confidence, $isActive, $core, $now) {
+                DB::table('auto_doctrines')->upsert(
+                    [[
+                        'hull_type_id' => $family['hull_type_id'],
+                        'role_key' => $family['role_key'],
+                        'canonical_fingerprint' => $canonical,
+                        'canonical_name' => $label,
+                        'observation_count' => $family['observation_count'],
+                        'confidence' => round($confidence, 4),
+                        'is_active' => $isActive,
+                        'first_seen_at' => $family['first_seen'],
+                        'last_seen_at' => $family['last_seen'],
+                        'computed_at' => $now,
+                        'updated_at' => $now,
+                    ]],
+                    ['hull_type_id', 'role_key', 'canonical_fingerprint'],
+                    ['canonical_name', 'observation_count', 'confidence', 'is_active', 'last_seen_at', 'computed_at'],
+                );
+                $docId = (int) DB::table('auto_doctrines')
+                    ->where('hull_type_id', $family['hull_type_id'])
+                    ->where('role_key', $family['role_key'])
+                    ->where('canonical_fingerprint', $canonical)
+                    ->value('id');
 
-                    DB::table('auto_doctrine_modules')->where('doctrine_id', $docId)->delete();
-                    $modRows = [];
-                    foreach ($core as [$type_id, $slot, $quantity, $frequency]) {
-                        $modRows[] = [
-                            'doctrine_id' => $docId,
-                            'type_id' => $type_id,
-                            'flag_category' => $slot,
-                            'quantity' => $quantity,
-                            'frequency' => $frequency,
-                        ];
-                    }
-                    if ($modRows !== []) {
-                        DB::table('auto_doctrine_modules')->insert($modRows);
-                    }
-
-                    // Refresh pilot evidence list.
-                    DB::table('auto_doctrine_pilots')->where('doctrine_id', $docId)->delete();
-                    $pilotRows = [];
-                    foreach ($family['kills'] as $k) {
-                        $pilotRows[] = [
-                            'doctrine_id' => $docId,
-                            'character_id' => $k['character_id'],
-                            'battle_id' => $k['battle_id'],
-                            'killmail_id' => $k['killmail_id'],
-                            'seen_at' => $k['seen_at'],
-                        ];
-                    }
-                    if ($pilotRows !== []) {
-                        // insertOrIgnore — the PK on (doctrine_id, killmail_id)
-                        // blocks duplicates quietly.
-                        DB::table('auto_doctrine_pilots')->insertOrIgnore($pilotRows);
-                    }
-
-                    $emitted++;
-                    if ($isActive) $active++;
+                DB::table('auto_doctrine_modules')->where('doctrine_id', $docId)->delete();
+                $modRows = [];
+                foreach ($core as [$tid, $slot, $q, $f]) {
+                    $modRows[] = ['doctrine_id' => $docId, 'type_id' => $tid,
+                        'flag_category' => $slot, 'quantity' => $q, 'frequency' => $f];
                 }
-            }
-        });
+                if ($modRows !== []) DB::table('auto_doctrine_modules')->insert($modRows);
 
-        $this->info("Clusters processed: {$emitted}. Active (passed threshold + floor): {$active}. Skipped (no core modules): {$skipped}.");
+                DB::table('auto_doctrine_adopters')->where('doctrine_id', $docId)->delete();
+                $adopterRows = [];
+                foreach ($family['corp_counts'] as $cid => $meta) {
+                    $adopterRows[] = ['doctrine_id' => $docId, 'corporation_id' => $cid,
+                        'observation_count' => $meta['n'],
+                        'first_seen_at' => $meta['first'], 'last_seen_at' => $meta['last']];
+                }
+                if ($adopterRows !== []) {
+                    foreach (array_chunk($adopterRows, 500) as $chunk) {
+                        DB::table('auto_doctrine_adopters')->insert($chunk);
+                    }
+                }
+
+                // Pilot evidence list retained but capped per doctrine
+                // to keep the table bounded.
+                DB::table('auto_doctrine_pilots')->where('doctrine_id', $docId)->delete();
+                $cap = 200;
+                $pilotRows = array_slice($family['kills'] ?? [], 0, $cap);
+                $out = [];
+                foreach ($pilotRows as $k) {
+                    $out[] = ['doctrine_id' => $docId, 'character_id' => $k['character_id'],
+                        'battle_id' => 0, 'killmail_id' => $k['killmail_id'], 'seen_at' => $k['seen_at']];
+                }
+                if ($out !== []) DB::table('auto_doctrine_pilots')->insertOrIgnore($out);
+            });
+
+            $emitted++;
+            if ($isActive) $active++;
+        }
+
+        $this->info("Clusters emitted: {$emitted} · active: {$active} · skipped (no core): {$skipped}");
         return self::SUCCESS;
     }
 
-    /** md5 of sorted (type_id, slot) multiset. Preserves quantity. */
+    private function foldKillIntoClusters(object $r, string $role, array $mods): void
+    {
+        $fp = self::fingerprint($mods);
+        $key = $r->hull_type_id . '|' . $role . '|' . $fp;
+        if (! isset($this->clusters[$key])) {
+            $this->clusters[$key] = [
+                'module_counts' => [], 'module_set' => [],
+                'observation_count' => 0,
+                'first_seen' => $r->killed_at, 'last_seen' => $r->killed_at,
+                'kills' => [], 'corp_counts' => [],
+                'hull_type_id' => (int) $r->hull_type_id,
+                'role_key' => $role,
+            ];
+        }
+        $f = &$this->clusters[$key];
+        $f['observation_count']++;
+        foreach ($mods as [$type_id, $slot]) {
+            $k = "{$type_id}|{$slot}";
+            $f['module_counts'][$k] = ($f['module_counts'][$k] ?? 0) + 1;
+            $f['module_set'][$k] = true;
+        }
+        if ($r->killed_at < $f['first_seen']) $f['first_seen'] = $r->killed_at;
+        if ($r->killed_at > $f['last_seen'])  $f['last_seen']  = $r->killed_at;
+        // Cap per-family kill evidence to 500 in-memory so big doctrines
+        // don't balloon memory (full list would be redundant anyway).
+        if (count($f['kills']) < 500) {
+            $f['kills'][] = [
+                'killmail_id' => (int) $r->killmail_id,
+                'character_id' => (int) $r->character_id,
+                'corporation_id' => (int) $r->corporation_id,
+                'seen_at' => $r->killed_at,
+            ];
+        }
+        $cid = (int) $r->corporation_id;
+        if (! isset($f['corp_counts'][$cid])) {
+            $f['corp_counts'][$cid] = ['n' => 0, 'first' => $r->killed_at, 'last' => $r->killed_at];
+        }
+        $f['corp_counts'][$cid]['n']++;
+        if ($r->killed_at < $f['corp_counts'][$cid]['first']) $f['corp_counts'][$cid]['first'] = $r->killed_at;
+        if ($r->killed_at > $f['corp_counts'][$cid]['last'])  $f['corp_counts'][$cid]['last']  = $r->killed_at;
+        unset($f);
+    }
+
+    private static function hullFallbackRole(int $hullTypeId, array $hullCatMap): ?string
+    {
+        if ($hullTypeId === self::MONITOR_TYPE_ID) return 'fc';
+        $cat = $hullCatMap[$hullTypeId] ?? null;
+        return match ($cat) {
+            'logi' => 'logi',
+            'bomber' => 'bomber',
+            'command' => 'command',
+            'tackle' => 'tackle',
+            'mainline' => 'mainline_dps',
+            default => null,
+        };
+    }
+
     private static function fingerprint(array $modules): string
     {
-        $canon = $modules;
-        sort($canon);
-        return md5(json_encode($canon));
+        $c = $modules; sort($c); return md5(json_encode($c));
     }
 
     private static function fuzzyMerge(array $families, float $threshold): array
     {
-        $fps = array_keys($families);
+        $keys = array_keys($families);
+        $n = count($keys);
+        if ($n < 2) return $families;
         $merged = true;
         while ($merged) {
             $merged = false;
-            for ($i = 0; $i < count($fps); $i++) {
-                for ($j = $i + 1; $j < count($fps); $j++) {
-                    $a = $families[$fps[$i]]['module_set'] ?? [];
-                    $b = $families[$fps[$j]]['module_set'] ?? [];
-                    $jac = self::jaccard($a, $b);
-                    if ($jac >= $threshold) {
-                        // merge j into i
-                        $big = $families[$fps[$i]]['observation_count'] >= $families[$fps[$j]]['observation_count']
-                            ? $fps[$i] : $fps[$j];
-                        $small = $big === $fps[$i] ? $fps[$j] : $fps[$i];
+            for ($i = 0; $i < count($keys); $i++) {
+                for ($j = $i + 1; $j < count($keys); $j++) {
+                    $a = $families[$keys[$i]]['module_set'] ?? [];
+                    $b = $families[$keys[$j]]['module_set'] ?? [];
+                    if (self::jaccard($a, $b) >= $threshold) {
+                        $big = $families[$keys[$i]]['observation_count'] >= $families[$keys[$j]]['observation_count']
+                            ? $keys[$i] : $keys[$j];
+                        $small = $big === $keys[$i] ? $keys[$j] : $keys[$i];
                         $T = &$families[$big];
                         $S = $families[$small];
                         $T['observation_count'] += $S['observation_count'];
-                        foreach ($S['module_counts'] as $k => $v) {
-                            $T['module_counts'][$k] = ($T['module_counts'][$k] ?? 0) + $v;
-                        }
+                        foreach ($S['module_counts'] as $k => $v) $T['module_counts'][$k] = ($T['module_counts'][$k] ?? 0) + $v;
                         $T['module_set'] = array_merge($T['module_set'], $S['module_set']);
                         if ($S['first_seen'] < $T['first_seen']) $T['first_seen'] = $S['first_seen'];
                         if ($S['last_seen']  > $T['last_seen'])  $T['last_seen']  = $S['last_seen'];
-                        $T['kills'] = array_merge($T['kills'], $S['kills']);
+                        foreach ($S['kills'] as $k) {
+                            if (count($T['kills']) >= 500) break;
+                            $T['kills'][] = $k;
+                        }
+                        foreach ($S['corp_counts'] as $cid => $m) {
+                            if (! isset($T['corp_counts'][$cid])) $T['corp_counts'][$cid] = $m;
+                            else {
+                                $T['corp_counts'][$cid]['n'] += $m['n'];
+                                if ($m['first'] < $T['corp_counts'][$cid]['first']) $T['corp_counts'][$cid]['first'] = $m['first'];
+                                if ($m['last']  > $T['corp_counts'][$cid]['last'])  $T['corp_counts'][$cid]['last']  = $m['last'];
+                            }
+                        }
                         unset($T, $families[$small]);
-                        $fps = array_values(array_diff($fps, [$small]));
+                        $keys = array_values(array_diff($keys, [$small]));
                         $merged = true;
                         break 2;
                     }
@@ -317,11 +385,9 @@ class ComputeAutoDoctrinesCommand extends Command
     private static function jaccard(array $a, array $b): float
     {
         if ($a === [] && $b === []) return 1.0;
-        $aKeys = array_keys($a); $bKeys = array_keys($b);
-        $union = count(array_unique(array_merge($aKeys, $bKeys)));
+        $union = count(array_unique(array_merge(array_keys($a), array_keys($b))));
         if ($union === 0) return 0.0;
-        $intersect = count(array_intersect_key($a, $b));
-        return $intersect / $union;
+        return count(array_intersect_key($a, $b)) / $union;
     }
 
     private static function coreModules(array $family, float $cutoff): array
@@ -330,11 +396,10 @@ class ComputeAutoDoctrinesCommand extends Command
         $out = [];
         foreach ($family['module_counts'] as $k => $count) {
             [$type_id, $slot] = explode('|', $k);
-            $avgPerKill = $count / $obs;
-            $freq = min(1.0, $avgPerKill);
+            $avg = $count / $obs;
+            $freq = min(1.0, $avg);
             if ($freq < $cutoff) continue;
-            $quantity = max(1, (int) round($avgPerKill));
-            $out[] = [(int) $type_id, $slot, $quantity, round($freq, 4)];
+            $out[] = [(int) $type_id, $slot, max(1, (int) round($avg)), round($freq, 4)];
         }
         sort($out);
         return $out;
@@ -342,55 +407,29 @@ class ComputeAutoDoctrinesCommand extends Command
 
     private static function canonicalFingerprint(array $core): string
     {
-        $expanded = [];
-        foreach ($core as [$type_id, $slot, $quantity, $_f]) {
-            for ($i = 0; $i < $quantity; $i++) {
-                $expanded[] = [$type_id, $slot];
-            }
-        }
-        sort($expanded);
-        return md5(json_encode($expanded));
+        $exp = [];
+        foreach ($core as [$tid, $slot, $q, $_]) for ($i = 0; $i < $q; $i++) $exp[] = [$tid, $slot];
+        sort($exp);
+        return md5(json_encode($exp));
     }
 
-    private static function confidenceFn(int $n): float
-    {
-        return 1.0 - exp(-$n / 5.0);
-    }
+    private static function confidenceFn(int $n): float { return 1.0 - exp(-$n / 5.0); }
 
     private static function floorFor(array $family): int
     {
         $role = $family['role_key'];
-        if (isset(self::FLOOR_BY_ROLE[$role])) {
-            return self::FLOOR_BY_ROLE[$role];
-        }
+        if (isset(self::FLOOR_BY_ROLE[$role])) return self::FLOOR_BY_ROLE[$role];
         $groupId = (int) (DB::table('ref_item_types')->where('id', $family['hull_type_id'])->value('group_id') ?? 0);
-        if (in_array($groupId, self::CAPITAL_HULL_GROUPS, true)) {
-            return self::FLOOR_CAPITAL;
-        }
+        if (in_array($groupId, self::CAPITAL_HULL_GROUPS, true)) return self::FLOOR_CAPITAL;
         return self::FLOOR_DEFAULT;
     }
 
     private static function roleLabel(string $role): string
     {
         return match ($role) {
-            'fc' => 'FC',
-            'logi' => 'Logi',
-            'mainline_dps' => 'DPS',
-            'tackle' => 'Tackle',
-            'bomber' => 'Bomber',
-            'command' => 'Command',
+            'fc' => 'FC', 'logi' => 'Logi', 'mainline_dps' => 'DPS',
+            'tackle' => 'Tackle', 'bomber' => 'Bomber', 'command' => 'Command',
             default => ucfirst($role),
         };
-    }
-
-    private function theaterForKill(int $killmailId): int
-    {
-        static $cache = [];
-        if (! isset($cache[$killmailId])) {
-            $cache[$killmailId] = (int) (DB::table('battle_theater_killmails')
-                ->where('killmail_id', $killmailId)
-                ->value('theater_id') ?? 0);
-        }
-        return $cache[$killmailId];
     }
 }
