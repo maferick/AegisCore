@@ -20,7 +20,7 @@ use Illuminate\Support\Facades\DB;
  */
 class SeedHullCategoriesCommand extends Command
 {
-    protected $signature = 'doctrines:seed-hull-categories {--dry-run}';
+    protected $signature = 'doctrines:seed-hull-categories {--dry-run} {--reclass : Overwrite existing rows whose category disagrees with the SDE group mapping}';
 
     protected $description = 'Backfill ship_class_category_mapping from SDE ship groups.';
 
@@ -37,7 +37,7 @@ class SeedHullCategoriesCommand extends Command
         1305 => 'mainline',  // Tactical Destroyer
         898  => 'mainline',  // Black Ops
         900  => 'mainline',  // Marauder
-        906  => 'mainline',  // Combat Recon
+        906  => 'mainline',  // Combat Recon — kept at mainline group default; WC overrides in TYPE_OVERRIDES flip the ewar variants (Huginn/Lachesis/Curse/Rook) to tackle
         485  => 'mainline',  // Dreadnought
         547  => 'mainline',  // Carrier
         659  => 'mainline',  // Supercarrier
@@ -92,11 +92,21 @@ class SeedHullCategoriesCommand extends Command
         631  => 'logi',      // Scythe
         // T1 armor logi cruiser.
         634  => 'logi',      // Exequror
+        // Sisters-of-EVE armor logi BS (WC "Nestor Logi").
+        33472 => 'logi',     // Nestor
+        // Combat Recon cruisers — ewar-heavy (neut/web/damp/ECM), closest
+        // tag in the 5-role model is tackle. WC catalog consistently labels
+        // these as ewar/support.
+        11959 => 'tackle',   // Rook
+        11961 => 'tackle',   // Huginn
+        11971 => 'tackle',   // Lachesis
+        20125 => 'tackle',   // Curse
     ];
 
     public function handle(): int
     {
         $dryRun = (bool) $this->option('dry-run');
+        $reclass = (bool) $this->option('reclass');
 
         $existing = DB::table('ship_class_category_mapping')
             ->pluck('category', 'ship_type_id')
@@ -113,7 +123,7 @@ class SeedHullCategoriesCommand extends Command
 
         $now = now();
         $inserts = [];
-        $reclass = [];
+        $reclassList = [];
         foreach ($ships as $s) {
             $role = self::GROUP_ROLE[$s->group_id] ?? null;
             if ($role === null) continue;
@@ -126,18 +136,19 @@ class SeedHullCategoriesCommand extends Command
                     'computed_at' => $now,
                 ];
             } else {
-                $reclass[] = [(int) $s->id, $s->name, $current, $role];
+                $reclassList[] = [(int) $s->id, $s->name, $current, $role];
             }
         }
 
         $this->info(sprintf('New inserts: %d', count($inserts)));
-        $this->info(sprintf('Skipped reclassifications (existing rows kept): %d', count($reclass)));
-        if ($reclass !== []) {
+        $reclassVerb = $reclass ? 'Reclassifications (will apply)' : 'Skipped reclassifications (existing rows kept)';
+        $this->info(sprintf('%s: %d', $reclassVerb, count($reclassList)));
+        if ($reclassList !== []) {
             $this->table(
-                ['ship_type_id', 'name', 'kept', 'sde-group-suggests'],
-                array_slice($reclass, 0, 20),
+                ['ship_type_id', 'name', 'from', 'sde-group-suggests'],
+                array_slice($reclassList, 0, 20),
             );
-            if (count($reclass) > 20) $this->comment(sprintf('(+%d more)', count($reclass) - 20));
+            if (count($reclassList) > 20) $this->comment(sprintf('(+%d more)', count($reclassList) - 20));
         }
 
         // WC ground-truth overrides — applied whether or not the row
@@ -166,15 +177,21 @@ class SeedHullCategoriesCommand extends Command
             return self::SUCCESS;
         }
 
-        DB::transaction(function () use ($inserts, $overrideChanges) {
+        DB::transaction(function () use ($inserts, $overrideChanges, $reclass, $reclassList) {
             foreach (array_chunk($inserts, 500) as $chunk) {
                 DB::table('ship_class_category_mapping')->insert($chunk);
+            }
+            if ($reclass) {
+                foreach ($reclassList as [$typeId, $_name, $_from, $to]) {
+                    DB::table('ship_class_category_mapping')
+                        ->where('ship_type_id', $typeId)
+                        ->update(['category' => $to, 'computed_at' => now()]);
+                }
             }
             foreach ($overrideChanges as [$typeId, $_from, $to]) {
                 DB::table('ship_class_category_mapping')
                     ->where('ship_type_id', $typeId)
                     ->update(['category' => $to, 'computed_at' => now()]);
-                // If row didn't exist yet, insert it.
                 DB::table('ship_class_category_mapping')
                     ->insertOrIgnore(['ship_type_id' => $typeId, 'category' => $to, 'computed_at' => now()]);
             }
