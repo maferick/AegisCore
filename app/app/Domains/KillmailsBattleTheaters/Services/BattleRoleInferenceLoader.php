@@ -172,16 +172,86 @@ final class BattleRoleInferenceLoader
         if ($allianceIds === []) {
             return [];
         }
+        $inferred = [];
         $weightVersion = $this->resolveWeightVersion();
-        if ($weightVersion === null) {
-            return [];
+        if ($weightVersion !== null) {
+            $inferred = DB::table('battle_character_role_inference')
+                ->where('battle_id', $battleId)
+                ->whereIn('alliance_id', $allianceIds)
+                ->where('weight_version', $weightVersion)
+                ->pluck('primary_role_key', 'character_id')
+                ->map(fn ($v) => (string) $v)
+                ->all();
         }
-        return DB::table('battle_character_role_inference')
-            ->where('battle_id', $battleId)
-            ->whereIn('alliance_id', $allianceIds)
-            ->where('weight_version', $weightVersion)
-            ->pluck('primary_role_key', 'character_id')
-            ->map(fn ($v) => (string) $v)
-            ->all();
+
+        // Fall back to on-the-fly derivation from killmail_pilot_role
+        // for characters Spec 5 scoring hasn't covered yet. This is
+        // the per-killmail hull-based tag (Monitor → fc,
+        // logi/bomber/command hull → matching role, etc.) aggregated
+        // to a single role per character by priority: FC wins any
+        // Monitor appearance; then logi > bomber > command > tackle >
+        // mainline_dps > other, tiebroken by most-frequent hull.
+        $fallback = $this->deriveFromKillmailRoles($battleId, $allianceIds, array_keys($inferred));
+
+        return $inferred + $fallback;
+    }
+
+    /**
+     * @param  list<int>  $allianceIds
+     * @param  list<int>  $skipCharacterIds  characters already covered by inference
+     * @return array<int, string>
+     */
+    private function deriveFromKillmailRoles(int $battleId, array $allianceIds, array $skipCharacterIds): array
+    {
+        $rows = DB::table('killmail_pilot_role AS kpr')
+            ->join('battle_theater_killmails AS btk', 'btk.killmail_id', '=', 'kpr.killmail_id')
+            ->leftJoin('killmail_attackers AS ka', function ($j): void {
+                $j->on('ka.killmail_id', '=', 'kpr.killmail_id')
+                  ->on('ka.character_id', '=', 'kpr.character_id');
+            })
+            ->leftJoin('killmails AS k', 'k.killmail_id', '=', 'kpr.killmail_id')
+            ->where('btk.theater_id', $battleId)
+            ->whereIn('kpr.role_key', ['fc', 'logi', 'bomber', 'command', 'tackle', 'mainline_dps'])
+            ->selectRaw(
+                'kpr.character_id, kpr.role_key, COUNT(*) AS n, '
+                . 'COALESCE(ka.alliance_id, k.victim_alliance_id) AS alliance_id'
+            )
+            ->groupBy('kpr.character_id', 'kpr.role_key', 'alliance_id')
+            ->get();
+
+        $rolePriority = [
+            'fc' => 6,
+            'logi' => 5,
+            'bomber' => 4,
+            'command' => 3,
+            'tackle' => 2,
+            'mainline_dps' => 1,
+        ];
+        $skip = array_flip($skipCharacterIds);
+        $allyFilter = array_flip($allianceIds);
+
+        // {cid => [priority, count, role]} — win by priority, then count.
+        $picked = [];
+        foreach ($rows as $r) {
+            $cid = (int) $r->character_id;
+            if (isset($skip[$cid])) continue;
+            $aid = (int) ($r->alliance_id ?? 0);
+            if ($aid > 0 && ! isset($allyFilter[$aid])) continue;
+            $role = (string) $r->role_key;
+            $pri = $rolePriority[$role] ?? 0;
+            $n = (int) $r->n;
+            $cur = $picked[$cid] ?? null;
+            if ($cur === null
+                || $pri > $cur[0]
+                || ($pri === $cur[0] && $n > $cur[1])) {
+                $picked[$cid] = [$pri, $n, $role];
+            }
+        }
+
+        $out = [];
+        foreach ($picked as $cid => [$_pri, $_n, $role]) {
+            $out[$cid] = $role;
+        }
+        return $out;
     }
 }
