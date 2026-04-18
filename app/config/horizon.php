@@ -267,16 +267,12 @@ return [
         ],
         'prod' => [
             'supervisor-1' => [
-                // 15 workers sustain enough ESI concurrency to drain
-                // the 1-2k backlogs that follow each big battle sweep
-                // in ~1h without coming near the 100-errors-per-60s
-                // global budget. Successful calls burn zero error
-                // credit; per-route 429s are rare on the endpoints we
-                // hit (character/corp/alliance history + zkill catchup).
-                // Revisit if error_limit stays warm under sustained
-                // load.
-                'maxProcesses' => 15,
-                'balanceMaxShift' => 3,
+                // 25 workers push ~125 req/s sustained at 5 req/s each.
+                // Well under CCP's 100-errors-per-60s global budget
+                // while fetcher error rate stays at ~0%. Revisit (down)
+                // if error_limit starts warming or 429s appear.
+                'maxProcesses' => 25,
+                'balanceMaxShift' => 5,
                 'balanceCooldown' => 2,
             ],
         ],
@@ -285,8 +281,8 @@ return [
         // with `APP_ENV=production php artisan horizon`).
         'production' => [
             'supervisor-1' => [
-                'maxProcesses' => 15,
-                'balanceMaxShift' => 3,
+                'maxProcesses' => 25,
+                'balanceMaxShift' => 5,
                 'balanceCooldown' => 2,
             ],
         ],
