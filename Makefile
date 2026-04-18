@@ -368,12 +368,22 @@ battle-pipeline:
 	$(MAKE) battle-features  BATTLE=$(BATTLE) ALLIANCE=$(ALLIANCE)
 	$(MAKE) battle-score     BATTLE=$(BATTLE) ALLIANCE=$(ALLIANCE) WEIGHT_LABEL=$(WEIGHT_LABEL)
 
-# Process every (theater, alliance) pair that has battle_sub_fleets
-# coverage but no Spec 4 features yet. Batched + capped so scheduler
-# invocations stay within budget. Used by the
-# Schedule::command('battle:process-pending') nightly sweep.
+# Auto-pipeline: every pending (theater, alliance) pair gets the
+# Specs 2→3→4→5 chain. Invoke from HOST cron (scheduler container
+# has no docker CLI).
+#
+# Steady-state cron (every 5 min to match theater_clustering):
+#   */5 * * * * cd /opt/AegisCore && make battle-process-pending >> /var/log/aegiscore-battle-pipeline.log 2>&1
+#
+# Overrides: BATTLE_LIMIT=100 | BATTLE_MIN_MEMBERS=5
 battle-process-pending:
-	$(COMPOSE) exec -T php-fpm php artisan battle:process-pending $(BATTLE_PROCESS_ARGS)
+	@bash scripts/battle-process-pending.sh
+
+# Full backlog sweep with parallelism. One-shot; no limit cap.
+# Run this on first bring-up or after a long gap.
+# Overrides: BACKLOG_PARALLEL=4 | BATTLE_MIN_MEMBERS=5
+battle-backlog:
+	@bash scripts/battle-backlog-filler.sh
 
 battle-refresh-priors:
 	$(COMPOSE) exec -T php-fpm php artisan battle:refresh-priors $(BATTLE_PRIORS_ARGS)
