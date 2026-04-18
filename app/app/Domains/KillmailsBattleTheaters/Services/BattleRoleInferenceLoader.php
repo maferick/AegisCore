@@ -203,20 +203,17 @@ final class BattleRoleInferenceLoader
      */
     private function deriveFromKillmailRoles(int $battleId, array $allianceIds, array $skipCharacterIds): array
     {
+        // (character_id, role_key) counts scoped to this theater's
+        // killmails. Alliance filter is skipped here — upstream
+        // BattleTheaterViewData already filters participants to viewer-
+        // visible alliances, and the kpr table is small enough to
+        // scan per-battle without an alliance narrowing.
         $rows = DB::table('killmail_pilot_role AS kpr')
             ->join('battle_theater_killmails AS btk', 'btk.killmail_id', '=', 'kpr.killmail_id')
-            ->leftJoin('killmail_attackers AS ka', function ($j): void {
-                $j->on('ka.killmail_id', '=', 'kpr.killmail_id')
-                  ->on('ka.character_id', '=', 'kpr.character_id');
-            })
-            ->leftJoin('killmails AS k', 'k.killmail_id', '=', 'kpr.killmail_id')
             ->where('btk.theater_id', $battleId)
             ->whereIn('kpr.role_key', ['fc', 'logi', 'bomber', 'command', 'tackle', 'mainline_dps'])
-            ->selectRaw(
-                'kpr.character_id, kpr.role_key, COUNT(*) AS n, '
-                . 'COALESCE(ka.alliance_id, k.victim_alliance_id) AS alliance_id'
-            )
-            ->groupBy('kpr.character_id', 'kpr.role_key', 'alliance_id')
+            ->selectRaw('kpr.character_id, kpr.role_key, COUNT(*) AS n')
+            ->groupBy('kpr.character_id', 'kpr.role_key')
             ->get();
 
         $rolePriority = [
@@ -228,15 +225,12 @@ final class BattleRoleInferenceLoader
             'mainline_dps' => 1,
         ];
         $skip = array_flip($skipCharacterIds);
-        $allyFilter = array_flip($allianceIds);
 
         // {cid => [priority, count, role]} — win by priority, then count.
         $picked = [];
         foreach ($rows as $r) {
             $cid = (int) $r->character_id;
             if (isset($skip[$cid])) continue;
-            $aid = (int) ($r->alliance_id ?? 0);
-            if ($aid > 0 && ! isset($allyFilter[$aid])) continue;
             $role = (string) $r->role_key;
             $pri = $rolePriority[$role] ?? 0;
             $n = (int) $r->n;
