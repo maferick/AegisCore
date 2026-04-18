@@ -1072,6 +1072,29 @@ services:
   # `tools` so docker compose up doesn't start it; invoke via
   # `make theater-cluster`.
 
+  # battle_partition — Spec 3 one-shot sub-fleet partitioning.
+  # Reads Spec 2 metrics, writes battle_sub_fleets + membership.
+  # Shares a GET_LOCK key with battle_graph so mid-write reads never
+  # race. Profile-gated under `tools`; see python/battle_partition/README.md.
+  battle_partition:
+    profiles: ["tools"]
+    build:
+      context: ../python
+      dockerfile: battle_partition.Dockerfile
+    image: aegiscore/battle-partition:0.1.0
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+
   # battle_graph — Spec 2 one-shot graph projection + GDS compute.
   # Profile-gated under `tools`; invoked per (battle, alliance) side
   # either manually (see python/battle_graph/README.md) or via the

@@ -1,0 +1,6 @@
+# battle_partition deps.
+#
+# Pure relational job — reads battle_character_graph_metrics from
+# MariaDB, writes battle_sub_fleets + battle_character_sub_fleet_membership
+# in one transaction. No Neo4j, no scientific libraries.
+pymysql~=1.1
