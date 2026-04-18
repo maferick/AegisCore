@@ -98,15 +98,17 @@ class ShipClassCategoryMappingResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(
-                fn (Builder $q) => $q->leftJoin('ref_item_types', 'ref_item_types.id', '=', 'ship_class_category_mapping.ship_type_id')
-                    ->select('ship_class_category_mapping.*', 'ref_item_types.name as ship_name')
-            )
-            ->defaultSort('ship_name')
+            ->defaultSort('ship_type_id')
             ->columns([
-                TextColumn::make('ship_name')
+                TextColumn::make('ship_type_id')
                     ->label('Ship')
-                    ->searchable(query: fn (Builder $q, string $s) => $q->where('ref_item_types.name', 'like', "%{$s}%"))
+                    ->getStateUsing(fn (ShipClassCategoryMapping $r) => self::shipNameMap()[$r->ship_type_id] ?? ('type_' . $r->ship_type_id))
+                    ->searchable(query: function (Builder $q, string $s): void {
+                        $ids = DB::table('ref_item_types')
+                            ->where('name', 'like', "%{$s}%")
+                            ->pluck('id');
+                        $q->whereIn('ship_type_id', $ids);
+                    })
                     ->sortable(),
 
                 TextColumn::make('ship_type_id')
@@ -142,6 +144,19 @@ class ShipClassCategoryMappingResource extends Resource
                 EditAction::make(),
                 DeleteAction::make(),
             ]);
+    }
+
+    /** @var array<int, string>|null */
+    private static ?array $shipNameCache = null;
+
+    private static function shipNameMap(): array
+    {
+        if (self::$shipNameCache === null) {
+            self::$shipNameCache = DB::table('ref_item_types')
+                ->pluck('name', 'id')
+                ->all();
+        }
+        return self::$shipNameCache;
     }
 
     public static function getPages(): array
