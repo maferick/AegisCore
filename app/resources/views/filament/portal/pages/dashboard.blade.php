@@ -189,6 +189,105 @@
                 </div>
             </div>
 
+            {{-- Role breakdown + battles participated strip --}}
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap:1.25rem; margin-top:1.25rem;">
+                <div>
+                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Role breakdown</h3>
+                    @if (empty($c['role_breakdown']))
+                        <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">No role-tagged kills yet.</p>
+                    @else
+                        @php
+                            $roleColor = [
+                                'fc' => '#fde047', 'logi' => '#6ee7b7', 'bomber' => '#fdba74',
+                                'command' => '#f0abfc', 'tackle' => '#67e8f9', 'mainline_dps' => '#93c5fd',
+                            ];
+                            $roleLabel = [
+                                'fc' => 'FC', 'logi' => 'Logi', 'bomber' => 'Bomber',
+                                'command' => 'Cmd', 'tackle' => 'Tackle', 'mainline_dps' => 'DPS',
+                            ];
+                        @endphp
+                        {{-- Stacked bar --}}
+                        <div style="display:flex; height:22px; border-radius:4px; overflow:hidden; margin-bottom:0.5rem;">
+                            @foreach ($c['role_breakdown'] as $r)
+                                @php $pct = $c['role_total'] > 0 ? ($r['n'] / $c['role_total'] * 100) : 0; @endphp
+                                <div title="{{ $roleLabel[$r['role']] ?? $r['role'] }}: {{ number_format($r['n']) }} ({{ round($pct, 1) }}%)"
+                                     style="flex:{{ $r['n'] }}; background:{{ $roleColor[$r['role']] ?? '#64748b' }}; opacity:0.85;"></div>
+                            @endforeach
+                        </div>
+                        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; font-size:0.75rem;">
+                            @foreach ($c['role_breakdown'] as $r)
+                                @php $pct = $c['role_total'] > 0 ? ($r['n'] / $c['role_total'] * 100) : 0; @endphp
+                                <span style="display:inline-flex; gap:0.35rem; align-items:center;">
+                                    <span style="width:10px; height:10px; border-radius:2px; background:{{ $roleColor[$r['role']] ?? '#64748b' }};"></span>
+                                    <span style="color:#cbd5e1;">{{ $roleLabel[$r['role']] ?? $r['role'] }}</span>
+                                    <span style="color:#7a7a82;">{{ round($pct, 1) }}%</span>
+                                </span>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+                <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Battles participated</div>
+                    <div style="font-size:1.4rem; font-weight:700; color:#e5e5e7; margin-top:0.1rem;">
+                        {{ number_format($c['battles_participated'] ?? 0) }}
+                    </div>
+                    <div style="font-size:0.68rem; color:#7a7a82; margin-top:0.15rem;">distinct theaters in our data</div>
+                </div>
+            </div>
+
+            {{-- Top systems + flew with / fought against --}}
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:1.25rem; margin-top:1.25rem;">
+                <div>
+                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Top systems</h3>
+                    @if (empty($c['top_systems']))
+                        <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">—</p>
+                    @else
+                        <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                            @foreach ($c['top_systems'] as $s)
+                                <div style="display:flex; justify-content:space-between; font-size:0.82rem;">
+                                    <span style="color:#e5e5e7;">{{ $s['name'] }}</span>
+                                    <span style="color:#9ca3af;">{{ number_format($s['n']) }}</span>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+                <div>
+                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Flew with</h3>
+                    @if (empty($c['fought_with']))
+                        <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">—</p>
+                    @else
+                        <div style="display:flex; flex-direction:column; gap:0.4rem;">
+                            @foreach ($c['fought_with'] as $a)
+                                <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.82rem;">
+                                    <img src="https://images.evetech.net/alliances/{{ $a['alliance_id'] }}/logo?size=32"
+                                         referrerpolicy="no-referrer" style="width:20px; height:20px; border-radius:3px; flex-shrink:0;" alt="">
+                                    <span style="flex:1; color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $a['name'] }}</span>
+                                    <span style="color:#9ca3af;">{{ number_format($a['n']) }}</span>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+                <div>
+                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.6rem;">Fought against</h3>
+                    @if (empty($c['fought_against']))
+                        <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">—</p>
+                    @else
+                        <div style="display:flex; flex-direction:column; gap:0.4rem;">
+                            @foreach ($c['fought_against'] as $a)
+                                <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.82rem;">
+                                    <img src="https://images.evetech.net/alliances/{{ $a['alliance_id'] }}/logo?size=32"
+                                         referrerpolicy="no-referrer" style="width:20px; height:20px; border-radius:3px; flex-shrink:0;" alt="">
+                                    <span style="flex:1; color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $a['name'] }}</span>
+                                    <span style="color:#9ca3af;">{{ number_format($a['n']) }}</span>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+            </div>
+
             {{-- Top hulls --}}
             @if (! empty($c['top_hulls']))
                 <div style="margin-top:1.25rem;">

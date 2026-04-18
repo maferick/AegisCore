@@ -206,6 +206,73 @@ class Dashboard extends BaseDashboard
             ->where('ka.character_id', $cid)
             ->max('k.attacker_count');
 
+        // Role breakdown from killmail_pilot_role (per-km hull-based role).
+        $roleBreakdown = DB::table('killmail_pilot_role')
+            ->where('character_id', $cid)
+            ->whereIn('role_key', ['fc', 'logi', 'bomber', 'command', 'tackle', 'mainline_dps'])
+            ->selectRaw('role_key, COUNT(*) AS n')
+            ->groupBy('role_key')
+            ->orderByDesc('n')
+            ->get()
+            ->map(fn ($r) => ['role' => (string) $r->role_key, 'n' => (int) $r->n])
+            ->all();
+        $roleTotal = array_sum(array_column($roleBreakdown, 'n')) ?: 1;
+
+        // Battles participated.
+        $battlesParticipated = DB::table('battle_theater_participants')
+            ->where('character_id', $cid)
+            ->distinct()
+            ->count('theater_id');
+
+        // Top 3 systems — kills-on + losses-in weighted equally.
+        $topSystems = DB::select(<<<'SQL'
+            SELECT sys.system_id, s.name, SUM(sys.n) AS n FROM (
+                SELECT k.solar_system_id AS system_id, COUNT(*) AS n
+                  FROM killmail_attackers ka JOIN killmails k ON k.killmail_id=ka.killmail_id
+                 WHERE ka.character_id=? GROUP BY k.solar_system_id
+                UNION ALL
+                SELECT solar_system_id AS system_id, COUNT(*) AS n
+                  FROM killmails WHERE victim_character_id=? GROUP BY solar_system_id
+            ) sys LEFT JOIN ref_solar_systems s ON s.id = sys.system_id
+            GROUP BY sys.system_id, s.name
+            ORDER BY n DESC LIMIT 3
+        SQL, [$cid, $cid]);
+
+        // Most fought WITH — alliances that appeared alongside this
+        // pilot on the same killmails (attacker-side co-occurrence).
+        // Excludes the pilot's own alliance so the result reads as
+        // "you flew with these" not "you're in this alliance".
+        $foughtWith = DB::select(<<<'SQL'
+            SELECT ka2.alliance_id, COUNT(DISTINCT ka.killmail_id) AS n
+              FROM killmail_attackers ka
+              JOIN killmail_attackers ka2 ON ka2.killmail_id=ka.killmail_id AND ka2.alliance_id IS NOT NULL
+             WHERE ka.character_id=? AND ka2.character_id <> ? AND (ka2.alliance_id <> ? OR ? = 0)
+             GROUP BY ka2.alliance_id ORDER BY n DESC LIMIT 3
+        SQL, [$cid, $cid, $currentAllyId ?? 0, $currentAllyId ?? 0]);
+
+        // Most fought AGAINST — victim alliance on kills the pilot
+        // participated in.
+        $foughtAgainst = DB::select(<<<'SQL'
+            SELECT k.victim_alliance_id AS alliance_id, COUNT(*) AS n
+              FROM killmail_attackers ka JOIN killmails k ON k.killmail_id=ka.killmail_id
+             WHERE ka.character_id=? AND k.victim_alliance_id IS NOT NULL
+               AND (k.victim_alliance_id <> ? OR ? = 0)
+             GROUP BY k.victim_alliance_id ORDER BY n DESC LIMIT 3
+        SQL, [$cid, $currentAllyId ?? 0, $currentAllyId ?? 0]);
+
+        $mergedAllyIds = array_values(array_unique(array_merge(
+            array_map(fn ($r) => (int) $r->alliance_id, $foughtWith),
+            array_map(fn ($r) => (int) $r->alliance_id, $foughtAgainst),
+        )));
+        $allyNameLookup = [];
+        if ($mergedAllyIds !== []) {
+            $allyNameLookup = DB::table('esi_entity_names')
+                ->whereIn('entity_id', $mergedAllyIds)
+                ->where('category', 'alliance')
+                ->pluck('name', 'entity_id')
+                ->all();
+        }
+
         $highlights = [
             'biggest_kill' => $biggestKill ? [
                 'killmail_id' => (int) $biggestKill->killmail_id,
@@ -240,6 +307,24 @@ class Dashboard extends BaseDashboard
             'losses' => $losses,
             'top_hulls' => $topHulls,
             'highlights' => $highlights,
+            'role_breakdown' => $roleBreakdown,
+            'role_total' => $roleTotal,
+            'battles_participated' => $battlesParticipated,
+            'top_systems' => array_map(fn ($r) => [
+                'system_id' => (int) $r->system_id,
+                'name' => (string) ($r->name ?? "#{$r->system_id}"),
+                'n' => (int) $r->n,
+            ], $topSystems),
+            'fought_with' => array_map(fn ($r) => [
+                'alliance_id' => (int) $r->alliance_id,
+                'name' => (string) ($allyNameLookup[$r->alliance_id] ?? "#{$r->alliance_id}"),
+                'n' => (int) $r->n,
+            ], $foughtWith),
+            'fought_against' => array_map(fn ($r) => [
+                'alliance_id' => (int) $r->alliance_id,
+                'name' => (string) ($allyNameLookup[$r->alliance_id] ?? "#{$r->alliance_id}"),
+                'n' => (int) $r->n,
+            ], $foughtAgainst),
         ];
     }
 }
