@@ -197,14 +197,18 @@ class MyDoctrines extends Page
                 ->values()
                 ->all();
 
+            $scopeN = (int) $r->scope_n;
+            $globalN = (int) $r->global_n;
+            $share = $globalN > 0 ? $scopeN / $globalN : 0.0;
             $out[] = [
                 'id' => $r->id,
                 'role' => $r->role_key,
                 'hull_type_id' => (int) $r->hull_type_id,
                 'hull_name' => $r->hull_name,
                 'label' => $r->canonical_name,
-                'scope_n' => (int) $r->scope_n,
-                'global_n' => (int) $r->global_n,
+                'scope_n' => $scopeN,
+                'global_n' => $globalN,
+                'share' => $share,
                 'confidence' => (float) $r->confidence,
                 'modules' => $modules,
                 'has_corp_variant' => $corps->isNotEmpty(),
@@ -212,7 +216,36 @@ class MyDoctrines extends Page
                 'buyall' => $this->toBuyall($modules),
             ];
         }
-        return $out;
+        return $this->classifyBuckets($out);
+    }
+
+    /**
+     * Per (hull, role), mark each doctrine as 'primary' or 'tail':
+     *   primary = share >= 0.50 (signature fit), OR
+     *             top-3 by scope_n AND share >= 0.15 (adopted common fit).
+     * Everything else goes into the expandable tail.
+     *
+     * @param array<int,array<string,mixed>> $docs
+     * @return array<int,array<string,mixed>>
+     */
+    private function classifyBuckets(array $docs): array
+    {
+        $groups = [];
+        foreach ($docs as $i => $d) {
+            $groups[$d['role'] . '|' . $d['hull_type_id']][] = $i;
+        }
+        foreach ($groups as $idxs) {
+            usort($idxs, fn ($a, $b) => $docs[$b]['scope_n'] <=> $docs[$a]['scope_n']);
+            $rank = 0;
+            foreach ($idxs as $i) {
+                $d = $docs[$i];
+                $isSignature = $d['share'] >= 0.50;
+                $isTopAdopted = $rank < 3 && $d['share'] >= 0.15;
+                $docs[$i]['bucket'] = ($isSignature || $isTopAdopted) ? 'primary' : 'tail';
+                $rank++;
+            }
+        }
+        return $docs;
     }
 
     private function toEft(string $hullName, array $modules): string
