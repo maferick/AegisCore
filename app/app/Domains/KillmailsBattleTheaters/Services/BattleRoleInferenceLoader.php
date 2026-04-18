@@ -18,6 +18,12 @@ use Illuminate\Support\Facades\DB;
  */
 final class BattleRoleInferenceLoader
 {
+    /**
+     * v0 seed label, kept as a fallback if no weight_version has
+     * is_default=1 (shouldn't happen in production). Real selection
+     * goes through resolveWeightVersion() which prefers
+     * battle_role_weight_versions.is_default.
+     */
     public const DEFAULT_WEIGHT_LABEL = 'v0_scoring_seed';
 
     /**
@@ -142,9 +148,14 @@ final class BattleRoleInferenceLoader
 
     public function resolveWeightVersion(?string $label = null): ?int
     {
-        $row = DB::table('battle_role_weight_versions')
-            ->where('label', $label ?? self::DEFAULT_WEIGHT_LABEL)
-            ->first();
+        if ($label !== null) {
+            $row = DB::table('battle_role_weight_versions')->where('label', $label)->first();
+            return $row ? (int) $row->weight_version : null;
+        }
+        // Prefer the is_default=1 row (Spec 7 promotion target); fall back
+        // to the v0 seed label for environments without a promoted version.
+        $row = DB::table('battle_role_weight_versions')->where('is_default', 1)->first()
+            ?? DB::table('battle_role_weight_versions')->where('label', self::DEFAULT_WEIGHT_LABEL)->first();
         return $row ? (int) $row->weight_version : null;
     }
 

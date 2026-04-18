@@ -43,7 +43,7 @@ ROLES = (ROLE_FC, ROLE_LOGI, ROLE_MAINLINE)
 
 # Default set of score classes that sum into `final`. Extending this
 # list is how future specs add new components (e.g. 'historical').
-ACTIVE_CLASSES = ("structural", "temporal", "hull")
+ACTIVE_CLASSES = ("structural", "temporal", "hull", "historical")
 
 # Active weight-set name per role. FC can take a conditional override
 # via pick_fc_weight_set().
@@ -60,6 +60,7 @@ class ScoreDecomposition:
     structural: float
     temporal: float
     hull: float
+    historical: float
     final: float  # clamped [0, 1]
 
 
@@ -138,12 +139,29 @@ def compute_hull_score(f: FeatureRow, coefs: dict[str, float], prefix: str) -> f
     return s
 
 
-# Registry of compute functions. Future classes (e.g. 'historical')
-# register here. Classes absent from the registry contribute 0.
-COMPUTE_REGISTRY: dict[str, Callable[[FeatureRow, dict[str, float], str], float]] = {
+def compute_historical_score(
+    f: FeatureRow,
+    coefs: dict[str, float],
+    prefix: str,
+    prior: float = 0.0,
+) -> float:
+    """Spec 7 historical component. One coefficient per weight set:
+    `<prefix>.historical_prior`. Multiplied by the pilot's prior for
+    the role being scored (looked up at call time from the priors
+    dict threaded into score_battle). Cold-start pilots with no prior
+    contribute 0.
+    """
+    return coef(coefs, f"{prefix}.historical_prior") * prior
+
+
+# Registry of compute functions. The historical function takes an
+# extra `prior` kwarg; callers use compute_role_decomposition which
+# knows about the priors dict.
+COMPUTE_REGISTRY: dict[str, Callable[..., float]] = {
     "structural": compute_structural_score,
     "temporal": compute_temporal_score,
     "hull": compute_hull_score,
+    "historical": compute_historical_score,
 }
 
 
@@ -152,17 +170,27 @@ def compute_role_decomposition(
     coefs: dict[str, float],
     weight_set_prefix: str,
     active_classes: tuple[str, ...] = ACTIVE_CLASSES,
+    prior: float = 0.0,
 ) -> ScoreDecomposition:
-    """Compute all active score classes + final for one (character, role)."""
+    """Compute all active score classes + final for one (character, role).
+    `prior` is the per-char per-role historical prior; only consumed by
+    compute_historical_score. Pass 0.0 for cold-start pilots."""
     per_class: dict[str, float] = {}
     for cls in active_classes:
         fn = COMPUTE_REGISTRY.get(cls)
-        per_class[cls] = fn(f, coefs, weight_set_prefix) if fn is not None else 0.0
+        if fn is None:
+            per_class[cls] = 0.0
+            continue
+        if cls == "historical":
+            per_class[cls] = fn(f, coefs, weight_set_prefix, prior)
+        else:
+            per_class[cls] = fn(f, coefs, weight_set_prefix)
     raw_final = sum(per_class.values())
     return ScoreDecomposition(
         structural=per_class.get("structural", 0.0),
         temporal=per_class.get("temporal", 0.0),
         hull=per_class.get("hull", 0.0),
+        historical=per_class.get("historical", 0.0),
         final=clamp01(raw_final),
     )
 
@@ -246,9 +274,11 @@ def score_battle(
     features: list[FeatureRow],
     coefs: dict[str, float],
     active_classes: tuple[str, ...] = ACTIVE_CLASSES,
+    priors: dict[tuple[int, str], float] | None = None,
 ) -> ScoringResult:
     thresholds = load_thresholds(coefs)
     scores: list[ScoreRow] = []
+    priors = priors or {}
 
     # Per-character, per-role: compute decomposed scores.
     # final_by_char[char_id][role] = ScoreDecomposition
@@ -269,10 +299,13 @@ def score_battle(
             else:
                 prefix = WEIGHT_SET_STANDARD[role]
 
-            decomp = compute_role_decomposition(f, coefs, prefix, active_classes)
+            prior_val = priors.get((f.character_id, role), 0.0)
+            decomp = compute_role_decomposition(f, coefs, prefix, active_classes, prior_val)
             scores.append(ScoreRow(f.character_id, f.sub_fleet_id, role, "structural", decomp.structural))
             scores.append(ScoreRow(f.character_id, f.sub_fleet_id, role, "temporal", decomp.temporal))
             scores.append(ScoreRow(f.character_id, f.sub_fleet_id, role, "hull", decomp.hull))
+            if "historical" in active_classes:
+                scores.append(ScoreRow(f.character_id, f.sub_fleet_id, role, "historical", decomp.historical))
             scores.append(ScoreRow(f.character_id, f.sub_fleet_id, role, "final", decomp.final))
             finals[role] = decomp.final
 

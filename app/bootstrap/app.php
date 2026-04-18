@@ -26,6 +26,9 @@ return Application::configure(basePath: dirname(__DIR__))
         \App\Domains\KillmailsBattleTheaters\Console\BackfillAllegianceCommand::class,
         \App\Domains\KillmailsBattleTheaters\Console\ZkillCatchupCommand::class,
         \App\Domains\KillmailsBattleTheaters\Console\SeedTruthSetAttestationsCommand::class,
+        \App\Domains\KillmailsBattleTheaters\Console\RefreshCharacterRolePriorsCommand::class,
+        \App\Domains\KillmailsBattleTheaters\Console\EvaluateRoleCalibrationCommand::class,
+        \App\Domains\KillmailsBattleTheaters\Console\PromoteWeightVersionCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting

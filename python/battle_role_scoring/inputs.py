@@ -130,6 +130,34 @@ def load_coefficients(
     return {str(r["coefficient_key"]): float(r["coefficient_value"]) for r in rows}
 
 
+def load_historical_priors(
+    conn: pymysql.connections.Connection,
+    character_ids: list[int],
+) -> dict[tuple[int, str], float]:
+    """Load character_role_historical_priors for a set of characters.
+
+    Returns (character_id, role_key) → prior_value. Missing entries
+    default to 0.0 at compute time (cold-start pilots contribute 0
+    to the historical score class). No error on empty input."""
+    if not character_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(character_ids))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT character_id, role_key, prior_value
+              FROM character_role_historical_priors
+             WHERE character_id IN ({placeholders})
+            """,
+            character_ids,
+        )
+        rows = cur.fetchall()
+    return {
+        (int(r["character_id"]), str(r["role_key"])): float(r["prior_value"])
+        for r in rows
+    }
+
+
 def features_exist(
     conn: pymysql.connections.Connection,
     battle_id: int,
