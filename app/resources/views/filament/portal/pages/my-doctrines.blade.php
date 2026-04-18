@@ -56,11 +56,19 @@
                     @php $byRole = collect($tab['doctrines'])->groupBy('role'); @endphp
                     @foreach ($roleOrder as $role)
                         @if (! $byRole->has($role)) @continue @endif
-                        <div style="margin-bottom:1rem;">
-                            <h3 style="color: {{ $roleColor($role) }}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.8rem; margin-bottom: 0.4rem;">
+                        @php
+                            $roleCount = $byRole->get($role)->count();
+                            $collapseByDefault = $roleCount > 30;
+                        @endphp
+                        <details @if(! $collapseByDefault) open @endif style="margin-bottom:1rem;">
+                            <summary style="cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:0.4rem; color: {{ $roleColor($role) }}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.8rem; margin-bottom: 0.4rem;">
+                                <span style="display:inline-block; width:0.8rem; color:#7a7a82;">{{ $collapseByDefault ? '▸' : '▾' }}</span>
                                 {{ $roleLabel($role) }}
-                                <span style="color:#7a7a82; font-weight:400; letter-spacing:0; text-transform:none; font-size:0.85em;">· {{ $byRole->get($role)->count() }}</span>
-                            </h3>
+                                <span style="color:#7a7a82; font-weight:400; letter-spacing:0; text-transform:none; font-size:0.85em;">· {{ $roleCount }}</span>
+                                @if ($collapseByDefault)
+                                    <span style="color:#7a7a82; font-weight:400; letter-spacing:0; text-transform:none; font-size:0.75em; font-style:italic;">(click to expand)</span>
+                                @endif
+                            </summary>
                             <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap:0.75rem;">
                                 @foreach ($byRole->get($role) as $d)
                                     @php [$bandName, $bandColor] = $confBand($d['confidence']); @endphp
@@ -125,7 +133,7 @@
                                     </div>
                                 @endforeach
                             </div>
-                        </div>
+                        </details>
                     @endforeach
                 @endif
             </div>
