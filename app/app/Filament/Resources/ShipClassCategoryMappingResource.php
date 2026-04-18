@@ -100,20 +100,21 @@ class ShipClassCategoryMappingResource extends Resource
         return $table
             ->defaultSort('ship_type_id')
             ->columns([
-                TextColumn::make('ship_type_id')
+                TextColumn::make('ship_name')
                     ->label('Ship')
                     ->getStateUsing(fn (ShipClassCategoryMapping $r) => self::shipNameMap()[$r->ship_type_id] ?? ('type_' . $r->ship_type_id))
+                    ->description(fn (ShipClassCategoryMapping $r) => 'id: ' . $r->ship_type_id)
                     ->searchable(query: function (Builder $q, string $s): void {
                         $ids = DB::table('ref_item_types')
                             ->where('name', 'like', "%{$s}%")
                             ->pluck('id');
                         $q->whereIn('ship_type_id', $ids);
-                    })
-                    ->sortable(),
+                    }),
 
                 TextColumn::make('ship_type_id')
                     ->label('Type ID')
                     ->copyable()
+                    ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
                 TextColumn::make('category')
