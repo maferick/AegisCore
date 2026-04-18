@@ -57,13 +57,16 @@ def run(args: argparse.Namespace) -> int:
 
         if args.dry_run:
             log.info("dry-run — no audit row, no writes", battle_id=args.battle_id, alliance_id=args.alliance_id)
-        run_id = start_run(
-            conn,
-            battle_id=args.battle_id,
-            alliance_id=args.alliance_id,
-            edge_profile_version=edge.edge_profile_version,
-            algo_profile_version=algo.algo_profile_version,
-        ) if not args.dry_run else 0
+            run_id = 0
+            lock_key: str | None = None
+        else:
+            run_id, lock_key = start_run(
+                conn,
+                battle_id=args.battle_id,
+                alliance_id=args.alliance_id,
+                edge_profile_version=edge.edge_profile_version,
+                algo_profile_version=algo.algo_profile_version,
+            )
 
         try:
             battle = load_battle(conn, args.battle_id)
@@ -97,6 +100,7 @@ def run(args: argparse.Namespace) -> int:
                     )
                     finalize_run(
                         conn, run_id, "skipped",
+                        lock_key=lock_key,
                         pilot_count=pilot_count, edge_count=0,
                         graph_tier=tier, algorithms_run=[],
                     )
@@ -144,6 +148,7 @@ def run(args: argparse.Namespace) -> int:
                     )
                     finalize_run(
                         conn, run_id, "success",
+                        lock_key=lock_key,
                         pilot_count=pilot_count, edge_count=len(edges),
                         graph_tier=tier, algorithms_run=algs_run,
                     )
@@ -162,7 +167,7 @@ def run(args: argparse.Namespace) -> int:
                         cleanup_neo4j(session, run_id)
                 except Exception:
                     pass
-                finalize_run(conn, run_id, "failed", error_message=str(exc))
+                finalize_run(conn, run_id, "failed", lock_key=lock_key, error_message=str(exc))
             return 1
 
 
