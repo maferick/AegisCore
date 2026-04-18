@@ -194,10 +194,16 @@ Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\ResolveEntityNames)
 //
 // Processes 50 characters per dispatch, self-dispatches until caught
 // up. Rate-limited through the shared ESI client.
-Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCharacterCorporationHistory)
-    ->everyFiveMinutes()
-    ->onOneServer()
-    ->name('fetch-corp-history');
+// 8 shards = 8 concurrent fetch jobs draining disjoint slices of the
+// uncached character set. Each shard is ShouldBeUnique on its own id,
+// so re-firing on the 5-min tick is a no-op if the shard is still
+// running; scheduler pressure stays flat while throughput multiplies.
+foreach (range(0, 7) as $shardId) {
+    Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCharacterCorporationHistory($shardId, 8))
+        ->everyFiveMinutes()
+        ->onOneServer()
+        ->name("fetch-corp-history:{$shardId}");
+}
 
 // Corporation alliance history — same pattern, one level up. Answers
 // "which alliance was this corp in at time Y?" for killmail detail

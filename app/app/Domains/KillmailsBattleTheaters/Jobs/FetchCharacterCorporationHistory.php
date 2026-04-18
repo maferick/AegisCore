@@ -55,6 +55,25 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
 
     public int $uniqueFor = 300;
 
+    /**
+     * Shard fan-out for parallelism. Each shard picks characters where
+     * `character_id % $shardCount === $shardId` so N concurrent copies
+     * drain disjoint slices of the uncached set without racing on the
+     * same rows. uniqueId() includes the shard so Laravel's ShouldBeUnique
+     * keeps within-shard serial (fair — one slice at a time) while
+     * letting distinct shards run in parallel.
+     */
+    public function __construct(public int $shardId = 0, public int $shardCount = 1)
+    {
+        // Drop into the default queue; shard routing is by ShouldBeUnique,
+        // not by queue partitioning (keeps horizon auto-balance happy).
+    }
+
+    public function uniqueId(): string
+    {
+        return sprintf('corp-history:%d/%d', $this->shardId, $this->shardCount);
+    }
+
     public function handle(EsiClientInterface $esi): void
     {
         // Find character IDs from killmails that don't have history yet.
@@ -130,8 +149,10 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
     private function findUncachedCharacters(): array
     {
         // Get distinct character IDs from recent killmail victims that
-        // aren't in the history table yet.
-        return DB::table('killmails')
+        // aren't in the history table yet. Shard filter (MOD = shardId)
+        // partitions the uncached set across parallel dispatches so
+        // shards don't refetch the same character.
+        $q = DB::table('killmails')
             ->select('victim_character_id')
             ->whereNotNull('victim_character_id')
             ->whereNotExists(function ($q) {
@@ -139,8 +160,11 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
                     ->from('character_corporation_history')
                     ->whereColumn('character_corporation_history.character_id', 'killmails.victim_character_id');
             })
-            ->groupBy('victim_character_id')
-            ->limit(self::BATCH_SIZE)
+            ->groupBy('victim_character_id');
+        if ($this->shardCount > 1) {
+            $q->whereRaw('victim_character_id % ? = ?', [$this->shardCount, $this->shardId]);
+        }
+        return $q->limit(self::BATCH_SIZE)
             ->pluck('victim_character_id')
             ->all();
     }
