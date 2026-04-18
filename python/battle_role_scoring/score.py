@@ -39,7 +39,15 @@ HULL_CATEGORIES = ("logi", "bomber", "command", "tackle", "mainline", "other")
 ROLE_FC = "fc"
 ROLE_LOGI = "logi"
 ROLE_MAINLINE = "mainline_dps"
-ROLES = (ROLE_FC, ROLE_LOGI, ROLE_MAINLINE)
+ROLE_TACKLE = "tackle"
+ROLE_BOMBER = "bomber"
+ROLE_COMMAND = "command"
+ROLES = (ROLE_FC, ROLE_LOGI, ROLE_MAINLINE, ROLE_TACKLE, ROLE_BOMBER, ROLE_COMMAND)
+
+# Set-membership roles: every char that clears threshold gets the role.
+# Single-winner roles: only the top char (after gap check) gets the role.
+SET_MEMBERSHIP_ROLES = {ROLE_LOGI, ROLE_TACKLE, ROLE_BOMBER}
+SINGLE_WINNER_ROLES = {ROLE_FC, ROLE_MAINLINE, ROLE_COMMAND}
 
 # Hulls that the role-scorer unconditionally assigns FC to, bypassing
 # threshold + gap. Rationale: a Monitor applies zero damage and is
@@ -63,6 +71,9 @@ WEIGHT_SET_STANDARD: dict[str, str] = {
     ROLE_FC: "fc_weights_standard",
     ROLE_LOGI: "logi_weights_standard",
     ROLE_MAINLINE: "mainline_dps_weights_standard",
+    ROLE_TACKLE: "tackle_weights_standard",
+    ROLE_BOMBER: "bomber_weights_standard",
+    ROLE_COMMAND: "command_weights_standard",
 }
 WEIGHT_SET_FC_COMMAND_EDGE = "fc_weights_command_edge"
 
@@ -214,11 +225,33 @@ def compute_role_decomposition(
 
 @dataclass(frozen=True)
 class Thresholds:
+    # Per-role threshold + gap. gap only used for single-winner roles.
     fc_threshold: float
     fc_gap: float
     logi_threshold: float
     mainline_threshold: float
     mainline_gap: float
+    tackle_threshold: float
+    bomber_threshold: float
+    command_threshold: float
+    command_gap: float
+
+    def threshold_for(self, role: str) -> float:
+        return {
+            ROLE_FC: self.fc_threshold,
+            ROLE_LOGI: self.logi_threshold,
+            ROLE_MAINLINE: self.mainline_threshold,
+            ROLE_TACKLE: self.tackle_threshold,
+            ROLE_BOMBER: self.bomber_threshold,
+            ROLE_COMMAND: self.command_threshold,
+        }.get(role, 1.0)
+
+    def gap_for(self, role: str) -> float:
+        return {
+            ROLE_FC: self.fc_gap,
+            ROLE_MAINLINE: self.mainline_gap,
+            ROLE_COMMAND: self.command_gap,
+        }.get(role, 0.0)
 
 
 def load_thresholds(coefs: dict[str, float]) -> Thresholds:
@@ -228,6 +261,10 @@ def load_thresholds(coefs: dict[str, float]) -> Thresholds:
         logi_threshold=coef(coefs, "thresholds_and_gaps_v0.logi_threshold"),
         mainline_threshold=coef(coefs, "thresholds_and_gaps_v0.mainline_threshold"),
         mainline_gap=coef(coefs, "thresholds_and_gaps_v0.mainline_gap"),
+        tackle_threshold=coef(coefs, "thresholds_and_gaps_v0.tackle_threshold"),
+        bomber_threshold=coef(coefs, "thresholds_and_gaps_v0.bomber_threshold"),
+        command_threshold=coef(coefs, "thresholds_and_gaps_v0.command_threshold"),
+        command_gap=coef(coefs, "thresholds_and_gaps_v0.command_gap"),
     )
 
 
@@ -328,66 +365,44 @@ def score_battle(
     for cid, sf in sub_fleet_by_char.items():
         by_sub[sf].append(cid)
 
-    # Compute per-role per-sub-fleet assignment candidates.
-    # FC: top clears threshold AND top-second >= gap
-    # mainline_dps: same
-    # logi: all >= threshold
-    # Single-winner option (C): each char gets at most one inference row
-    # using their highest-scoring clearing role.
-
+    # Per-sub-fleet assignment: generic across single-winner vs
+    # set-membership roles.
     # winners[char_id] = (role, primary_score, second_best_score)
     winners: dict[int, tuple[str, float, float]] = {}
     per_sub_diag: list[dict] = []
 
     for sf, cids in sorted(by_sub.items()):
-        # sort candidates per role by final score desc
-        fc_ranked = sorted(cids, key=lambda c: final_by_char[c][ROLE_FC], reverse=True)
-        ml_ranked = sorted(cids, key=lambda c: final_by_char[c][ROLE_MAINLINE], reverse=True)
+        diag: dict[str, object] = {"sub_fleet_id": sf, "member_count": len(cids)}
 
-        fc_top = final_by_char[fc_ranked[0]][ROLE_FC] if fc_ranked else 0.0
-        fc_second = final_by_char[fc_ranked[1]][ROLE_FC] if len(fc_ranked) > 1 else 0.0
-        fc_assigned_cid: int | None = None
-        if fc_top >= thresholds.fc_threshold and (fc_top - fc_second) >= thresholds.fc_gap:
-            fc_assigned_cid = fc_ranked[0]
+        # per-char qualifications: list of (role, primary, second) tuples
+        quals_by_char: dict[int, list[tuple[str, float, float]]] = defaultdict(list)
 
-        ml_top = final_by_char[ml_ranked[0]][ROLE_MAINLINE] if ml_ranked else 0.0
-        ml_second = final_by_char[ml_ranked[1]][ROLE_MAINLINE] if len(ml_ranked) > 1 else 0.0
-        ml_assigned_cid: int | None = None
-        if ml_top >= thresholds.mainline_threshold and (ml_top - ml_second) >= thresholds.mainline_gap:
-            ml_assigned_cid = ml_ranked[0]
+        for role in ROLES:
+            thr = thresholds.threshold_for(role)
+            if role in SET_MEMBERSHIP_ROLES:
+                qualifying = [c for c in cids if final_by_char[c][role] >= thr]
+                for c in qualifying:
+                    quals_by_char[c].append((role, final_by_char[c][role], thr))
+                diag[f"{role}_count_above_threshold"] = len(qualifying)
+            else:
+                ranked = sorted(cids, key=lambda c: final_by_char[c][role], reverse=True)
+                top = final_by_char[ranked[0]][role] if ranked else 0.0
+                second = final_by_char[ranked[1]][role] if len(ranked) > 1 else 0.0
+                gap = thresholds.gap_for(role)
+                assigned = None
+                if top >= thr and (top - second) >= gap:
+                    assigned = ranked[0]
+                    quals_by_char[assigned].append((role, top, second))
+                diag[f"{role}_top_score"] = round(top, 4)
+                diag[f"{role}_gap_to_second"] = round(top - second, 4)
+                diag[f"{role}_assigned"] = assigned is not None
 
-        logi_winners = [
-            c for c in cids
-            if final_by_char[c][ROLE_LOGI] >= thresholds.logi_threshold
-        ]
-
-        # Single-winner pick: for each character, choose the role with
-        # highest score among the roles they qualified for.
-        for c in cids:
-            qualifications: list[tuple[str, float, float]] = []
-            if c == fc_assigned_cid:
-                qualifications.append((ROLE_FC, fc_top, fc_second))
-            if c in logi_winners:
-                qualifications.append((ROLE_LOGI, final_by_char[c][ROLE_LOGI], thresholds.logi_threshold))
-            if c == ml_assigned_cid:
-                qualifications.append((ROLE_MAINLINE, ml_top, ml_second))
-            if not qualifications:
-                continue
-            qualifications.sort(key=lambda t: t[1], reverse=True)
-            role, primary, second = qualifications[0]
+        for c, quals in quals_by_char.items():
+            quals.sort(key=lambda t: t[1], reverse=True)
+            role, primary, second = quals[0]
             winners[c] = (role, primary, second)
 
-        per_sub_diag.append({
-            "sub_fleet_id": sf,
-            "member_count": len(cids),
-            "fc_top_score": round(fc_top, 4),
-            "fc_gap_to_second": round(fc_top - fc_second, 4),
-            "fc_assigned": fc_assigned_cid is not None,
-            "logi_count_above_threshold": len(logi_winners),
-            "mainline_top_score": round(ml_top, 4),
-            "mainline_gap_to_second": round(ml_top - ml_second, 4),
-            "mainline_assigned": ml_assigned_cid is not None,
-        })
+        per_sub_diag.append(diag)
 
     # Monitor override: any pilot flying a GUARANTEED_FC_SHIP_TYPE_IDS
     # hull gets FC unconditionally, replacing any other role the
@@ -403,8 +418,10 @@ def score_battle(
     inferences: list[InferenceRow] = []
     for cid, (role, primary, second) in winners.items():
         fc = completeness_by_char[cid]
-        if role == ROLE_LOGI:
-            conf = _logi_confidence(primary, thresholds.logi_threshold, fc)
+        if role in SET_MEMBERSHIP_ROLES:
+            # set-membership confidence uses distance-from-threshold in
+            # place of gap-to-second, because there is no "second best".
+            conf = _logi_confidence(primary, thresholds.threshold_for(role), fc)
         else:
             conf = _confidence(primary, second, fc)
         inferences.append(InferenceRow(
