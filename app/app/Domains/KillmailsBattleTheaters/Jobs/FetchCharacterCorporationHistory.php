@@ -142,12 +142,18 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
             'batch_size' => count($uncached),
         ]);
 
-        // No self-dispatch. When the sharded scheduler is firing 8
-        // parallel shards every 5 min, self-dispatching without shard
-        // context spawns shardId=0/shardCount=1 jobs — bypassing the
-        // partition and piling up in the queue. Scheduler's 8-shard
-        // tick is the canonical drain; if it's too slow we bump the
-        // shard count in routes/console.php.
+        // Self-dispatch to keep the shard draining between scheduler
+        // ticks — a full batch means more work remains. Critical that
+        // shardId/shardCount propagate so the follow-up lands in the
+        // same partition (earlier bug: args-less static::dispatch()
+        // spawned shardCount=1 orphans that bypassed the 8-shard split
+        // and piled up in the queue). uniqueId() is per-shard, so the
+        // 3-second delay + ShouldBeUnique combo dedupes cleanly as
+        // the current job exits.
+        if (count($uncached) >= self::BATCH_SIZE) {
+            static::dispatch($this->shardId, $this->shardCount)
+                ->delay(now()->addSeconds(3));
+        }
     }
 
     /**
