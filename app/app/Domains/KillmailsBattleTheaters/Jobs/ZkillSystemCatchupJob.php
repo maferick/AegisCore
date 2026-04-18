@@ -15,6 +15,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redis;
 use Throwable;
 
 /**
@@ -60,6 +61,25 @@ final class ZkillSystemCatchupJob implements ShouldBeUnique, ShouldQueue
     {
         // zkill requires pastSeconds to be a multiple of 3600.
         $past = intdiv(max(3600, $this->pastSeconds), 3600) * 3600;
+
+        // zkill's API tolerance is ~1 request per 6s per IP. Workers
+        // across different systems share the same IP, so a global
+        // Redis gate with 6s TTL throttles every call to one-at-a-time
+        // regardless of how many catchup jobs are in flight. SET NX EX
+        // is atomic; losing the race means sleep 200ms + retry.
+        $gateKey = 'zkill:global-gate';
+        $gateWait = 0;
+        while (! Redis::set($gateKey, (string) microtime(true), 'EX', 6, 'NX')) {
+            usleep(200_000);
+            $gateWait += 200;
+            if ($gateWait > 30_000) {
+                // 30s of contention probably means worker starvation,
+                // not normal pacing — bail so we don't hold a worker
+                // slot forever.
+                Log::warning('zkill-catchup: gate timeout', ['system_id' => $this->systemId]);
+                return;
+            }
+        }
 
         try {
             $resp = Http::withHeaders([
