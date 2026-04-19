@@ -285,10 +285,11 @@ class Dashboard extends BaseDashboard
             ->distinct()
             ->count('theater_id');
 
-        // Activity map (last 30d): every system the pilot appeared on,
-        // with xy coords from ref_solar_systems.position2d_*. Rendered
-        // as an SVG dot-map in the blade.
-        $activityMap = DB::select(<<<'SQL'
+        // Activity map (last 30d): every system the pilot touched, plus
+        // 1-jump neighbors with gate lines, so the map renders a real
+        // "neighborhood" view instead of a few isolated dots pushed to
+        // one corner.
+        $activeSystems = DB::select(<<<'SQL'
             SELECT s.id, s.name, s.position2d_x AS x, s.position2d_y AS y,
                    s.security_status AS sec, s.region_id,
                    SUM(u.n) AS n
@@ -310,6 +311,69 @@ class Dashboard extends BaseDashboard
              ORDER BY n DESC
              LIMIT 200
         SQL, [$cid, $cid]);
+
+        $activeMap = [];
+        foreach ($activeSystems as $r) {
+            $activeMap[(int) $r->id] = [
+                'id' => (int) $r->id,
+                'name' => (string) $r->name,
+                'x' => (float) $r->x,
+                'y' => (float) $r->y,
+                'sec' => $r->sec !== null ? (float) $r->sec : null,
+                'region_id' => (int) $r->region_id,
+                'n' => (int) $r->n,
+                'active' => true,
+            ];
+        }
+
+        $neighborMap = [];
+        $gatePairs = [];
+        if ($activeMap !== []) {
+            $activeIds = array_keys($activeMap);
+            // 1-jump neighbors (destinations from active systems +
+            // origins pointing at active systems).
+            $rows = DB::table('ref_stargates')
+                ->whereIn('solar_system_id', $activeIds)
+                ->whereNotNull('destination_system_id')
+                ->select('solar_system_id', 'destination_system_id')
+                ->get();
+            $allIds = $activeIds;
+            foreach ($rows as $r) {
+                $allIds[] = (int) $r->destination_system_id;
+            }
+            $allIds = array_values(array_unique($allIds));
+            // Fetch coords for every system in the expanded set.
+            $coords = DB::table('ref_solar_systems')
+                ->whereIn('id', $allIds)
+                ->whereNotNull('position2d_x')
+                ->select('id', 'name', 'position2d_x', 'position2d_y', 'security_status', 'region_id')
+                ->get();
+            foreach ($coords as $sys) {
+                $sid = (int) $sys->id;
+                if (isset($activeMap[$sid])) continue;
+                $neighborMap[$sid] = [
+                    'id' => $sid,
+                    'name' => (string) $sys->name,
+                    'x' => (float) $sys->position2d_x,
+                    'y' => (float) $sys->position2d_y,
+                    'sec' => $sys->security_status !== null ? (float) $sys->security_status : null,
+                    'region_id' => (int) $sys->region_id,
+                    'n' => 0,
+                    'active' => false,
+                ];
+            }
+            // Gate pairs — include only where BOTH endpoints are in
+            // the shown set so we don't draw lines off-canvas.
+            $shownIds = array_flip(array_merge(array_keys($activeMap), array_keys($neighborMap)));
+            foreach ($rows as $r) {
+                $a = (int) $r->solar_system_id;
+                $b = (int) $r->destination_system_id;
+                if (! isset($shownIds[$a]) || ! isset($shownIds[$b])) continue;
+                $key = $a < $b ? "{$a}-{$b}" : "{$b}-{$a}";
+                $gatePairs[$key] = [$a < $b ? $a : $b, $a < $b ? $b : $a];
+            }
+            $gatePairs = array_values($gatePairs);
+        }
 
         // Top 3 systems — kills-on + losses-in weighted equally.
         $topSystems = DB::select(<<<'SQL'
@@ -440,15 +504,9 @@ class Dashboard extends BaseDashboard
             'flight_crew' => $flightCrew,
             'arch_enemies' => $archEnemies,
             'structural_rank' => $structRank,
-            'activity_map' => array_map(fn ($r) => [
-                'id' => (int) $r->id,
-                'name' => (string) $r->name,
-                'x' => (float) $r->x,
-                'y' => (float) $r->y,
-                'sec' => $r->sec !== null ? (float) $r->sec : null,
-                'region_id' => (int) $r->region_id,
-                'n' => (int) $r->n,
-            ], $activityMap),
+            'activity_map_active' => array_values($activeMap),
+            'activity_map_neighbors' => array_values($neighborMap),
+            'activity_map_gates' => $gatePairs,
         ];
     }
 }
