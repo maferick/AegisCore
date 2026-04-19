@@ -56,17 +56,58 @@ final class CharacterGraphInsightService
     public function archEnemies(int $cid, int $limit = 8): array
     {
         return $this->safeCache("ci.insight.ae.{$cid}.{$limit}", function () use ($cid, $limit): array {
+            // Primary source: Neo4j CI_FOUGHT_AGAINST edges (2+ sessions,
+            // 0.5+ weight). Blob warfare rarely repeats a pair twice, so
+            // the graph edge set is often empty for line pilots. Fall
+            // back to raw killmail-level top victims when that's the
+            // case so the card doesn't read "no data" for someone
+            // actively fighting.
             $c = $this->client();
-            if ($c === null) return [];
-            $res = $c->run(
-                'MATCH (me:CICharacter {character_id: $cid})-[r:CI_FOUGHT_AGAINST]-(peer:CICharacter)
-                 RETURN peer.character_id AS cid, peer.name AS name, peer.current_alliance_id AS aid,
-                        r.total_weight AS tw, r.distinct_interactions AS di, r.last_seen_at AS last
-                 ORDER BY r.total_weight DESC
-                 LIMIT $lim',
-                ['cid' => $cid, 'lim' => $limit],
-            );
-            return $this->hydrate($res);
+            if ($c !== null) {
+                $res = $c->run(
+                    'MATCH (me:CICharacter {character_id: $cid})-[r:CI_FOUGHT_AGAINST]-(peer:CICharacter)
+                     RETURN peer.character_id AS cid, peer.name AS name, peer.current_alliance_id AS aid,
+                            r.total_weight AS tw, r.distinct_interactions AS di, r.last_seen_at AS last
+                     ORDER BY r.total_weight DESC
+                     LIMIT $lim',
+                    ['cid' => $cid, 'lim' => $limit],
+                );
+                $graphRows = $this->hydrate($res);
+                if ($graphRows !== []) return $graphRows;
+            }
+
+            // MariaDB fallback: top individual VICTIMS across killmails
+            // this pilot contributed to (opposite side). Limited to the
+            // last 90 days to match the bloc-intel window.
+            $rows = \Illuminate\Support\Facades\DB::select(<<<'SQL'
+                SELECT k.victim_character_id AS cid,
+                       en.name AS name,
+                       k.victim_alliance_id AS aid,
+                       COUNT(*) AS n_kms,
+                       MAX(k.killed_at) AS last
+                  FROM killmail_attackers ka
+                  JOIN killmails k ON k.killmail_id = ka.killmail_id
+                  LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category='character'
+                 WHERE ka.character_id = ?
+                   AND k.victim_character_id IS NOT NULL
+                   AND k.victim_character_id <> ka.character_id
+                   AND k.killed_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+                 GROUP BY k.victim_character_id, en.name, k.victim_alliance_id
+                 ORDER BY n_kms DESC
+                 LIMIT ?
+            SQL, [$cid, $limit]);
+            $out = [];
+            foreach ($rows as $r) {
+                $out[] = [
+                    'character_id' => (int) $r->cid,
+                    'name' => $r->name ? (string) $r->name : null,
+                    'alliance_id' => $r->aid ? (int) $r->aid : null,
+                    'total_weight' => 0.0,
+                    'distinct_interactions' => (int) $r->n_kms,
+                    'last_seen_at' => $r->last ? (string) $r->last : null,
+                ];
+            }
+            return $out;
         });
     }
 
