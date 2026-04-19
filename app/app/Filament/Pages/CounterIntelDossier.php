@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Filament\Admin\Pages;
+namespace App\Filament\Pages;
 
 use App\Domains\CounterIntel\Services\CounterIntelDossierService;
 use BackedEnum;
@@ -12,30 +12,32 @@ use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
- * /admin/counter-intel — operator triage surface.
+ * /admin/counter-intel/{character} — individual pilot dossier.
  *
- * Per-bloc outlier dashboard. Rows link to /admin/counter-intel/{cid}.
- * Viewer bloc resolved from the logged-in user's character affiliation;
- * operator can override via query string (?bloc_id=N) when reviewing
- * for a different friendly coalition.
+ * Text is defensibility-first: fixed sentence templates from the
+ * service; no freeform generation; no words like "spy" or "infiltrator".
+ * Surface is triage, not automation — every row invites human review.
  */
-class CounterIntelDashboard extends Page
+class CounterIntelDossier extends Page
 {
-    protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-shield-exclamation';
+    protected static string|BackedEnum|null $navigationIcon = null;
 
-    protected static ?string $navigationLabel = 'Counter-Intel';
+    protected static bool $shouldRegisterNavigation = false;
 
     protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
 
-    protected static ?int $navigationSort = 40;
+    protected static ?string $slug = 'counter-intel/{character}';
 
-    protected static ?string $title = 'Counter-Intel · Review Priority';
+    protected static ?string $title = 'Counter-Intel · Dossier';
 
-    protected static ?string $slug = 'counter-intel';
+    protected string $view = 'filament.pages.counter-intel-dossier';
 
-    protected string $view = 'filament.admin.pages.counter-intel-dashboard';
+    public int $characterIdParam;
 
-    public ?string $bandFilter = null;
+    public function mount(int $character): void
+    {
+        $this->characterIdParam = $character;
+    }
 
     /**
      * @return array<string, mixed>
@@ -44,29 +46,26 @@ class CounterIntelDashboard extends Page
     {
         $viewerBlocId = $this->resolveViewerBloc();
         if ($viewerBlocId === null) {
-            return ['no_bloc' => true];
+            return ['no_bloc' => true, 'character_id' => $this->characterIdParam];
         }
         $svc = app(CounterIntelDossierService::class);
-        $rows = $svc->outlierDashboard($viewerBlocId, limit: 100, bandFilter: $this->bandFilter ?: null);
-
-        // Counts per band for header strip.
-        $bandCounts = DB::table('ci_character_anomalies_rolling')
-            ->where('viewer_bloc_id', $viewerBlocId)
-            ->selectRaw('review_priority_band, COUNT(*) AS n')
-            ->groupBy('review_priority_band')
-            ->pluck('n', 'review_priority_band')
-            ->all();
-
+        $dossier = $svc->dossier($this->characterIdParam, $viewerBlocId);
         $blocName = DB::table('coalition_blocs')->where('id', $viewerBlocId)->value('display_name') ?? "Bloc #{$viewerBlocId}";
-
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $viewerBlocId,
             'viewer_bloc_name' => $blocName,
-            'rows' => $rows,
-            'band_counts' => $bandCounts,
-            'band_filter' => $this->bandFilter,
+            'dossier' => $dossier,
         ];
+    }
+
+    public function getTitle(): string
+    {
+        $name = DB::table('esi_entity_names')
+            ->where('entity_id', $this->characterIdParam)
+            ->where('category', 'character')
+            ->value('name');
+        return $name ? "Counter-Intel · {$name}" : 'Counter-Intel dossier';
     }
 
     private function resolveViewerBloc(): ?int
