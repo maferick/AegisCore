@@ -76,7 +76,7 @@ class ScrapeAnsiblexCommand extends Command
             while (true) {
                 try {
                     $resp = $esi->get(
-                        "/v4/corporations/{$corpId}/structures/",
+                        "/corporations/{$corpId}/structures/",
                         ['page' => $page],
                         $bearer,
                     );
