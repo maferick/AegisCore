@@ -92,7 +92,18 @@ class Battles extends Page implements HasTable
                     ->getStateUsing(fn (BattleTheater $r): string => $r->primarySystem?->name ?? "#{$r->primary_system_id}")
                     ->description(fn (BattleTheater $r): string => $r->region?->name ?? '—')
                     ->searchable(query: function (Builder $q, string $search): Builder {
-                        return $q->whereHas('primarySystem', fn (Builder $s) => $s->where('name', 'like', "%{$search}%"));
+                        // whereHas on primarySystem trips the Laravel 12
+                        // relation introspection path when the outer
+                        // query already has a selectRaw override
+                        // (battle_theaters.* + viewer_involved). Use a
+                        // join against solar_systems directly — same
+                        // result, no relation lookup needed.
+                        return $q->whereExists(function ($sub) use ($search): void {
+                            $sub->select(DB::raw(1))
+                                ->from('ref_solar_systems')
+                                ->whereColumn('ref_solar_systems.id', 'battle_theaters.primary_system_id')
+                                ->where('ref_solar_systems.name', 'like', "%{$search}%");
+                        });
                     }),
 
                 TextColumn::make('end_time')
