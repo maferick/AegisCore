@@ -330,18 +330,70 @@ class Dashboard extends BaseDashboard
         $gatePairs = [];
         if ($activeMap !== []) {
             $activeIds = array_keys($activeMap);
-            // 1-jump neighbors (destinations from active systems +
-            // origins pointing at active systems).
-            $rows = DB::table('ref_stargates')
-                ->whereIn('solar_system_id', $activeIds)
+            // Load the full stargate adjacency for shortest-path
+            // connection of active systems. ~13k edges fits in memory
+            // easily and ref_stargates is static SDE data.
+            $adj = [];
+            DB::table('ref_stargates')
                 ->whereNotNull('destination_system_id')
                 ->select('solar_system_id', 'destination_system_id')
-                ->get();
-            $allIds = $activeIds;
-            foreach ($rows as $r) {
-                $allIds[] = (int) $r->destination_system_id;
+                ->get()
+                ->each(function ($r) use (&$adj): void {
+                    $a = (int) $r->solar_system_id;
+                    $b = (int) $r->destination_system_id;
+                    $adj[$a][$b] = true;
+                });
+
+            // BFS-connect every active to an anchor active so paths
+            // between actives are filled in. Anchor = first active
+            // (arbitrary but stable). Multi-source BFS from anchor,
+            // tracking predecessors; then walk back from each other
+            // active to assemble its path.
+            $pathSystems = [];
+            if (count($activeIds) >= 2) {
+                $anchor = $activeIds[0];
+                $parent = [$anchor => null];
+                $queue = [$anchor];
+                $maxDepth = 40;  // cap on BFS reach
+                $depth = [$anchor => 0];
+                while ($queue !== []) {
+                    $u = array_shift($queue);
+                    if (($depth[$u] ?? 0) >= $maxDepth) continue;
+                    foreach ($adj[$u] ?? [] as $v => $_) {
+                        if (isset($parent[$v])) continue;
+                        $parent[$v] = $u;
+                        $depth[$v] = $depth[$u] + 1;
+                        $queue[] = $v;
+                    }
+                }
+                foreach ($activeIds as $aid) {
+                    if ($aid === $anchor || ! isset($parent[$aid])) continue;
+                    $step = $aid;
+                    while ($step !== null) {
+                        $pathSystems[$step] = true;
+                        $step = $parent[$step] ?? null;
+                    }
+                }
             }
-            $allIds = array_values(array_unique($allIds));
+
+            // 1-jump ring around every on-path system + active system
+            // for spatial context (so the map doesn't look like a bare
+            // line graph).
+            $hop1Seed = array_values(array_unique(array_merge($activeIds, array_keys($pathSystems))));
+            $hop1 = [];
+            foreach ($hop1Seed as $sid) {
+                foreach ($adj[$sid] ?? [] as $v => $_) $hop1[$v] = true;
+            }
+
+            $allIds = array_values(array_unique(array_merge(
+                $activeIds,
+                array_keys($pathSystems),
+                array_keys($hop1),
+            )));
+            if (count($allIds) > 800) {
+                // Fall back: paths + actives only, drop the 1-jump halo.
+                $allIds = array_values(array_unique(array_merge($activeIds, array_keys($pathSystems))));
+            }
             // Fetch coords for every system in the expanded set.
             $coords = DB::table('ref_solar_systems')
                 ->whereIn('id', $allIds)
@@ -362,13 +414,22 @@ class Dashboard extends BaseDashboard
                     'active' => false,
                 ];
             }
-            // Gate pairs — include only where BOTH endpoints are in
-            // the shown set so we don't draw lines off-canvas.
-            $shownIds = array_flip(array_merge(array_keys($activeMap), array_keys($neighborMap)));
-            foreach ($rows as $r) {
+            // Gate pairs — every stargate where BOTH endpoints are in
+            // the shown set. This connects neighbor-to-neighbor in
+            // addition to active↔neighbor, so the resulting line
+            // network looks like a proper star map instead of spokes
+            // radiating from active systems only.
+            $shownIds = array_merge(array_keys($activeMap), array_keys($neighborMap));
+            $gateRows = DB::table('ref_stargates')
+                ->whereIn('solar_system_id', $shownIds)
+                ->whereIn('destination_system_id', $shownIds)
+                ->select('solar_system_id', 'destination_system_id')
+                ->get();
+            $shownFlip = array_flip($shownIds);
+            foreach ($gateRows as $r) {
                 $a = (int) $r->solar_system_id;
                 $b = (int) $r->destination_system_id;
-                if (! isset($shownIds[$a]) || ! isset($shownIds[$b])) continue;
+                if (! isset($shownFlip[$a]) || ! isset($shownFlip[$b])) continue;
                 $key = $a < $b ? "{$a}-{$b}" : "{$b}-{$a}";
                 $gatePairs[$key] = [$a < $b ? $a : $b, $a < $b ? $b : $a];
             }
