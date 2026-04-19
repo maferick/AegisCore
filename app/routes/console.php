@@ -271,6 +271,18 @@ Schedule::command('killmails:compute-pilot-roles')
     ->withoutOverlapping(30)
     ->name('killmail-pilot-roles');
 
+// Derive daily market_history rollups from our per-minute market_orders
+// snapshots. Runs hourly so yesterday's row refreshes as the day fills
+// out, and today's partial row gains freshness between EveRef's
+// multi-day-lagged canonical dump. Source='esi_derived_daily' keeps
+// these rows distinguishable from EveRef-sourced backfill.
+Schedule::command('market:derive-daily')
+    ->hourlyAt(47)
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('market-derive-daily');
+
 // NB: battle:process-pending is NOT scheduled here — it shells
 // out to `docker compose run` for each (battle, alliance) pair,
 // and the Laravel scheduler container has no docker CLI / no
