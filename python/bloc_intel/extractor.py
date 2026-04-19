@@ -89,20 +89,31 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
     pair_stats: dict[tuple[int, int], dict] = {}
     cond_stats: dict[tuple[int, int, int], dict] = {}
 
+    # Factional-Warfare taint per km = fraction of attackers enlisted
+    # in FW militia (ka.faction_id IS NOT NULL at time of kill, stored
+    # by the zKill ingester). Killmails with taint=1.0 are pure FW
+    # content (270k of 1.48M in 90d); we multiply the event weight by
+    # (1 - taint) so those kills contribute nothing to bloc signals and
+    # partial-taint kills are smoothly dampened.
     cur = conn.cursor(pymysql.cursors.SSCursor)
     try:
         cur.execute(
             """
             SELECT k.killmail_id, k.killed_at, k.attacker_count,
-                   k.victim_alliance_id
+                   k.victim_alliance_id,
+                   COALESCE(SUM(CASE WHEN ka.faction_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS n_fw_attackers
               FROM killmails k
+              LEFT JOIN killmail_attackers ka ON ka.killmail_id = k.killmail_id
              WHERE k.killed_at BETWEEN %s AND %s
                AND k.attacker_count > 0
+             GROUP BY k.killmail_id
              ORDER BY k.killed_at
             """,
             (ws, we),
         )
-        km_rows = [(int(r[0]), r[1], int(r[2] or 1), int(r[3]) if r[3] else None)
+        km_rows = [(int(r[0]), r[1], int(r[2] or 1),
+                    int(r[3]) if r[3] else None,
+                    int(r[4] or 0))
                    for r in cur]
     finally:
         cur.close()
@@ -121,13 +132,22 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
         attackers_by_km = _fetch_attacker_alliances(conn, slice_ids)
 
         for kid, attacker_allies in attackers_by_km.items():
-            _, killed_at, attacker_count, victim_alliance_id = km_meta[kid]
+            _, killed_at, attacker_count, victim_alliance_id, n_fw_attackers = km_meta[kid]
             if not attacker_allies:
                 continue
+            # Attacker-side FW ratio. Proper "both-sides-FW" taint needs
+            # a victim_faction_id signal we don't store yet — until that
+            # lands, we only dampen proportionally (never zero). A WC
+            # fleet with one militia alt kills a non-FW target will be
+            # slightly down-weighted, which is acceptable. Full-exclusion
+            # of 100% attacker-FW kills was removed because it over-
+            # fires on WC-vs-FW-ratter scenarios.
+            fw_ratio = min(1.0, n_fw_attackers / max(1, attacker_count))
+            fw_dampen = max(0.1, 1.0 - fw_ratio)  # floor at 0.1 so pure-FW still contributes 10%
             attendee_w = 1.0 / math.sqrt(max(1, attacker_count))
             age_seconds = anchor_ts - killed_at.replace(tzinfo=timezone.utc).timestamp()
             decay = 0.5 ** (age_seconds / half_life_seconds) if half_life_seconds > 0 else 1.0
-            w = attendee_w * decay
+            w = attendee_w * decay * fw_dampen
 
             eligible = [aid for aid, n in attacker_allies.items()
                         if n >= cfg.min_pilots_per_observation and aid]
