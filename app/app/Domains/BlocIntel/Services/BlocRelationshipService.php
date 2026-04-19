@@ -36,29 +36,34 @@ final class BlocRelationshipService
             return null;
         }
         [$lo, $hi] = $a < $b ? [$a, $b] : [$b, $a];
-        $row = Cache::remember(
+        // Cache the derived array, not the raw DB row — serialized
+        // stdClass round-trips were surfacing as __PHP_Incomplete_Class
+        // on some cache drivers (observed in prod via igbinary).
+        return Cache::remember(
             sprintf('bloc_intel.pair.%d.%d', $lo, $hi),
             self::CACHE_TTL_SECONDS,
-            fn () => DB::table('alliance_pair_behavior_rolling')
-                ->where('alliance_a_id', $lo)
-                ->where('alliance_b_id', $hi)
-                ->orderByDesc('window_end_date')
-                ->first(),
+            function () use ($lo, $hi): ?array {
+                $row = DB::table('alliance_pair_behavior_rolling')
+                    ->where('alliance_a_id', $lo)
+                    ->where('alliance_b_id', $hi)
+                    ->orderByDesc('window_end_date')
+                    ->first();
+                if ($row === null) {
+                    return null;
+                }
+                $affinity = (float) $row->affinity_score;
+                $hostility = (float) $row->hostility_score;
+                $conf = (float) $row->confidence;
+                $nObs = (int) $row->n_obs;
+                return [
+                    'affinity' => $affinity,
+                    'hostility' => $hostility,
+                    'confidence' => $conf,
+                    'n_obs' => $nObs,
+                    'label' => $this->deriveLabel($affinity, $hostility, $conf, $nObs),
+                ];
+            },
         );
-        if ($row === null) {
-            return null;
-        }
-        $affinity = (float) $row->affinity_score;
-        $hostility = (float) $row->hostility_score;
-        $conf = (float) $row->confidence;
-        $nObs = (int) $row->n_obs;
-        return [
-            'affinity' => $affinity,
-            'hostility' => $hostility,
-            'confidence' => $conf,
-            'n_obs' => $nObs,
-            'label' => $this->deriveLabel($affinity, $hostility, $conf, $nObs),
-        ];
     }
 
     /**
