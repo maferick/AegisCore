@@ -479,6 +479,7 @@
                 $amActive = $c['activity_map_active'] ?? [];
                 $amNeighbors = $c['activity_map_neighbors'] ?? [];
                 $amGates = $c['activity_map_gates'] ?? [];
+                $amTitan = $c['activity_map_titan_bridges'] ?? [];
                 $amAll = array_merge($amActive, $amNeighbors);
             @endphp
             @if (! empty($amActive))
@@ -539,6 +540,24 @@
                             </defs>
                             <rect x="0" y="0" width="{{ $mapWidth }}" height="{{ $mapHeight }}" fill="url(#bgGrad)" />
 
+                            {{-- Titan bridge range lines (dashed purple,
+                                 below stargates so they're context). --}}
+                            @foreach ($amTitan as $pair)
+                                @php
+                                    [$a, $b, $ly] = $pair;
+                                    if (! isset($posById[$a]) || ! isset($posById[$b])) continue;
+                                    [$ax, $ay] = $posById[$a];
+                                    [$bx, $by] = $posById[$b];
+                                    [$px1, $py1] = $toPx($ax, $ay);
+                                    [$px2, $py2] = $toPx($bx, $by);
+                                @endphp
+                                <line x1="{{ round($px1, 1) }}" y1="{{ round($py1, 1) }}"
+                                      x2="{{ round($px2, 1) }}" y2="{{ round($py2, 1) }}"
+                                      stroke="rgba(192,132,252,0.22)" stroke-width="0.4" stroke-dasharray="2 3">
+                                    <title>titan bridge · {{ number_format($ly, 2) }} LY</title>
+                                </line>
+                            @endforeach
+
                             {{-- Gate lines first so dots render on top --}}
                             @foreach ($amGates as $pair)
                                 @php
@@ -551,7 +570,7 @@
                                 @endphp
                                 <line x1="{{ round($px1, 1) }}" y1="{{ round($py1, 1) }}"
                                       x2="{{ round($px2, 1) }}" y2="{{ round($py2, 1) }}"
-                                      stroke="rgba(148,163,184,0.22)" stroke-width="0.6" />
+                                      stroke="rgba(148,163,184,0.32)" stroke-width="0.7" />
                             @endforeach
 
                             {{-- Neighbor dots: small + dim, so they read as context --}}
@@ -598,7 +617,9 @@
                         <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#4ade80; vertical-align:middle;"></span> hi-sec</span>
                         <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#fbbf24; vertical-align:middle;"></span> lo-sec</span>
                         <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444; vertical-align:middle;"></span> null-/w-sec</span>
-                        <span style="margin-left:auto; color:#7a7a82;">thin lines = stargate jumps · tiny dots = 1-jump neighbors</span>
+                        <span style="margin-left:auto; color:#7a7a82;">
+                            solid = stargate · <span style="color:#c084fc;">dashed purple</span> = titan bridge range (≤ 6 LY) · tiny dots = neighbors
+                        </span>
                     </div>
                 </div>
             @endif

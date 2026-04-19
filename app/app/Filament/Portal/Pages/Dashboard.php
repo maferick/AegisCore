@@ -436,6 +436,30 @@ class Dashboard extends BaseDashboard
             $gatePairs = array_values($gatePairs);
         }
 
+        // Titan-bridge pairs between shown systems — additional dashed
+        // links so the operator sees "you could titan-bridge from X to
+        // Y" inside the currently visible neighborhood. 6 LY in-game.
+        $titanPairs = [];
+        if ($activeMap !== []) {
+            $shownIdsForTitan = array_merge(array_keys($activeMap), array_keys($neighborMap));
+            // Restrict to active endpoints — avoids drawing 100k+ lines
+            // between every neighbor-to-neighbor pair in range. A
+            // bridge link is only interesting when at least one end
+            // is somewhere the pilot actually fought.
+            $activeIdsFlip = array_flip(array_keys($activeMap));
+            $rows = DB::table('system_titan_bridges')
+                ->whereIn('from_system_id', $shownIdsForTitan)
+                ->whereIn('to_system_id', $shownIdsForTitan)
+                ->select('from_system_id', 'to_system_id', 'ly_distance')
+                ->get();
+            foreach ($rows as $r) {
+                $a = (int) $r->from_system_id;
+                $b = (int) $r->to_system_id;
+                if (! isset($activeIdsFlip[$a]) && ! isset($activeIdsFlip[$b])) continue;
+                $titanPairs[] = [$a, $b, (float) $r->ly_distance];
+            }
+        }
+
         // Top 3 systems — kills-on + losses-in weighted equally.
         $topSystems = DB::select(<<<'SQL'
             SELECT sys.system_id, s.name, SUM(sys.n) AS n FROM (
@@ -568,6 +592,7 @@ class Dashboard extends BaseDashboard
             'activity_map_active' => array_values($activeMap),
             'activity_map_neighbors' => array_values($neighborMap),
             'activity_map_gates' => $gatePairs,
+            'activity_map_titan_bridges' => $titanPairs,
         ];
     }
 }
