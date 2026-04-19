@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Pages;
 
+use App\Domains\CounterIntel\Services\CharacterGraphInsightService;
 use BackedEnum;
 use Filament\Pages\Dashboard as BaseDashboard;
 use Illuminate\Support\Facades\Auth;
@@ -320,9 +321,18 @@ class Dashboard extends BaseDashboard
              GROUP BY k.victim_alliance_id ORDER BY n DESC LIMIT 3
         SQL, [$cid, $currentAllyId ?? 0, $currentAllyId ?? 0]);
 
+        // Neo4j insights — best-effort, null-safe if Neo4j is down.
+        $insights = app(CharacterGraphInsightService::class);
+        $flightCrew = $insights->flightCrew($cid, 8) ?? [];
+        $archEnemies = $insights->archEnemies($cid, 8) ?? [];
+        $structRank = $insights->structuralRank($cid);
+
+        // Collate alliance ids from every source that needs name lookup.
         $mergedAllyIds = array_values(array_unique(array_merge(
             array_map(fn ($r) => (int) $r->alliance_id, $foughtWith),
             array_map(fn ($r) => (int) $r->alliance_id, $foughtAgainst),
+            array_filter(array_column($flightCrew, 'alliance_id')),
+            array_filter(array_column($archEnemies, 'alliance_id')),
         )));
         $allyNameLookup = [];
         if ($mergedAllyIds !== []) {
@@ -332,6 +342,15 @@ class Dashboard extends BaseDashboard
                 ->pluck('name', 'entity_id')
                 ->all();
         }
+        // Attach alliance names onto graph-insight rows.
+        foreach ($flightCrew as &$row) {
+            $row['alliance_name'] = $row['alliance_id'] ? ($allyNameLookup[$row['alliance_id']] ?? null) : null;
+        }
+        unset($row);
+        foreach ($archEnemies as &$row) {
+            $row['alliance_name'] = $row['alliance_id'] ? ($allyNameLookup[$row['alliance_id']] ?? null) : null;
+        }
+        unset($row);
 
         $highlights = [
             'biggest_kill' => $biggestKill ? [
@@ -392,6 +411,9 @@ class Dashboard extends BaseDashboard
                 'name' => (string) ($allyNameLookup[$r->alliance_id] ?? "#{$r->alliance_id}"),
                 'n' => (int) $r->n,
             ], $foughtAgainst),
+            'flight_crew' => $flightCrew,
+            'arch_enemies' => $archEnemies,
+            'structural_rank' => $structRank,
         ];
     }
 }

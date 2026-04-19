@@ -361,6 +361,111 @@
                 </div>
             </div>
 
+            {{-- Graph insights (from Neo4j counter-intel projection) --}}
+            @php
+                $fc = $c['flight_crew'] ?? [];
+                $ae = $c['arch_enemies'] ?? [];
+                $sr = $c['structural_rank'] ?? null;
+                $showGraph = ! empty($fc) || ! empty($ae) || $sr !== null;
+            @endphp
+            @if ($showGraph)
+                <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.06);">
+                    <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.75rem;">
+                        Graph insights
+                        <span style="font-size:0.6rem; color:#7a7a82; text-transform:none; letter-spacing:0.03em; font-weight:400; font-style:italic;">
+                            — from counter-intel co-fighting graph (rolling 90d)
+                        </span>
+                    </h3>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:1.25rem;">
+                        {{-- Flight crew --}}
+                        <div>
+                            <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; color:#86efac; margin-bottom:0.5rem;">Flight crew</div>
+                            @if (empty($fc))
+                                <p style="font-size:0.75rem; color:#7a7a82; font-style:italic;">No data yet.</p>
+                            @else
+                                <div style="display:flex; flex-direction:column; gap:0.35rem;">
+                                    @foreach ($fc as $p)
+                                        <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.78rem;">
+                                            <img src="https://images.evetech.net/characters/{{ $p['character_id'] }}/portrait?size=32"
+                                                 referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:50%;" alt="">
+                                            <div style="flex:1; min-width:0;">
+                                                <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                                    {{ $p['name'] ?? ('Pilot #'.$p['character_id']) }}
+                                                </div>
+                                                @if ($p['alliance_name'])
+                                                    <div style="font-size:0.62rem; color:#7a7a82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
+                                                @endif
+                                            </div>
+                                            <span style="color:#86efac; font-size:0.7rem;" title="{{ $p['distinct_interactions'] }} distinct sessions · {{ number_format($p['total_weight'], 1) }} weighted">
+                                                {{ $p['distinct_interactions'] }}×
+                                            </span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
+                        </div>
+                        {{-- Arch-enemies --}}
+                        <div>
+                            <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; color:#fca5a5; margin-bottom:0.5rem;">Arch-enemies</div>
+                            @if (empty($ae))
+                                <p style="font-size:0.75rem; color:#7a7a82; font-style:italic;">No data yet.</p>
+                            @else
+                                <div style="display:flex; flex-direction:column; gap:0.35rem;">
+                                    @foreach ($ae as $p)
+                                        <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.78rem;">
+                                            <img src="https://images.evetech.net/characters/{{ $p['character_id'] }}/portrait?size=32"
+                                                 referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:50%;" alt="">
+                                            <div style="flex:1; min-width:0;">
+                                                <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                                    {{ $p['name'] ?? ('Pilot #'.$p['character_id']) }}
+                                                </div>
+                                                @if ($p['alliance_name'])
+                                                    <div style="font-size:0.62rem; color:#7a7a82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
+                                                @endif
+                                            </div>
+                                            <span style="color:#fca5a5; font-size:0.7rem;" title="{{ $p['distinct_interactions'] }} distinct sessions · {{ number_format($p['total_weight'], 1) }} weighted">
+                                                {{ $p['distinct_interactions'] }}×
+                                            </span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
+                        </div>
+                        {{-- Structural rank --}}
+                        <div>
+                            <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; color:#a5b4fc; margin-bottom:0.5rem;">Structural rank</div>
+                            @if ($sr === null)
+                                <p style="font-size:0.75rem; color:#7a7a82; font-style:italic;">Not enough history yet for graph scoring.</p>
+                            @else
+                                <div style="display:flex; flex-direction:column; gap:0.6rem; font-size:0.78rem;">
+                                    <div>
+                                        <div style="display:flex; justify-content:space-between;">
+                                            <span style="color:#9ca3af;">PageRank</span>
+                                            <span style="color:#a5b4fc;">top {{ max(1, (int) ceil(100 - $sr['pagerank_pct'])) }}%</span>
+                                        </div>
+                                        <div style="background:rgba(99,102,241,0.08); height:4px; border-radius:2px; margin-top:3px; overflow:hidden;">
+                                            <div style="width:{{ $sr['pagerank_pct'] }}%; height:100%; background:rgba(165,180,252,0.6);"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style="display:flex; justify-content:space-between;">
+                                            <span style="color:#9ca3af;">Bridge score</span>
+                                            <span style="color:#a5b4fc;">top {{ max(1, (int) ceil(100 - $sr['betweenness_pct'])) }}%</span>
+                                        </div>
+                                        <div style="background:rgba(99,102,241,0.08); height:4px; border-radius:2px; margin-top:3px; overflow:hidden;">
+                                            <div style="width:{{ $sr['betweenness_pct'] }}%; height:100%; background:rgba(165,180,252,0.6);"></div>
+                                        </div>
+                                    </div>
+                                    <div style="font-size:0.6rem; color:#7a7a82; font-style:italic;">
+                                        ranked against {{ number_format($sr['cohort_size']) }} sufficient-history pilots
+                                    </div>
+                                </div>
+                            @endif
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             {{-- Top hulls --}}
             @if (! empty($c['top_hulls']))
                 <div style="margin-top:1.25rem;">
