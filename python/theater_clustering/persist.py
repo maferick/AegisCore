@@ -267,11 +267,6 @@ def persist_clusters(
     ]
 
     with conn.cursor() as cur:
-        # Wipe every unlocked theater and its child rows. The pivot /
-        # system / participant tables cascade on theater deletion, so
-        # the one DELETE is enough.
-        cur.execute("DELETE FROM battle_theaters WHERE locked_at IS NULL")
-
         theaters_written = 0
         participants_written = 0
 
@@ -296,25 +291,93 @@ def persist_clusters(
             slug_name = name.lower().replace(" ", "-").replace(".", "")
             return f"{slug_name}-{start_time.strftime('%Y%m%d%H%M')}"
 
+        # Stable-ID reconciliation. Previous implementation DELETE +
+        # INSERTed every unlocked theater on every pass, burning auto-
+        # increment IDs and 404ing any /battles/{id} URL after the next
+        # scheduler tick. Fix: match by public_slug, UPDATE the theater
+        # row in-place when it exists, then replace only the child rows
+        # (killmails / systems / participants). Theater ID stays
+        # stable across clustering passes.
+
+        # Build the set of slugs we're about to write.
+        desired_slugs = {
+            _slug_for(s.primary_system_id, s.start_time): (cluster, s)
+            for cluster, s in stats_by_cluster
+        }
+
+        # Look up existing unlocked theaters — slug → id map.
+        existing_slug_to_id: dict[str, int] = {}
+        if desired_slugs:
+            cur.execute(
+                "SELECT id, public_slug FROM battle_theaters "
+                "WHERE locked_at IS NULL AND public_slug IN ("
+                + ",".join(["%s"] * len(desired_slugs))
+                + ")",
+                list(desired_slugs.keys()),
+            )
+            for row in cur.fetchall():
+                existing_slug_to_id[str(row["public_slug"])] = int(row["id"])
+
+        # Delete unlocked theaters that are no longer in the new cluster
+        # set (battles that shrank below minimum size, or merged into a
+        # different slug). Child rows cascade.
+        if desired_slugs:
+            placeholders = ",".join(["%s"] * len(desired_slugs))
+            cur.execute(
+                f"DELETE FROM battle_theaters WHERE locked_at IS NULL "
+                f"AND public_slug NOT IN ({placeholders})",
+                list(desired_slugs.keys()),
+            )
+        else:
+            cur.execute("DELETE FROM battle_theaters WHERE locked_at IS NULL")
+
         for cluster, s in stats_by_cluster:
             public_slug = _slug_for(s.primary_system_id, s.start_time)
-            cur.execute(
-                """
-                INSERT INTO battle_theaters
-                  (public_slug, primary_system_id, region_id, start_time, end_time,
-                   total_kills, total_isk_lost, participant_count,
-                   system_count, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                """,
-                (
-                    public_slug,
-                    s.primary_system_id, s.region_id,
-                    s.start_time, s.end_time,
-                    s.total_kills, s.total_isk_lost,
-                    s.participant_count, s.system_count,
-                ),
-            )
-            theater_id = cur.lastrowid
+            existing_id = existing_slug_to_id.get(public_slug)
+            if existing_id is not None:
+                # Update the existing row + drop child rows so we can
+                # re-insert fresh. Child tables have ON DELETE CASCADE
+                # via theater_id FK, so a scoped DELETE works cleanly.
+                cur.execute(
+                    """
+                    UPDATE battle_theaters
+                       SET primary_system_id = %s, region_id = %s,
+                           start_time = %s, end_time = %s,
+                           total_kills = %s, total_isk_lost = %s,
+                           participant_count = %s, system_count = %s,
+                           updated_at = NOW()
+                     WHERE id = %s
+                    """,
+                    (
+                        s.primary_system_id, s.region_id,
+                        s.start_time, s.end_time,
+                        s.total_kills, s.total_isk_lost,
+                        s.participant_count, s.system_count,
+                        existing_id,
+                    ),
+                )
+                cur.execute("DELETE FROM battle_theater_killmails WHERE theater_id = %s", (existing_id,))
+                cur.execute("DELETE FROM battle_theater_systems WHERE theater_id = %s", (existing_id,))
+                cur.execute("DELETE FROM battle_theater_participants WHERE theater_id = %s", (existing_id,))
+                theater_id = existing_id
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO battle_theaters
+                      (public_slug, primary_system_id, region_id, start_time, end_time,
+                       total_kills, total_isk_lost, participant_count,
+                       system_count, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    """,
+                    (
+                        public_slug,
+                        s.primary_system_id, s.region_id,
+                        s.start_time, s.end_time,
+                        s.total_kills, s.total_isk_lost,
+                        s.participant_count, s.system_count,
+                    ),
+                )
+                theater_id = cur.lastrowid
             theaters_written += 1
 
             # Pivot rows.
