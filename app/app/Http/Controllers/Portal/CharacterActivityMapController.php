@@ -133,11 +133,49 @@ class CharacterActivityMapController extends Controller
             $gatePairs = array_values($gatePairs);
         }
 
+        // Group by region so visually disconnected clusters render as
+        // separate per-region sub-maps instead of one wide map with
+        // empty space between.
+        $regionIds = array_values(array_unique(array_column($activeMap, 'region_id')));
+        $regionNames = DB::table('ref_regions')
+            ->whereIn('id', $regionIds)
+            ->pluck('name', 'id')
+            ->all();
+
+        $regions = [];
+        foreach ($regionIds as $rid) {
+            $regionActive = array_filter($activeMap, fn ($s) => (int) $s['region_id'] === (int) $rid);
+            $regionNeighborIds = [];
+            foreach ($regionActive as $s) {
+                $regionNeighborIds[$s['id']] = true;
+            }
+            // Neighbors for THIS region's active set only.
+            $regionNeighbors = array_filter($neighborMap, function ($n) use ($regionActive): bool {
+                foreach ($regionActive as $s) {
+                    if ((int) $n['region_id'] === (int) $s['region_id']) return true;
+                }
+                return false;
+            });
+            $regionShownIds = array_flip(array_merge(
+                array_keys($regionActive),
+                array_keys($regionNeighbors),
+            ));
+            $regionGates = array_values(array_filter($gatePairs, fn ($p) => isset($regionShownIds[$p[0]]) && isset($regionShownIds[$p[1]])));
+            $regions[] = [
+                'id' => (int) $rid,
+                'name' => (string) ($regionNames[$rid] ?? "Region #{$rid}"),
+                'active' => array_values($regionActive),
+                'neighbors' => array_values($regionNeighbors),
+                'gates' => $regionGates,
+            ];
+        }
+        // Sort regions so the one with the most kills renders first.
+        usort($regions, fn ($a, $b) => array_sum(array_column($b['active'], 'n')) <=> array_sum(array_column($a['active'], 'n')));
+
         return [
-            'active' => array_values($activeMap),
-            'neighbors' => array_values($neighborMap),
-            'gates' => $gatePairs,
-            'titan' => [],
+            'regions' => $regions,
+            'active_count' => count($activeMap),
+            'neighbor_count' => count($neighborMap),
         ];
     }
 }
