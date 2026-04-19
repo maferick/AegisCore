@@ -112,14 +112,14 @@
                         </circle>
                     @endforeach
 
-                    {{-- Neighbor labels — 1..6 jumps out from an active
+                    {{-- Neighbor labels — 1..8 jumps out from an active
                          system get named, dimmer the further out. Past
-                         hop 6 the names stay on the hover tooltip only
+                         hop 8 the names stay on the hover tooltip only
                          so the map doesn't turn into a wall of text. --}}
                     @foreach ($amNeighbors as $sys)
                         @php
                             $hop = (int) ($sys['hop'] ?? 0);
-                            if ($hop < 1 || $hop > 6) continue;
+                            if ($hop < 1 || $hop > 8) continue;
                             [$cx, $cy] = $toPx($sys['x'], $sys['y']);
                             $labelColor = match ($hop) {
                                 1 => '#cbd5e1',
@@ -128,8 +128,10 @@
                                 4 => '#64748b',
                                 5 => '#475569',
                                 6 => '#334155',
+                                7 => '#334155',
+                                8 => '#1e293b',
                             };
-                            $labelFont = match ($hop) { 1 => 9, 2 => 8, 3 => 8, 4 => 7, 5 => 7, 6 => 6 };
+                            $labelFont = match ($hop) { 1 => 9, 2 => 8, 3 => 8, 4 => 7, 5 => 7, 6 => 6, 7 => 6, 8 => 6 };
                         @endphp
                         <text x="{{ round($cx + 5, 1) }}" y="{{ round($cy + 2.5, 1) }}"
                               font-size="{{ $labelFont }}" fill="{{ $labelColor }}" style="font-family: ui-monospace, monospace;"
