@@ -15,24 +15,30 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Scrape ansiblex jump-bridge corridors from ESI for every
- * authorised service character whose token carries
- * `esi-corporations.read_structures.v1`.
+ * Scrape ansiblex jump-bridge corridors from ESI.
  *
- * Ansiblex Jump Gate type_id = 35841. The destination system isn't a
- * direct field on the /corporations/{id}/structures/ payload, but
- * operators conventionally name the gate "<src> » <dest>" (or with
- * arrow variants), so we parse the destination system name out of
- * the structure name. Unparseable names are logged + skipped rather
- * than poisoning the table with wrong corridors.
+ * Prefers the access-list-scoped path that the market structure
+ * picker already uses (see StructurePickerService), so we work with
+ * any authorised character that has docking rights — no Director
+ * role required:
+ *
+ *   1. /characters/{id}/search/?categories=structure&search=<q> →
+ *      ACL-filtered list of structure IDs the character can reach.
+ *   2. /universe/structures/{id}/ → name + type_id + solar_system_id.
+ *
+ * Ansiblex Jump Gates are type_id=35841 and conventionally named
+ * "<src> » <dest>" (with minor arrow variants). We parse the
+ * destination system name out of the structure name + use the
+ * structure's own solar_system_id as the source. Unparseable names
+ * get warned + skipped rather than inserting wrong corridors.
  */
 class ScrapeAnsiblexCommand extends Command
 {
     protected $signature = 'map:scrape-ansiblex
-                            {--corp= : Only scrape this corporation_id}
+                            {--query= : Search string passed to /characters/{id}/search/ (default: "»")}
                             {--dry-run : Print what would change, do not write}';
 
-    protected $description = 'Scrape ansiblex corridors from ESI for every authorised corp structures token.';
+    protected $description = 'Scrape ansiblex corridors from ESI via /characters/{id}/search/ + /universe/structures/{id}/.';
 
     private const ANSIBLEX_TYPE_ID = 35841;
 
@@ -40,12 +46,12 @@ class ScrapeAnsiblexCommand extends Command
     {
         $tokens = EveServiceToken::query()->get();
         if ($tokens->isEmpty()) {
-            $this->warn('No EveServiceToken rows found. Authorise a corp structures scope first.');
+            $this->warn('No EveServiceToken rows found. Authorise a character first.');
             return 0;
         }
 
-        $onlyCorp = $this->option('corp') ? (int) $this->option('corp') : null;
         $dry = (bool) $this->option('dry-run');
+        $query = (string) ($this->option('query') ?: '»');
         $nameToId = DB::table('ref_solar_systems')->pluck('id', 'name')->all();
 
         $totalSeen = 0;
@@ -53,18 +59,20 @@ class ScrapeAnsiblexCommand extends Command
         $totalSkipped = 0;
 
         foreach ($tokens as $token) {
-            if (! $token->hasScope('esi-corporations.read_structures.v1')) {
+            // Need both the search scope (ACL-filtered structure list)
+            // and the universe-read scope (structure detail). Roles not
+            // required — docking rights are enough.
+            if (! $token->hasScope('esi-search.search_structures.v1')
+                || ! $token->hasScope('esi-universe.read_structures.v1')) {
                 continue;
             }
             $char = Character::query()->where('character_id', $token->character_id)->first();
-            if ($char === null || $char->corporation_id === null) {
-                $this->warn("Token for character {$token->character_id} has no linked corporation — skipping.");
-                continue;
-            }
-            $corpId = (int) $char->corporation_id;
-            if ($onlyCorp !== null && $corpId !== $onlyCorp) continue;
+            if ($char === null) continue;
+            $cid = (int) $char->character_id;
+            $corpId = (int) ($char->corporation_id ?? 0);
+            $allyId = $char->alliance_id !== null ? (int) $char->alliance_id : null;
 
-            $this->info("Corporation {$corpId} — fetching structures…");
+            $this->info("Character {$cid} ({$char->character_name}) — searching structures matching " . json_encode($query) . '…');
             try {
                 $bearer = $auth->freshAccessToken($token);
             } catch (Throwable $e) {
@@ -72,66 +80,65 @@ class ScrapeAnsiblexCommand extends Command
                 continue;
             }
 
-            $page = 1;
-            while (true) {
+            try {
+                $searchResp = $esi->get(
+                    "/characters/{$cid}/search/",
+                    ['categories' => 'structure', 'search' => $query],
+                    $bearer,
+                    forceRefresh: true,
+                );
+            } catch (EsiException $e) {
+                $this->error("  search failed: {$e->getMessage()}");
+                continue;
+            }
+            $structureIds = array_values(array_map(
+                static fn ($id) => (int) $id,
+                (array) ($searchResp->body['structure'] ?? []),
+            ));
+            $this->line('  ' . count($structureIds) . ' structure(s) matched.');
+
+            foreach ($structureIds as $sid) {
                 try {
-                    $resp = $esi->get(
-                        "/corporations/{$corpId}/structures/",
-                        ['page' => $page],
-                        $bearer,
-                    );
+                    $detail = $esi->get("/universe/structures/{$sid}/", [], $bearer, forceRefresh: true);
                 } catch (EsiException $e) {
-                    $this->error("  page {$page} failed: {$e->getMessage()}");
-                    break;
+                    continue;  // lost access between search + detail, or expired
                 }
-                $rows = $resp->body ?? [];
-                if (! is_array($rows) || $rows === []) break;
+                $body = $detail->body ?? [];
+                $typeId = (int) ($body['type_id'] ?? 0);
+                if ($typeId !== self::ANSIBLEX_TYPE_ID) continue;
+                $totalSeen++;
 
-                foreach ($rows as $struct) {
-                    $typeId = (int) ($struct['type_id'] ?? 0);
-                    if ($typeId !== self::ANSIBLEX_TYPE_ID) continue;
-                    $totalSeen++;
-
-                    $srcId = (int) ($struct['solar_system_id'] ?? 0);
-                    $structureId = (int) ($struct['structure_id'] ?? 0);
-                    $name = (string) ($struct['name'] ?? '');
-
-                    // Match the destination system name after »,
-                    // tolerating alternative arrow characters.
-                    if (! preg_match('/[»⇌→>]\s*([A-Za-z0-9][A-Za-z0-9\-\. ]*)/u', $name, $m)) {
-                        $this->warn("  unparseable ansiblex name: {$name}");
-                        $totalSkipped++;
-                        continue;
-                    }
-                    $destName = trim($m[1]);
-                    // Drop trailing qualifiers (" (staging)", numbers, etc).
-                    $destName = preg_split('/\s+/', $destName, 2)[0];
-                    $destId = $nameToId[$destName] ?? null;
-                    if ($destId === null || $srcId === 0) {
-                        $this->warn("  could not resolve '{$destName}' in ref_solar_systems (name: {$name})");
-                        $totalSkipped++;
-                        continue;
-                    }
-
-                    [$lo, $hi] = $srcId < (int) $destId ? [$srcId, (int) $destId] : [(int) $destId, $srcId];
-                    if ($dry) {
-                        $this->line("  would upsert: {$name} — {$lo}↔{$hi}");
-                        continue;
-                    }
-                    DB::table('ansiblex_jump_bridges')->updateOrInsert(
-                        ['from_system_id' => $lo, 'to_system_id' => $hi],
-                        [
-                            'alliance_id' => $char->alliance_id ?? null,
-                            'structure_id' => $structureId,
-                            'name' => $name,
-                            'last_seen_at' => now(),
-                            'updated_at' => now(),
-                        ],
-                    );
-                    $totalWritten++;
+                $srcId = (int) ($body['solar_system_id'] ?? 0);
+                $name = (string) ($body['name'] ?? '');
+                if (! preg_match('/[»⇌→>]\s*([A-Za-z0-9][A-Za-z0-9\-\. ]*)/u', $name, $m)) {
+                    $this->warn("  unparseable: {$name}");
+                    $totalSkipped++;
+                    continue;
                 }
-                if (count($rows) < 250) break;  // default ESI page size
-                $page++;
+                $destName = preg_split('/\s+/', trim($m[1]), 2)[0];
+                $destId = $nameToId[$destName] ?? null;
+                if ($destId === null || $srcId === 0) {
+                    $this->warn("  could not resolve dest '{$destName}' (name: {$name})");
+                    $totalSkipped++;
+                    continue;
+                }
+
+                [$lo, $hi] = $srcId < (int) $destId ? [$srcId, (int) $destId] : [(int) $destId, $srcId];
+                if ($dry) {
+                    $this->line("  would upsert: {$name} — {$lo}↔{$hi}");
+                    continue;
+                }
+                DB::table('ansiblex_jump_bridges')->updateOrInsert(
+                    ['from_system_id' => $lo, 'to_system_id' => $hi],
+                    [
+                        'alliance_id' => $allyId,
+                        'structure_id' => $sid,
+                        'name' => $name,
+                        'last_seen_at' => now(),
+                        'updated_at' => now(),
+                    ],
+                );
+                $totalWritten++;
             }
         }
         $this->info("Scan done. Seen: {$totalSeen} · Written: {$totalWritten} · Skipped: {$totalSkipped}");
