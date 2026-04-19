@@ -206,6 +206,66 @@ class Dashboard extends BaseDashboard
             ->where('ka.character_id', $cid)
             ->max('k.attacker_count');
 
+        // Final blows attributed to this pilot.
+        $finalBlows = DB::table('killmail_attackers')
+            ->where('character_id', $cid)
+            ->where('is_final_blow', 1)
+            ->count();
+
+        // Pod losses — victim rows where victim group id = 29 (Capsule).
+        $podLosses = DB::table('killmails')
+            ->where('victim_character_id', $cid)
+            ->where('victim_ship_group_id', 29)
+            ->count();
+
+        // Kills contributed to on capital-class hulls (not this pilot's
+        // ship, the VICTIM's). Dread/Carrier/Super/Titan/FAX/Rorqual.
+        $capitalKills = DB::table('killmail_attackers AS ka')
+            ->join('killmails AS k', 'k.killmail_id', '=', 'ka.killmail_id')
+            ->where('ka.character_id', $cid)
+            ->whereIn('k.victim_ship_group_id', [485, 547, 659, 30, 1538, 883])
+            ->count();
+
+        // First + last killmail — activity span.
+        $span = DB::table('killmail_attackers AS ka')
+            ->join('killmails AS k', 'k.killmail_id', '=', 'ka.killmail_id')
+            ->where('ka.character_id', $cid)
+            ->selectRaw('MIN(k.killed_at) AS first_km, MAX(k.killed_at) AS last_km')
+            ->first();
+        $firstKm = $span->first_km ?? null;
+        $lastKm = $span->last_km ?? null;
+        // Include losses as activity markers too.
+        if ($losses > 0) {
+            $lossSpan = DB::table('killmails')
+                ->where('victim_character_id', $cid)
+                ->selectRaw('MIN(killed_at) AS first_loss, MAX(killed_at) AS last_loss')
+                ->first();
+            if ($lossSpan->first_loss && (!$firstKm || $lossSpan->first_loss < $firstKm)) $firstKm = $lossSpan->first_loss;
+            if ($lossSpan->last_loss && (!$lastKm || $lossSpan->last_loss > $lastKm)) $lastKm = $lossSpan->last_loss;
+        }
+
+        // Hour-of-day histogram (UTC) across all kills pilot appears on.
+        $hourRows = DB::select(<<<'SQL'
+            SELECT HOUR(k.killed_at) AS h, COUNT(*) AS n FROM (
+                SELECT killmail_id FROM killmail_attackers WHERE character_id=?
+                UNION
+                SELECT killmail_id FROM killmails WHERE victim_character_id=?
+            ) mine JOIN killmails k ON k.killmail_id=mine.killmail_id
+            GROUP BY HOUR(k.killed_at)
+        SQL, [$cid, $cid]);
+        $hourHistogram = array_fill(0, 24, 0);
+        foreach ($hourRows as $r) {
+            $hourHistogram[(int) $r->h] = (int) $r->n;
+        }
+
+        // ISK efficiency — percentage of "destroyed + lost" credited to
+        // the pilot's side. zKill convention.
+        $iskEff = null;
+        $iskTotal = (float) $iskDestroyedRaw + (float) $iskLostRaw;
+        if ($iskTotal > 0) {
+            $iskEff = round(((float) $iskDestroyedRaw / $iskTotal) * 100, 1);
+        }
+
         // Role breakdown from killmail_pilot_role (per-km hull-based role).
         $roleBreakdown = DB::table('killmail_pilot_role')
             ->where('character_id', $cid)
@@ -292,6 +352,12 @@ class Dashboard extends BaseDashboard
             'isk_lost' => (float) $iskLostRaw,
             'solo_kills' => (int) $soloKills,
             'largest_gang' => $largestGang ? (int) $largestGang : null,
+            'final_blows' => (int) $finalBlows,
+            'pod_losses' => (int) $podLosses,
+            'capital_kills' => (int) $capitalKills,
+            'isk_efficiency' => $iskEff,
+            'first_km' => $firstKm,
+            'last_km' => $lastKm,
         ];
 
         return [
@@ -310,6 +376,7 @@ class Dashboard extends BaseDashboard
             'role_breakdown' => $roleBreakdown,
             'role_total' => $roleTotal,
             'battles_participated' => $battlesParticipated,
+            'hour_histogram' => $hourHistogram,
             'top_systems' => array_map(fn ($r) => [
                 'system_id' => (int) $r->system_id,
                 'name' => (string) ($r->name ?? "#{$r->system_id}"),

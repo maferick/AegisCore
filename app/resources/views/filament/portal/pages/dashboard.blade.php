@@ -120,7 +120,69 @@
                         </div>
                     </div>
                 @endif
+                @if (! empty($h['isk_efficiency']))
+                    <div style="background:rgba(79,208,208,0.08); border:1px solid rgba(79,208,208,0.25); border-radius:6px; padding:0.6rem 0.8rem;" title="ISK destroyed / (ISK destroyed + ISK lost) — zKill convention.">
+                        <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">ISK efficiency</div>
+                        <div style="font-size:1.1rem; font-weight:600; color:#4fd0d0; margin-top:0.15rem;">
+                            {{ $h['isk_efficiency'] }}%
+                        </div>
+                    </div>
+                @endif
+                <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Final blows</div>
+                    <div style="font-size:1.1rem; font-weight:600; color:#e5e5e7; margin-top:0.15rem;">
+                        {{ number_format($h['final_blows'] ?? 0) }}
+                    </div>
+                </div>
+                @if (($h['pod_losses'] ?? 0) > 0)
+                    <div style="background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.15); border-radius:6px; padding:0.6rem 0.8rem;">
+                        <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Pods lost</div>
+                        <div style="font-size:1.1rem; font-weight:600; color:#fca5a5; margin-top:0.15rem;">
+                            {{ number_format($h['pod_losses']) }}
+                        </div>
+                    </div>
+                @endif
+                @if (($h['capital_kills'] ?? 0) > 0)
+                    <div style="background:rgba(168,85,247,0.1); border:1px solid rgba(168,85,247,0.25); border-radius:6px; padding:0.6rem 0.8rem;" title="Killmails where the victim was a capital-class hull (Dreadnought / Carrier / Supercarrier / Titan / FAX / Rorqual).">
+                        <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Capital kills</div>
+                        <div style="font-size:1.1rem; font-weight:600; color:#f0abfc; margin-top:0.15rem;">
+                            {{ number_format($h['capital_kills']) }}
+                        </div>
+                    </div>
+                @endif
+                @if (! empty($h['first_km']) && ! empty($h['last_km']))
+                    <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
+                        <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Active span</div>
+                        <div style="font-size:0.82rem; font-weight:600; color:#e5e5e7; margin-top:0.15rem;">
+                            {{ \Carbon\Carbon::parse($h['first_km'])->format('Y-m-d') }} → {{ \Carbon\Carbon::parse($h['last_km'])->format('Y-m-d') }}
+                        </div>
+                        <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.15rem;">
+                            last: {{ \Carbon\Carbon::parse($h['last_km'])->diffForHumans() }}
+                        </div>
+                    </div>
+                @endif
             </div>
+
+            @php $hh = $c['hour_histogram'] ?? []; $hhMax = ! empty($hh) ? max($hh) : 0; @endphp
+            @if ($hhMax > 0)
+                <div style="margin-bottom:1rem;">
+                    <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.4rem;">Active hours (UTC)</h3>
+                    <div style="display:grid; grid-template-columns: repeat(24, 1fr); gap:2px; align-items:end; height:48px;">
+                        @for ($hr = 0; $hr < 24; $hr++)
+                            @php $v = $hh[$hr] ?? 0; $pct = $hhMax > 0 ? round($v / $hhMax * 100) : 0; @endphp
+                            <div title="{{ sprintf('%02d:00 UTC — %d kills', $hr, $v) }}"
+                                 style="background:{{ $v > 0 ? 'rgba(79,208,208,0.5)' : 'rgba(148,163,184,0.1)' }};
+                                        height:{{ max(2, $pct) }}%;
+                                        border-radius:2px 2px 0 0;"></div>
+                        @endfor
+                    </div>
+                    <div style="display:grid; grid-template-columns: repeat(24, 1fr); gap:2px; margin-top:3px;">
+                        @for ($hr = 0; $hr < 24; $hr++)
+                            <div style="font-size:0.55rem; color:#7a7a82; text-align:center;">{{ $hr % 3 === 0 ? sprintf('%02d', $hr) : '' }}</div>
+                        @endfor
+                    </div>
+                </div>
+            @endif
 
             @php
                 // Show last 6 entries of each so both columns fit on
