@@ -52,19 +52,41 @@ final class MarketHubComparisonService
      *   4932 Unrefined Mineral (raw)
      */
     private const EXCLUDED_GROUPS = [
+        // Food / livestock / consumables
         280,   // General — Tobacco, Spirits, Antibiotics, Quafe
-        283,   // Livestock — Slaver Hound etc
-        284,   // Biohazard — Hydrochloric Acid, Antibiotic raw
-        422,   // Gas Isotopes (Material) — raw gas yield
-        427,   // Moon Materials — pre-reaction goo
-        526,   // Commodities — mission loot, corpses, books
-        530,   // Materials and Compounds — trade-chain junk + salvage
-        754,   // Salvaged Materials (Material) — salvager output
-        967,   // Wormhole Minerals — site-harvested raw
-        966,   // Ancient Salvage — sansha/blood loot
-        4168,  // Compressed Gas (Celestial) — harvester yield
-        4915,  // Prismaticite ore (Material grouped but asteroid-style)
+        281,   // Frozen — Dairy, Frozen Plant Seeds, Protein Delicacies
+        283,   // Livestock — Slaver Hound
+        284,   // Biohazard — Hydrochloric Acid, raw medical
+        879,   // Slave Reception — Freed Slaves, Kruul's DNA
+
+        // Mission / loot trash
+        314,   // Miscellaneous — random oddments
+        526,   // Commodities — mission loot, corpses, books, vouchers
+        652,   // Lease — Starbase Charters
+        966,   // Ancient Salvage — Sansha/Blood loot
+        1676,  // Named Components — mission-reward components
+
+        // Raw / mining chain
+        422,   // Gas Isotopes
+        427,   // Moon Materials (pre-reaction)
+        711,   // Harvestable Cloud (Celestial) — Fullerite-C*, gas cloud yields
+        754,   // Salvaged Materials
+        967,   // Wormhole Minerals — raw
+        4168,  // Compressed Gas
+        4915,  // Prismaticite (compressed ore grouped under Material)
         4932,  // Unrefined Mineral
+
+        // Industrial reagents / reaction inputs / PI-style commodities
+        334,   // Construction Components — player-mfg intermediate
+        530,   // Materials and Compounds — trade-chain junk + salvage
+        712,   // Biochemical Material — booster precursor
+        964,   // Hybrid Tech Components — T3C/reaction components
+        974,   // Hybrid Polymers — polymer reaction output
+        1995,  // Triglavian Data
+        4716,  // Abyssal Battlefield Filament Materials
+
+        // Research / blueprint-adjacent
+        333,   // Datacores
     ];
 
     /**
