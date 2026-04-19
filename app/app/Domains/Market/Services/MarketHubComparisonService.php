@@ -28,6 +28,7 @@ final class MarketHubComparisonService
      * Categories we exclude from the overview because they're not
      * fleet-ops / supply-chain relevant:
      *   8   Charge (ammo, scripts — fleets carry own, not market item)
+     *   9   Blueprint (industrialist domain, not fleet ops)
      *   25  Asteroid (raw ores — mining chain, not fleet ops)
      *   30  Apparel (clothing, tattoos, portraits)
      *   42  Planetary Resources (raw PI input)
@@ -36,7 +37,7 @@ final class MarketHubComparisonService
      *   91  SKINs (cosmetics)
      *   2118 Personalization (ship SKIN design elements)
      */
-    private const EXCLUDED_CATEGORIES = [8, 25, 30, 42, 43, 63, 91, 2118];
+    private const EXCLUDED_CATEGORIES = [8, 9, 25, 30, 42, 43, 63, 91, 2118];
 
     /**
      * Specific groups within otherwise-useful categories that are
