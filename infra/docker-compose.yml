@@ -1295,6 +1295,30 @@ services:
       aegiscore:
         ipv4_address: 172.16.238.46
 
+  counter_intel:
+    build:
+      context: ../python
+      dockerfile: counter_intel.Dockerfile
+    image: aegiscore/counter-intel:0.1.0
+    container_name: counter_intel
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      CI_WINDOW_DAYS: "${CI_WINDOW_DAYS:-90}"
+      CI_MIN_BATTLES_90D: "${CI_MIN_BATTLES_90D:-5}"
+    command: ["features"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      aegiscore:
+        ipv4_address: 172.16.238.47
+
 volumes:
   # Named volume for MariaDB data. Named volumes survive container
   # recreation (docker compose up -d --build) — unlike bind mounts,
