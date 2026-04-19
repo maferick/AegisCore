@@ -33,6 +33,13 @@ final class ZkillTheaterValueService
         if ($theater->primary_system_id <= 0 || $theater->start_time === null) {
             return null;
         }
+        // Skip the HTTP call from CLI contexts (scheduled backfills
+        // iterate thousands of theaters; 8s timeout × N kills the job
+        // at exit 255 on rate-limit stalls). Web renders still fetch
+        // + cache normally.
+        if (app()->runningInConsole()) {
+            return null;
+        }
         // zKill /api/related/ requires an hour-aligned timestamp. Pick
         // the first full hour after start_time (e.g. start 00:28 → probe
         // 02:00 via the middle of the battle). If the fight is shorter
