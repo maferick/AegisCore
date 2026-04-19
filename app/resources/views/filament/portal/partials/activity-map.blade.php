@@ -18,7 +18,10 @@
         $spanX = max(1.0, $maxX - $minX);
         $spanY = max(1.0, $maxY - $minY);
         $maxN = max(array_map(fn ($r) => (int) $r['n'], $amActive) ?: [1]);
-        $mapWidth = 720; $mapHeight = 380; $padding = 24;
+        // Bigger viewBox for proper map feel; SVG width:100% scales to
+        // container, so a larger intrinsic ratio gives a taller render
+        // at the same container width.
+        $mapWidth = 1100; $mapHeight = 620; $padding = 32;
 
         $plotW = $mapWidth - 2 * $padding;
         $plotH = $mapHeight - 2 * $padding;
@@ -44,10 +47,11 @@
     <div style="font-size:0.62rem; color:#7a7a82; margin-bottom:0.3rem;">
         {{ count($amActive) }} active · {{ count($amNeighbors) }} neighbor systems
     </div>
-    <div style="background:#0b0e14; border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.25rem;">
+    <div style="background:#0b0e14; border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.25rem; min-height:500px;">
         <svg viewBox="0 0 {{ $mapWidth }} {{ $mapHeight }}"
              xmlns="http://www.w3.org/2000/svg"
-             style="width:100%; height:auto; display:block;">
+             preserveAspectRatio="xMidYMid meet"
+             style="width:100%; height:auto; display:block; min-height:500px;">
             <defs>
                 <radialGradient id="bgGrad" cx="50%" cy="50%" r="70%">
                     <stop offset="0%" stop-color="#10151f" />
