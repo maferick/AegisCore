@@ -130,7 +130,13 @@ def extract_and_persist(conn: pymysql.connections.Connection, cfg: Config, windo
         d = damage.get(cid, {})
         avg_dmg = float(d.get("avg_damage_share") or 0.0)
 
-        has_enough = battles >= cfg.min_battles_90d
+        # Eligibility = raw killmail appearances. Theater clustering only
+        # weights edge relationships (dampener in projection), never
+        # gates who is scored. A pilot with 5 killmails in the window
+        # is visible to counter-intel regardless of whether the theater
+        # clusterer has swept that period yet.
+        appearances = atk + vic
+        has_enough = appearances >= cfg.min_appearances_90d
 
         rows.append(FeatureRow(
             character_id=cid,

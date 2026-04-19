@@ -27,7 +27,7 @@ class Config:
 
     # Tuning.
     window_days: int
-    min_battles_90d: int
+    min_appearances_90d: int  # min killmail appearances (attacker+victim) for eligibility
     coedge_min_shared_battles: int
     coedge_min_shared_killmails: int
     coedge_min_shared_days: int
@@ -60,7 +60,7 @@ class Config:
             neo4j_password=env("NEO4J_PASSWORD", required=True),
             neo4j_database=env("NEO4J_DATABASE", "neo4j"),
             window_days=int(env("CI_WINDOW_DAYS", "90") or "90"),
-            min_battles_90d=int(env("CI_MIN_BATTLES_90D", "5") or "5"),
+            min_appearances_90d=int(env("CI_MIN_APPEARANCES_90D", "5") or "5"),
             coedge_min_shared_battles=int(env("CI_EDGE_MIN_BATTLES", "3") or "3"),
             coedge_min_shared_killmails=int(env("CI_EDGE_MIN_KMS", "5") or "5"),
             coedge_min_shared_days=int(env("CI_EDGE_MIN_DAYS", "2") or "2"),
