@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domains\KillmailsBattleTheaters\Services;
 
+use App\Domains\Killmails\Services\ZkillTheaterValueService;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheater;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant;
 use App\Domains\UsersCharacters\Models\CoalitionBloc;
@@ -28,6 +29,7 @@ final class BattleTheaterViewData
     public function __construct(
         private readonly BattleTheaterSideResolver $sideResolver,
         private readonly BattleRoleInferenceLoader $roleInferenceLoader = new BattleRoleInferenceLoader(),
+        private readonly ZkillTheaterValueService $zkillValues = new ZkillTheaterValueService(),
     ) {}
 
     /**
@@ -189,11 +191,16 @@ final class BattleTheaterViewData
             + $sideTotals[BattleTheaterSideResolver::SIDE_C]['deaths']
         );
 
+        // zKill total for the same window — shown alongside our valuation
+        // in the battle overview. Fetched on-demand, cached 24h.
+        $zkillTotalIskLost = $this->zkillValues->totalForTheater($theater);
+
         return [
             'theater' => $theater,
             'sides' => $sides,
             'reconciled_total_isk_lost' => $reconciledTotalIskLost,
             'reconciled_total_kills' => $reconciledTotalKills,
+            'zkill_total_isk_lost' => $zkillTotalIskLost,
             'blocs' => $blocs,
             'names' => $names,
             'participants' => $participants,

@@ -344,7 +344,14 @@
     <div class="bt-metric-grid">
         <div>
             <div class="bt-metric-label">ISK destroyed</div>
-            <div class="bt-metric-value loss">{{ $formatIsk((float) ($reconciled_total_isk_lost ?? $theater->total_isk_lost)) }}</div>
+            <div class="bt-metric-value loss">
+                {{ $formatIsk((float) ($reconciled_total_isk_lost ?? $theater->total_isk_lost)) }}
+                @if (! empty($zkill_total_isk_lost) && (float) $zkill_total_isk_lost > 0)
+                    <span style="font-size:0.7em; color:#9ca3af; font-weight:500;" title="zKillboard's price source; differs from ours when faction / deadspace / capital modules aren't in our feed">
+                        ({{ $formatIsk((float) $zkill_total_isk_lost) }} zKill)
+                    </span>
+                @endif
+            </div>
         </div>
         <div>
             <div class="bt-metric-label">Ships lost</div>
