@@ -433,31 +433,37 @@
                         </div>
                         {{-- Structural rank --}}
                         <div>
-                            <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; color:#a5b4fc; margin-bottom:0.5rem;">Structural rank</div>
+                            <div style="font-size:0.68rem; text-transform:uppercase; letter-spacing:0.08em; color:#a5b4fc; margin-bottom:0.5rem;">Your place in the graph</div>
                             @if ($sr === null)
                                 <p style="font-size:0.75rem; color:#7a7a82; font-style:italic;">Not enough history yet for graph scoring.</p>
                             @else
-                                <div style="display:flex; flex-direction:column; gap:0.6rem; font-size:0.78rem;">
-                                    <div>
+                                <div style="display:flex; flex-direction:column; gap:0.75rem; font-size:0.78rem;">
+                                    <div title="Measures how connected you are to other active pilots. High = you fly with lots of pilots who ALSO fly with lots of pilots (the fleet regulars). Low = you fly with only a few people. Same math Google uses to rank web pages.">
                                         <div style="display:flex; justify-content:space-between;">
-                                            <span style="color:#9ca3af;">PageRank</span>
+                                            <span style="color:#9ca3af;">Fleet connectedness</span>
                                             <span style="color:#a5b4fc;">top {{ max(1, (int) ceil(100 - $sr['pagerank_pct'])) }}%</span>
                                         </div>
                                         <div style="background:rgba(99,102,241,0.08); height:4px; border-radius:2px; margin-top:3px; overflow:hidden;">
                                             <div style="width:{{ $sr['pagerank_pct'] }}%; height:100%; background:rgba(165,180,252,0.6);"></div>
                                         </div>
+                                        <div style="font-size:0.62rem; color:#7a7a82; margin-top:2px;">
+                                            how often you fly with pilots who themselves fly with many others
+                                        </div>
                                     </div>
-                                    <div>
+                                    <div title="Measures how often you sit between otherwise-separate fleet groups. High = you're a connector — pilots from different crews both end up on killmails with you. Low = you stick to one crew.">
                                         <div style="display:flex; justify-content:space-between;">
-                                            <span style="color:#9ca3af;">Bridge score</span>
+                                            <span style="color:#9ca3af;">Cross-crew bridge</span>
                                             <span style="color:#a5b4fc;">top {{ max(1, (int) ceil(100 - $sr['betweenness_pct'])) }}%</span>
                                         </div>
                                         <div style="background:rgba(99,102,241,0.08); height:4px; border-radius:2px; margin-top:3px; overflow:hidden;">
                                             <div style="width:{{ $sr['betweenness_pct'] }}%; height:100%; background:rgba(165,180,252,0.6);"></div>
                                         </div>
+                                        <div style="font-size:0.62rem; color:#7a7a82; margin-top:2px;">
+                                            how often you connect otherwise-separate fleet groups
+                                        </div>
                                     </div>
                                     <div style="font-size:0.6rem; color:#7a7a82; font-style:italic;">
-                                        ranked against {{ number_format($sr['cohort_size']) }} sufficient-history pilots
+                                        compared to {{ number_format($sr['cohort_size']) }} pilots with enough flight history
                                     </div>
                                 </div>
                             @endif
