@@ -24,10 +24,10 @@
                     <h2 class="text-xl font-semibold">{{ $type['name'] }}</h2>
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-top:0.75rem;">
                         @php
-                            $hSell = is_array($own_hub['sell'] ?? null) ? $own_hub['sell'] : null;
-                            $hBuy  = is_array($own_hub['buy'] ?? null)  ? $own_hub['buy']  : null;
-                            $jSell = is_array($jita['sell'] ?? null)    ? $jita['sell']    : null;
-                            $jBuy  = is_array($jita['buy'] ?? null)     ? $jita['buy']     : null;
+                            $hSell = (is_array($own_hub) && is_array($own_hub['sell'] ?? null)) ? $own_hub['sell'] : null;
+                            $hBuy  = (is_array($own_hub) && is_array($own_hub['buy']  ?? null)) ? $own_hub['buy']  : null;
+                            $jSell = (is_array($jita) && is_array($jita['sell'] ?? null)) ? $jita['sell'] : null;
+                            $jBuy  = (is_array($jita) && is_array($jita['buy']  ?? null)) ? $jita['buy']  : null;
                         @endphp
                         @if (! empty($own_hub))
                             <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
