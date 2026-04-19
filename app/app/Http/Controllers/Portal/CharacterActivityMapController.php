@@ -127,7 +127,7 @@ class CharacterActivityMapController extends Controller
                     ->whereNotNull('position2d_x')
                     ->select('id', 'name', 'position2d_x', 'position2d_y', 'security_status', 'region_id')
                     ->get()
-                    ->each(function ($sys) use (&$neighborMap, $activeMap): void {
+                    ->each(function ($sys) use (&$neighborMap, $activeMap, $depth): void {
                         $sid = (int) $sys->id;
                         if (isset($activeMap[$sid])) return;
                         $neighborMap[$sid] = [
@@ -139,6 +139,7 @@ class CharacterActivityMapController extends Controller
                             'region_id' => (int) $sys->region_id,
                             'n' => 0,
                             'active' => false,
+                            'hop' => (int) ($depth[$sid] ?? 0),
                         ];
                     });
             }

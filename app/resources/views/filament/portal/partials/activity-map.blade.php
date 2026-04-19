@@ -89,8 +89,25 @@
                         @php [$cx, $cy] = $toPx($sys['x'], $sys['y']); $col = $secColor($sys['sec'] ?? null); @endphp
                         <circle cx="{{ round($cx, 1) }}" cy="{{ round($cy, 1) }}" r="1.8"
                                 fill="{{ $col }}" fill-opacity="0.3" stroke="none">
-                            <title>{{ $sys['name'] }} · neighbor · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}</title>
+                            <title>{{ $sys['name'] }} · {{ $sys['hop'] ?? '?' }}-jump neighbor · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}</title>
                         </circle>
+                    @endforeach
+
+                    {{-- Waypoint labels at hop 2 + hop 4 so the operator
+                         can read the corridor into the active area. --}}
+                    @foreach ($amNeighbors as $sys)
+                        @php
+                            $hop = (int) ($sys['hop'] ?? 0);
+                            if ($hop !== 2 && $hop !== 4) continue;
+                            [$cx, $cy] = $toPx($sys['x'], $sys['y']);
+                            $labelColor = $hop === 2 ? '#94a3b8' : '#64748b';
+                            $labelFont = $hop === 2 ? 8 : 7;
+                        @endphp
+                        <text x="{{ round($cx + 5, 1) }}" y="{{ round($cy + 2.5, 1) }}"
+                              font-size="{{ $labelFont }}" fill="{{ $labelColor }}" style="font-family: ui-monospace, monospace;"
+                              stroke="#05070b" stroke-width="2" paint-order="stroke">
+                            {{ $sys['name'] }}
+                        </text>
                     @endforeach
 
                     @foreach ($amActive as $sys)
