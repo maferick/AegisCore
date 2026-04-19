@@ -92,6 +92,9 @@ class AppServiceProvider extends ServiceProvider
                     allegiance: $app->make(
                         \App\Domains\KillmailsBattleTheaters\Services\AllegianceGraphService::class,
                     ),
+                    blocIntel: $app->make(
+                        \App\Domains\BlocIntel\Services\BlocRelationshipService::class,
+                    ),
                 );
             }
         );

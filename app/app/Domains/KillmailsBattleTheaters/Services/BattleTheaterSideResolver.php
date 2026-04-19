@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domains\KillmailsBattleTheaters\Services;
 
+use App\Domains\BlocIntel\Services\BlocRelationshipService;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheater;
 use App\Domains\KillmailsBattleTheaters\Models\BattleTheaterParticipant;
 use App\Domains\KillmailsBattleTheaters\Services\AllegianceGraphService;
@@ -51,6 +52,7 @@ final class BattleTheaterSideResolver
 
     public function __construct(
         private readonly ?AllegianceGraphService $allegiance = null,
+        private readonly ?BlocRelationshipService $blocIntel = null,
     ) {}
 
     /**
@@ -481,6 +483,23 @@ final class BattleTheaterSideResolver
             }
         }
 
+        // Bloc-intel rolling-window tiebreaker (MariaDB pair behavior).
+        // Cheap, 90d decay-weighted. Catches alliances that didn't
+        // cross fire in THIS theater but have a stable inferred
+        // relationship with anchor A or B. Runs before Neo4j because
+        // MariaDB answers faster when the signal exists.
+        if ($this->blocIntel !== null) {
+            foreach ($onFieldAlliances as $aid) {
+                if (isset($allianceSide[$aid])) {
+                    continue;
+                }
+                $side = $this->classifyByBlocIntel($aid, $sideAId, $sideBId);
+                if ($side !== null) {
+                    $allianceSide[$aid] = $side;
+                }
+            }
+        }
+
         // Historical-allegiance tiebreaker. For every alliance still
         // unclassified AND on-field, ask the graph: "how often has X
         // been allied with / opposed to anchor A vs anchor B across
@@ -651,6 +670,23 @@ final class BattleTheaterSideResolver
             }
         }
 
+        // Step 3.5: bloc-intel 90d pair behavior (MariaDB
+        // alliance_pair_behavior_rolling). Between kill-graph
+        // (fresh in-battle evidence) and Neo4j allegiance (long-term,
+        // slower). Fills alliances that didn't cross fire in this
+        // theater but have clear inferred affinity vs either anchor.
+        if ($this->blocIntel !== null && $anchorA !== null && $anchorB !== null && $anchorA !== $anchorB) {
+            foreach ($allianceIds as $aid) {
+                if (isset($allianceSide[$aid])) {
+                    continue;
+                }
+                $side = $this->classifyByBlocIntel($aid, $anchorA, $anchorB);
+                if ($side !== null) {
+                    $allianceSide[$aid] = $side;
+                }
+            }
+        }
+
         // Step 4: Neo4j historical allegiance as final tiebreaker.
         if ($this->allegiance !== null
             && $anchorA !== null && $anchorB !== null
@@ -692,6 +728,56 @@ final class BattleTheaterSideResolver
             sideBBlocId: $opposingBlocId,
             allianceToBloc: $allianceToBloc,
         );
+    }
+
+    /**
+     * Classify one alliance against the (anchorA, anchorB) pair via
+     * alliance_pair_behavior_rolling. Returns SIDE_A / SIDE_B, or null
+     * when the signal is too thin.
+     *
+     * Evidence model: for each anchor we score "supports A" and
+     * "supports B" by summing confidence when the inferred label
+     * points the right way. A confident "aligned to A" adds to A;
+     * a confident "hostile to B" also adds to A, etc. Decision needs
+     * one side to clear 0.4 AND be at least 2× the other.
+     */
+    private function classifyByBlocIntel(int $aid, int $anchorA, int $anchorB): ?string
+    {
+        if ($this->blocIntel === null || $aid === 0) {
+            return null;
+        }
+        $vsA = $this->blocIntel->relate($aid, $anchorA);
+        $vsB = $this->blocIntel->relate($aid, $anchorB);
+        if ($vsA === null && $vsB === null) {
+            return null;
+        }
+        $allyA = $this->blocIntelAlly($vsA);
+        $allyB = $this->blocIntelAlly($vsB);
+        $foeA = $this->blocIntelFoe($vsA);
+        $foeB = $this->blocIntelFoe($vsB);
+        $supportsA = $allyA + $foeB;
+        $supportsB = $allyB + $foeA;
+        if ($supportsA >= 0.4 && $supportsA > 2 * $supportsB) {
+            return self::SIDE_A;
+        }
+        if ($supportsB >= 0.4 && $supportsB > 2 * $supportsA) {
+            return self::SIDE_B;
+        }
+        return null;
+    }
+
+    /** @param array{affinity: float, hostility: float, confidence: float, n_obs: int, label: string}|null $m */
+    private function blocIntelAlly(?array $m): float
+    {
+        if ($m === null || $m['confidence'] < 0.4 || $m['n_obs'] < 10) return 0.0;
+        return in_array($m['label'], ['aligned', 'loosely coordinated'], true) ? (float) $m['confidence'] : 0.0;
+    }
+
+    /** @param array{affinity: float, hostility: float, confidence: float, n_obs: int, label: string}|null $m */
+    private function blocIntelFoe(?array $m): float
+    {
+        if ($m === null || $m['confidence'] < 0.4 || $m['n_obs'] < 10) return 0.0;
+        return $m['label'] === 'hostile' ? (float) $m['confidence'] : 0.0;
     }
 
     /**
