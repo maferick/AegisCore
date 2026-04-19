@@ -1327,6 +1327,32 @@ services:
     networks:
       - aegiscore
 
+  bloc_intel:
+    build:
+      context: ../python
+      dockerfile: bloc_intel.Dockerfile
+    image: aegiscore/bloc-intel:0.1.0
+    container_name: bloc_intel
+    profiles: [tools]
+    user: "1000:1000"
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_DATABASE: "${MARIADB_DATABASE:-aegiscore}"
+      DB_USERNAME: "${MARIADB_USER:-aegiscore}"
+      DB_PASSWORD: "${MARIADB_PASSWORD}"
+      BI_WINDOW_DAYS: "${BI_WINDOW_DAYS:-90}"
+      BI_DECAY_HALF_LIFE_DAYS: "${BI_DECAY_HALF_LIFE_DAYS:-30}"
+      BI_MIN_PILOTS_PER_OBS: "${BI_MIN_PILOTS_PER_OBS:-5}"
+      BI_MIN_PAIR_OBS: "${BI_MIN_PAIR_OBS:-5}"
+      BI_MIN_CONDITIONAL_OBS: "${BI_MIN_CONDITIONAL_OBS:-5}"
+    command: ["extract"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - aegiscore
+
 volumes:
   # Named volume for MariaDB data. Named volumes survive container
   # recreation (docker compose up -d --build) — unlike bind mounts,

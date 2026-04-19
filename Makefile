@@ -442,6 +442,11 @@ ci-anomalies:
 ci-graph-features:
 	$(COMPOSE) --profile tools run --rm --build counter_intel graph-features --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Bloc Intelligence — alliance-pair behavior extractor (viewer-agnostic).
+# Args: BI_ARGS="--window-end=2026-04-18"
+bloc-intel-extract:
+	$(COMPOSE) --profile tools run --rm --build bloc_intel extract $(BI_ARGS)
+
 # Quick read-only check that market data is landing in BOTH planes.
 # Hits MariaDB for raw row counts + date ranges of market_history /
 # market_orders, then InfluxDB for point counts + latest timestamps
