@@ -108,7 +108,7 @@ class CharacterActivityMapController extends Controller
             $depth = [];
             foreach ($activeIds as $aid) $depth[$aid] = 0;
             $queue = $activeIds;
-            $maxHops = 4;
+            $maxHops = 5;
             while ($queue !== []) {
                 $u = array_shift($queue);
                 $d = $depth[$u];

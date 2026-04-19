@@ -16,7 +16,7 @@
         // strip scrolls horizontally if the total is wider than the
         // container. Each panel stays ~380px wide so 3-4 fit on a
         // laptop viewport without shrinking individually.
-        $colWidth = count($regions) === 1 ? 'minmax(520px, 1fr)' : 'repeat(' . count($regions) . ', minmax(380px, 1fr))';
+        $colWidth = count($regions) === 1 ? 'minmax(780px, 1fr)' : 'repeat(' . count($regions) . ', minmax(570px, 1fr))';
     @endphp
     <div style="display:grid; grid-template-columns: {{ $colWidth }}; gap:0.6rem; overflow-x:auto;">
         @foreach ($regions as $region)
@@ -93,15 +93,15 @@
                         </circle>
                     @endforeach
 
-                    {{-- Waypoint labels at hop 2 + hop 4 so the operator
-                         can read the corridor into the active area. --}}
+                    {{-- Waypoint labels at hop 2, 4, 5 so the corridor
+                         into the active region is readable. --}}
                     @foreach ($amNeighbors as $sys)
                         @php
                             $hop = (int) ($sys['hop'] ?? 0);
-                            if ($hop !== 2 && $hop !== 4) continue;
+                            if ($hop !== 2 && $hop !== 4 && $hop !== 5) continue;
                             [$cx, $cy] = $toPx($sys['x'], $sys['y']);
-                            $labelColor = $hop === 2 ? '#94a3b8' : '#64748b';
-                            $labelFont = $hop === 2 ? 8 : 7;
+                            $labelColor = match ($hop) { 2 => '#94a3b8', 4 => '#64748b', 5 => '#475569' };
+                            $labelFont = match ($hop) { 2 => 8, 4 => 7, 5 => 6 };
                         @endphp
                         <text x="{{ round($cx + 5, 1) }}" y="{{ round($cy + 2.5, 1) }}"
                               font-size="{{ $labelFont }}" fill="{{ $labelColor }}" style="font-family: ui-monospace, monospace;"
