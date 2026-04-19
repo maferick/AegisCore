@@ -52,27 +52,42 @@ def compute(conn: pymysql.connections.Connection, cfg: Config,
         "min_pilots_per_observation": cfg.min_pilots_per_observation,
     })
 
-    pair_stats = _extract_pair_stats(conn, cfg, ws, we)
-    log.info("pair aggregation complete", {"pairs_pre_threshold": len(pair_stats)})
+    pair_stats, cond_stats = _extract_pair_stats(conn, cfg, ws, we)
+    log.info("pair aggregation complete", {
+        "pairs_pre_threshold": len(pair_stats),
+        "conditional_triples_pre_threshold": len(cond_stats),
+    })
 
     kept = _finalize_pair_rows(pair_stats, cfg, window_end)
     log.info("pair rows ready", {"kept": len(kept)})
 
+    kept_triples = _finalize_conditional_rows(cond_stats, pair_stats, cfg, window_end)
+    log.info("conditional triples ready", {"kept": len(kept_triples)})
+
     _persist_pair_rows(conn, kept, window_end, cfg.window_days)
-    log.info("persisted", {"pairs": len(kept)})
-    return {"pairs_written": len(kept)}
+    _persist_conditional_rows(conn, kept_triples, window_end, cfg.window_days)
+    log.info("persisted", {"pairs": len(kept), "triples": len(kept_triples)})
+    return {"pairs_written": len(kept), "conditional_triples_written": len(kept_triples)}
 
 
 # ----- extraction ------------------------------------------------------
 
 
-def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> dict:
+def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[dict, dict]:
     """Single streamed pass. Returns
-    pair_stats[(a,b)] = {counters + first_t/last_t}."""
+    (pair_stats[(a,b)], conditional_stats[(a,b,t)]).
+
+    Conditional stats are kept for every (pair, trigger) where all three
+    are eligible attackers on the same killmail. Pruned by absolute
+    observation volume at finalize time — we can't early-drop because
+    a triple with few early observations might still be useful after
+    the full window is processed.
+    """
     half_life_seconds = cfg.decay_half_life_days * 86400.0
     anchor_ts = we.timestamp()
 
     pair_stats: dict[tuple[int, int], dict] = {}
+    cond_stats: dict[tuple[int, int, int], dict] = {}
 
     cur = conn.cursor(pymysql.cursors.SSCursor)
     try:
@@ -120,25 +135,47 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> dict:
                 eligible.sort(key=lambda aid: -attacker_allies[aid])
                 eligible = eligible[:30]
 
-            # SAME-side pairs.
-            for idx_a in range(len(eligible)):
-                for idx_b in range(idx_a + 1, len(eligible)):
+            # SAME-side pairs. Track per-pair state + per-(pair, trigger)
+            # conditional state where trigger is any *other* eligible
+            # attacker on this km.
+            n_elig = len(eligible)
+            for idx_a in range(n_elig):
+                for idx_b in range(idx_a + 1, n_elig):
                     a, b = sorted((eligible[idx_a], eligible[idx_b]))
                     _accumulate(pair_stats, (a, b), killed_at, True, w)
+                    # Conditional: every other eligible is a "trigger".
+                    for idx_t in range(n_elig):
+                        if idx_t == idx_a or idx_t == idx_b:
+                            continue
+                        t = eligible[idx_t]
+                        _accumulate_conditional(cond_stats, (a, b, t),
+                                                same_side=True, weight=w)
 
             # OPPOSED pairs: each eligible attacker vs victim alliance.
+            # Conditional trigger for opposed: any *other* eligible
+            # attacker on this km.
             if victim_alliance_id and victim_alliance_id not in eligible:
-                for a_raw in eligible:
+                for idx_a in range(n_elig):
+                    a_raw = eligible[idx_a]
                     a, b = sorted((a_raw, victim_alliance_id))
                     _accumulate(pair_stats, (a, b), killed_at, False, w)
+                    for idx_t in range(n_elig):
+                        if idx_t == idx_a:
+                            continue
+                        t = eligible[idx_t]
+                        _accumulate_conditional(cond_stats, (a, b, t),
+                                                same_side=False, weight=w)
 
         processed += len(slice_ids)
         if processed % 200000 == 0 or processed == len(km_rows):
             log.info("processed killmails", {
-                "done": processed, "total": len(km_rows), "pairs": len(pair_stats)
+                "done": processed,
+                "total": len(km_rows),
+                "pairs": len(pair_stats),
+                "triples": len(cond_stats),
             })
 
-    return pair_stats
+    return pair_stats, cond_stats
 
 
 def _fetch_attacker_alliances(conn, km_ids: list[int]) -> dict[int, dict[int, int]]:
@@ -224,6 +261,73 @@ def _finalize_pair_rows(pair_stats: dict, cfg: Config, window_end: date) -> list
     return rows
 
 
+def _accumulate_conditional(cond_stats: dict, key: tuple[int, int, int],
+                            same_side: bool, weight: float) -> None:
+    st = cond_stats.get(key)
+    if st is None:
+        st = {
+            "with_both_n": 0.0,
+            "with_same_side": 0.0,
+        }
+        cond_stats[key] = st
+    st["with_both_n"] += weight
+    if same_side:
+        st["with_same_side"] += weight
+
+
+def _finalize_conditional_rows(cond_stats: dict, pair_stats: dict,
+                               cfg: Config, window_end: date) -> list[dict]:
+    """Derive conditional_delta per (pair, trigger) using the identity:
+      without_n    = pair.weighted_n_obs     - cond.with_both_n
+      without_same = pair.weighted_same_side - cond.with_same_side
+
+    Prune triples with thin observations on either side + triples whose
+    pair doesn't meet the absolute-observation floor."""
+    rows: list[dict] = []
+    for (a, b, t), st in cond_stats.items():
+        pair = pair_stats.get((a, b))
+        if pair is None:
+            continue
+        if pair["n_obs"] < cfg.min_pair_n_obs:
+            continue
+
+        with_n = float(st["with_both_n"])
+        with_same = float(st["with_same_side"])
+        without_n = float(pair["weighted_n_obs"]) - with_n
+        without_same = float(pair["weighted_same_side"]) - with_same
+        # Numerical guard.
+        if without_n < 0:
+            without_n = 0.0
+        if without_same < 0:
+            without_same = 0.0
+
+        if with_n < cfg.min_conditional_trigger_obs or without_n < cfg.min_conditional_trigger_obs:
+            continue
+
+        rate_with = with_same / with_n if with_n > 0 else None
+        rate_without = without_same / without_n if without_n > 0 else None
+        if rate_with is None or rate_without is None:
+            continue
+        delta = round(rate_with - rate_without, 4)
+        if abs(delta) < 0.1:
+            continue  # below noise floor for current sample sizes
+
+        conf = _confidence(min(with_n, without_n))
+        rows.append({
+            "alliance_a_id": a,
+            "alliance_b_id": b,
+            "trigger_alliance_id": t,
+            "window_end_date": window_end,
+            "n_obs_with_trigger": round(with_n, 4),
+            "n_obs_without_trigger": round(without_n, 4),
+            "same_side_rate_with": round(rate_with, 4),
+            "same_side_rate_without": round(rate_without, 4),
+            "conditional_delta": delta,
+            "confidence": conf,
+        })
+    return rows
+
+
 def _confidence(n_obs: float) -> float:
     if n_obs <= 0:
         return 0.0
@@ -231,6 +335,43 @@ def _confidence(n_obs: float) -> float:
 
 
 # ----- persist ---------------------------------------------------------
+
+
+def _persist_conditional_rows(conn, rows: list[dict], window_end: date, window_days: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM alliance_pair_conditional_triggers_rolling WHERE window_end_date=%s AND window_days=%s",
+            (window_end, window_days),
+        )
+    if not rows:
+        conn.commit()
+        return
+    batch = 1000
+    with conn.cursor() as cur:
+        for i in range(0, len(rows), batch):
+            chunk = rows[i:i + batch]
+            cur.executemany(
+                """
+                INSERT INTO alliance_pair_conditional_triggers_rolling
+                  (alliance_a_id, alliance_b_id, trigger_alliance_id,
+                   window_end_date, window_days,
+                   n_obs_with_trigger, n_obs_without_trigger,
+                   same_side_rate_with, same_side_rate_without,
+                   conditional_delta, confidence, computed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                """,
+                [
+                    (
+                        r["alliance_a_id"], r["alliance_b_id"], r["trigger_alliance_id"],
+                        window_end, window_days,
+                        r["n_obs_with_trigger"], r["n_obs_without_trigger"],
+                        r["same_side_rate_with"], r["same_side_rate_without"],
+                        r["conditional_delta"], r["confidence"],
+                    )
+                    for r in chunk
+                ],
+            )
+    conn.commit()
 
 
 def _persist_pair_rows(conn, rows: list[dict], window_end: date, window_days: int) -> None:
