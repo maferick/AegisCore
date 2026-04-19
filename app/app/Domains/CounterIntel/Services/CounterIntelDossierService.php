@@ -133,7 +133,6 @@ final class CounterIntelDossierService
                 'a.hostile_cooccurrence_count',
                 'a.review_priority_score',
                 'a.review_priority_band',
-                'f.current_corp_id' /* may be null */
             )
             ->get()
             ->map(fn ($r) => (array) $r)
