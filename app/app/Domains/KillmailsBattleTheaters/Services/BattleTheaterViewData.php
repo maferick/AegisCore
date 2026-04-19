@@ -172,7 +172,17 @@ final class BattleTheaterViewData
         $mostValuableKills = $this->buildMostValuableKills($killFeed, $sides);
         $damageByCharacter = $this->buildDamageRollup($killmailIds);
         $losses = $this->buildLossRollup($killmailIds);
-        $topDamage = $this->buildTopDamage($participants, $sides, $names, $shipsByCharacter, $damageByCharacter, $losses, $shipNames);
+        // Role map for top-damage row ordering (FC → Cap → support → DPS).
+        $roleByChar = $this->roleInferenceLoader->charRoleMap(
+            $theater->id,
+            $participants->pluck('alliance_id')->filter()->unique()->values()->all(),
+        );
+        $groupIdByTypeId = $shipTypes->map(fn ($r) => (int) $r->group_id)->all();
+        $topDamage = $this->buildTopDamage(
+            $participants, $sides, $names, $shipsByCharacter,
+            $damageByCharacter, $losses, $shipNames,
+            $roleByChar, $groupIdByTypeId,
+        );
         $rosterBySide = $this->buildRosterBySide($allianceRows, $sides);
         $flagshipLogos = $this->buildFlagshipLogos($allianceRows);
         $headerStats = $this->buildHeaderStats($participants);
@@ -1155,6 +1165,10 @@ final class BattleTheaterViewData
      * @param  array<int, array<int, int>>  $shipsByCharacter
      * @return array<string, list<array<string, mixed>>>
      */
+    /**
+     * @param  array<int, string>  $roleByChar
+     * @param  array<int, int>  $groupIdByTypeId
+     */
     private function buildTopDamage(
         Collection $participants,
         BattleTheaterSideResolution $sides,
@@ -1163,7 +1177,13 @@ final class BattleTheaterViewData
         array $damageByCharacter,
         array $losses,
         Collection $shipNames,
+        array $roleByChar = [],
+        array $groupIdByTypeId = [],
     ): array {
+        // Capital-class hull group IDs — dreadnought, carrier, super,
+        // titan, FAX, Rorqual. Used to bump capital pilots above DPS
+        // in the top-damage ordering.
+        $capitalGroups = [485, 547, 659, 30, 1538, 883];
         $bySide = [
             BattleTheaterSideResolver::SIDE_A => [],
             BattleTheaterSideResolver::SIDE_B => [],
@@ -1208,6 +1228,24 @@ final class BattleTheaterViewData
             }
             usort($shipsFlown, fn ($a, $b) => $b['damage'] <=> $a['damage'] ?: $b['count'] <=> $a['count']);
 
+            // Priority tier: FC/Command → Capital → Support (logi,
+            // tackle, bomber) → DPS → other. Within a tier, sort by
+            // damage descending. Keeps the column readable: leadership
+            // first, cap pilots second, then the wrecking-ball DPS.
+            $role = $roleByChar[$cid] ?? null;
+            $primaryGid = $primaryTid !== null ? ($groupIdByTypeId[$primaryTid] ?? 0) : 0;
+            if ($role === 'fc' || $role === 'command') {
+                $tier = 0;
+            } elseif (in_array($primaryGid, $capitalGroups, true)) {
+                $tier = 1;
+            } elseif (in_array($role, ['logi', 'tackle', 'bomber'], true)) {
+                $tier = 2;
+            } elseif ($role === 'mainline_dps') {
+                $tier = 3;
+            } else {
+                $tier = 4;
+            }
+
             $bySide[$side][] = [
                 'character_id' => $cid,
                 'character_name' => $names[$cid] ?? 'Character #'.$cid,
@@ -1223,10 +1261,12 @@ final class BattleTheaterViewData
                 'ship_type_id' => $primaryTid,
                 'ship_name' => $primaryTid ? ($shipNames[$primaryTid] ?? '#'.$primaryTid) : null,
                 'ships_flown' => $shipsFlown,
+                'role_tier' => $tier,
             ];
         }
         foreach ($bySide as $k => $rows) {
-            usort($rows, fn ($a, $b) => $b['damage_done'] <=> $a['damage_done']);
+            usort($rows, fn ($a, $b) => $a['role_tier'] <=> $b['role_tier']
+                ?: $b['damage_done'] <=> $a['damage_done']);
             $bySide[$k] = array_slice($rows, 0, 5);
         }
         return $bySide;

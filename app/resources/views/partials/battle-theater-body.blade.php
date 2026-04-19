@@ -646,7 +646,7 @@
                                         <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }} · {{ number_format($s['damage']) }} dmg">
                                             <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
                                                  referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                            {{ $s['name'] }}@if ($s['count'] > 1)<span style="color:#7a7a82;font-size:0.7em;"> ×{{ $s['count'] }}</span>@endif@if ($s['damage'] > 0)<span style="color:#9ca0a8;font-size:0.7em;"> ({{ number_format($s['damage']) }})</span>@endif
+                                            {{ $s['name'] }}@if ($s['count'] > 1)<span style="color:#7a7a82;font-size:0.7em;"> ×{{ $s['count'] }} kills</span>@endif@if ($s['damage'] > 0)<span style="color:#9ca0a8;font-size:0.7em;"> ({{ number_format($s['damage']) }})</span>@endif
                                         </span>
                                     @endforeach
                                 </div>
@@ -912,10 +912,10 @@
                             @if ($allShips !== [])
                                 <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
                                     @foreach ($allShips as $s)
-                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }}">
+                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }} kills">
                                             <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
                                                  referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                            {{ $s['name'] }}@if ($s['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $s['count'] }}</span>@endif
+                                            {{ $s['name'] }}@if ($s['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $s['count'] }} kills</span>@endif
                                         </span>
                                     @endforeach
                                 </div>
