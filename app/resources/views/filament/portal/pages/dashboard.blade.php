@@ -472,6 +472,85 @@
                 </div>
             @endif
 
+            {{-- Activity map (last 30d) — SVG dot-map using
+                 ref_solar_systems.position2d_* projection. Dot size
+                 scales with kill count, colour with sec status. --}}
+            @php $am = $c['activity_map'] ?? []; @endphp
+            @if (! empty($am))
+                @php
+                    $mapXs = array_column($am, 'x');
+                    $mapYs = array_column($am, 'y');
+                    $mapNs = array_column($am, 'n');
+                    $minX = min($mapXs); $maxX = max($mapXs);
+                    $minY = min($mapYs); $maxY = max($mapYs);
+                    $spanX = max(1.0, $maxX - $minX);
+                    $spanY = max(1.0, $maxY - $minY);
+                    $maxN = max($mapNs);
+                    $mapWidth = 640; $mapHeight = 260; $padding = 16;
+                    $toPx = function (float $x, float $y) use ($minX, $maxX, $minY, $maxY, $spanX, $spanY, $mapWidth, $mapHeight, $padding): array {
+                        $px = $padding + (($x - $minX) / $spanX) * ($mapWidth - 2 * $padding);
+                        // Flip y so north is up (EVE y-axis points "up" in galaxy coords).
+                        $py = $padding + ((($maxY - $y)) / $spanY) * ($mapHeight - 2 * $padding);
+                        return [$px, $py];
+                    };
+                    $secColor = function (?float $s): string {
+                        if ($s === null) return '#888';
+                        if ($s >= 0.5) return '#4ade80';
+                        if ($s >= 0.0) return '#fbbf24';
+                        return '#ef4444';
+                    };
+                @endphp
+                <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.06);">
+                    <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin-bottom:0.4rem;">
+                        Where you've been · last 30 days
+                        <span style="font-size:0.6rem; color:#7a7a82; text-transform:none; letter-spacing:0.03em; font-weight:400; font-style:italic;">
+                            — {{ count($am) }} systems · dot size = kill count · colour = sec status
+                        </span>
+                    </h3>
+                    <div style="background:#0b0e14; border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.25rem;">
+                        <svg viewBox="0 0 {{ $mapWidth }} {{ $mapHeight }}"
+                             xmlns="http://www.w3.org/2000/svg"
+                             style="width:100%; height:auto; display:block;">
+                            {{-- subtle axis ring so the map doesn't float in pure black --}}
+                            <rect x="0" y="0" width="{{ $mapWidth }}" height="{{ $mapHeight }}" fill="url(#bgGrad)" />
+                            <defs>
+                                <radialGradient id="bgGrad" cx="50%" cy="50%" r="70%">
+                                    <stop offset="0%" stop-color="#10151f" />
+                                    <stop offset="100%" stop-color="#05070b" />
+                                </radialGradient>
+                            </defs>
+                            @foreach ($am as $sys)
+                                @php
+                                    [$cx, $cy] = $toPx($sys['x'], $sys['y']);
+                                    $r = max(2, min(14, 2 + sqrt($sys['n']) * 1.6));
+                                    $opacity = 0.35 + ($sys['n'] / max(1, $maxN)) * 0.55;
+                                    $col = $secColor($sys['sec'] ?? null);
+                                @endphp
+                                <circle cx="{{ round($cx, 1) }}" cy="{{ round($cy, 1) }}"
+                                        r="{{ round($r, 1) }}"
+                                        fill="{{ $col }}" fill-opacity="{{ round($opacity, 2) }}"
+                                        stroke="{{ $col }}" stroke-opacity="0.35" stroke-width="0.6">
+                                    <title>{{ $sys['name'] }} · {{ number_format($sys['n']) }} kills · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}</title>
+                                </circle>
+                            @endforeach
+                            {{-- Label the top 5 systems --}}
+                            @foreach (array_slice($am, 0, 5) as $sys)
+                                @php [$cx, $cy] = $toPx($sys['x'], $sys['y']); @endphp
+                                <text x="{{ round($cx + 8, 1) }}" y="{{ round($cy + 3, 1) }}"
+                                      font-size="9" fill="#cbd5e1" style="font-family: ui-monospace, monospace;">
+                                    {{ $sys['name'] }}
+                                </text>
+                            @endforeach
+                        </svg>
+                    </div>
+                    <div style="font-size:0.62rem; color:#7a7a82; margin-top:4px; display:flex; gap:0.9rem; flex-wrap:wrap;">
+                        <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#4ade80; vertical-align:middle;"></span> hi-sec</span>
+                        <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#fbbf24; vertical-align:middle;"></span> lo-sec</span>
+                        <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444; vertical-align:middle;"></span> null-/w-sec</span>
+                    </div>
+                </div>
+            @endif
+
             {{-- Top hulls --}}
             @if (! empty($c['top_hulls']))
                 <div style="margin-top:1.25rem;">

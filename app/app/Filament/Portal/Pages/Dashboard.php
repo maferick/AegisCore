@@ -285,6 +285,32 @@ class Dashboard extends BaseDashboard
             ->distinct()
             ->count('theater_id');
 
+        // Activity map (last 30d): every system the pilot appeared on,
+        // with xy coords from ref_solar_systems.position2d_*. Rendered
+        // as an SVG dot-map in the blade.
+        $activityMap = DB::select(<<<'SQL'
+            SELECT s.id, s.name, s.position2d_x AS x, s.position2d_y AS y,
+                   s.security_status AS sec, s.region_id,
+                   SUM(u.n) AS n
+              FROM (
+                SELECT k.solar_system_id AS sid, COUNT(*) AS n
+                  FROM killmail_attackers ka
+                  JOIN killmails k ON k.killmail_id=ka.killmail_id
+                 WHERE ka.character_id=? AND k.killed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                 GROUP BY k.solar_system_id
+                UNION ALL
+                SELECT k.solar_system_id AS sid, COUNT(*) AS n
+                  FROM killmails k
+                 WHERE k.victim_character_id=? AND k.killed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                 GROUP BY k.solar_system_id
+              ) u
+              JOIN ref_solar_systems s ON s.id = u.sid
+             WHERE s.position2d_x IS NOT NULL AND s.position2d_y IS NOT NULL
+             GROUP BY s.id, s.name, s.position2d_x, s.position2d_y, s.security_status, s.region_id
+             ORDER BY n DESC
+             LIMIT 200
+        SQL, [$cid, $cid]);
+
         // Top 3 systems — kills-on + losses-in weighted equally.
         $topSystems = DB::select(<<<'SQL'
             SELECT sys.system_id, s.name, SUM(sys.n) AS n FROM (
@@ -414,6 +440,15 @@ class Dashboard extends BaseDashboard
             'flight_crew' => $flightCrew,
             'arch_enemies' => $archEnemies,
             'structural_rank' => $structRank,
+            'activity_map' => array_map(fn ($r) => [
+                'id' => (int) $r->id,
+                'name' => (string) $r->name,
+                'x' => (float) $r->x,
+                'y' => (float) $r->y,
+                'sec' => $r->sec !== null ? (float) $r->sec : null,
+                'region_id' => (int) $r->region_id,
+                'n' => (int) $r->n,
+            ], $activityMap),
         ];
     }
 }
