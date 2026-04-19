@@ -129,4 +129,11 @@ Route::middleware('auth')->group(function () {
     Route::delete('/portal/battles/{record}/overrides', [BattleTheaterOverrideController::class, 'destroy'])
         ->whereNumber('record')
         ->name('portal.battles.overrides.destroy');
+
+    // Lazy-loaded activity map for a viewer's own character. Dashboard
+    // skips the heavy BFS+titan compute on synchronous render;
+    // browser fetches this partial after page load.
+    Route::get('/portal/characters/{cid}/activity-map', [\App\Http\Controllers\Portal\CharacterActivityMapController::class, 'show'])
+        ->whereNumber('cid')
+        ->name('portal.characters.activity-map');
 });
