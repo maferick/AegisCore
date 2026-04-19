@@ -12,6 +12,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Columns\ViewColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -152,6 +153,58 @@ class Battles extends Page implements HasTable
                     ])
                     ->toggleable(),
             ])
+            ->filters([
+                SelectFilter::make('min_kills')
+                    ->label('Min kills')
+                    ->options([
+                        '10' => '10+',
+                        '25' => '25+',
+                        '50' => '50+',
+                        '100' => '100+',
+                        '250' => '250+',
+                        '500' => '500+',
+                        '1000' => '1,000+',
+                    ])
+                    ->query(fn (Builder $q, array $data): Builder => isset($data['value']) && $data['value'] !== null && $data['value'] !== ''
+                        ? $q->where('battle_theaters.total_kills', '>=', (int) $data['value'])
+                        : $q),
+                SelectFilter::make('min_pilots')
+                    ->label('Min pilots')
+                    ->options([
+                        '25' => '25+',
+                        '50' => '50+',
+                        '100' => '100+',
+                        '250' => '250+',
+                        '500' => '500+',
+                        '1000' => '1,000+',
+                        '2000' => '2,000+',
+                    ])
+                    ->query(fn (Builder $q, array $data): Builder => isset($data['value']) && $data['value'] !== null && $data['value'] !== ''
+                        ? $q->where('battle_theaters.participant_count', '>=', (int) $data['value'])
+                        : $q),
+                SelectFilter::make('min_isk')
+                    ->label('Min ISK destroyed')
+                    ->options([
+                        '1000000000' => '1 B+',
+                        '5000000000' => '5 B+',
+                        '25000000000' => '25 B+',
+                        '100000000000' => '100 B+',
+                        '500000000000' => '500 B+',
+                        '1000000000000' => '1 T+',
+                    ])
+                    ->query(fn (Builder $q, array $data): Builder => isset($data['value']) && $data['value'] !== null && $data['value'] !== ''
+                        ? $q->where('battle_theaters.total_isk_lost', '>=', (float) $data['value'])
+                        : $q),
+                SelectFilter::make('viewer_involved')
+                    ->label('Involvement')
+                    ->options([
+                        '1' => 'Only battles my bloc fielded 5+ pilots',
+                    ])
+                    ->query(fn (Builder $q, array $data): Builder => ($data['value'] ?? null) === '1'
+                        ? $q->where('viewer_involved', 1)
+                        : $q),
+            ])
+            ->filtersFormColumns(4)
             ->recordUrl(fn (BattleTheater $record): string => BattleTheaterDetail::getUrl(['record' => $record->id]));
     }
 
