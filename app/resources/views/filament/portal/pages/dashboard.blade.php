@@ -73,8 +73,8 @@
                     </div>
                 </div>
                 @if (! empty($h['biggest_kill']))
-                    <a href="/portal/killmails/{{ $h['biggest_kill']['killmail_id'] }}" style="text-decoration:none; color:inherit;">
-                        <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:0.6rem 0.8rem; display:flex; gap:0.6rem; align-items:center;">
+                    <a href="/portal/killmails/{{ $h['biggest_kill']['killmail_id'] }}" style="text-decoration:none; color:inherit; display:block; height:100%;">
+                        <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:0.6rem 0.8rem; display:flex; gap:0.6rem; align-items:center; height:100%; box-sizing:border-box;">
                             <img src="https://images.evetech.net/types/{{ $h['biggest_kill']['ship_id'] }}/icon?size=32"
                                  referrerpolicy="no-referrer" style="width:32px; height:32px; border-radius:4px; flex-shrink:0;" alt="">
                             <div style="flex:1; min-width:0;">
@@ -90,8 +90,8 @@
                     </a>
                 @endif
                 @if (! empty($h['biggest_loss']))
-                    <a href="/portal/killmails/{{ $h['biggest_loss']['killmail_id'] }}" style="text-decoration:none; color:inherit;">
-                        <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem; display:flex; gap:0.6rem; align-items:center;">
+                    <a href="/portal/killmails/{{ $h['biggest_loss']['killmail_id'] }}" style="text-decoration:none; color:inherit; display:block; height:100%;">
+                        <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:0.6rem 0.8rem; display:flex; gap:0.6rem; align-items:center; height:100%; box-sizing:border-box;">
                             <img src="https://images.evetech.net/types/{{ $h['biggest_loss']['ship_id'] }}/icon?size=32"
                                  referrerpolicy="no-referrer" style="width:32px; height:32px; border-radius:4px; flex-shrink:0;" alt="">
                             <div style="flex:1; min-width:0;">

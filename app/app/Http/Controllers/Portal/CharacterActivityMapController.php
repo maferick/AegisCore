@@ -83,11 +83,10 @@ class CharacterActivityMapController extends Controller
             return ['active' => [], 'neighbors' => [], 'gates' => [], 'titan' => []];
         }
 
-        // 4-jump BFS halo around active systems so each per-region
-        // panel shows the surrounding constellation + a few jumps out
-        // for real map context. Cache the full stargate adjacency
-        // (~13k edges, static SDE data) so the BFS is an in-memory
-        // walk instead of N SQL round-trips.
+        // Every region with at least one active system now renders
+        // COMPLETELY — all member systems, plus the full stargate
+        // network inside the region. Gives a proper dotlan-style
+        // region map per panel instead of a BFS halo around actives.
         $activeIds = array_keys($activeMap);
         $neighborMap = [];
         $gatePairs = [];
@@ -104,47 +103,28 @@ class CharacterActivityMapController extends Controller
                 return $a;
             });
 
-            $neighborIds = [];
-            $depth = [];
-            foreach ($activeIds as $aid) $depth[$aid] = 0;
-            $queue = $activeIds;
-            $maxHops = 6;
-            while ($queue !== []) {
-                $u = array_shift($queue);
-                $d = $depth[$u];
-                if ($d >= $maxHops) continue;
-                foreach ($adj[$u] ?? [] as $v => $_) {
-                    if (isset($depth[$v])) continue;
-                    $depth[$v] = $d + 1;
-                    $neighborIds[$v] = true;
-                    $queue[] = $v;
-                }
+            $regionIds = array_values(array_unique(array_column($activeMap, 'region_id')));
+            $coords = DB::table('ref_solar_systems')
+                ->whereIn('region_id', $regionIds)
+                ->whereNotNull('position2d_x')
+                ->select('id', 'name', 'position2d_x', 'position2d_y', 'security_status', 'region_id')
+                ->get();
+            foreach ($coords as $sys) {
+                $sid = (int) $sys->id;
+                if (isset($activeMap[$sid])) continue;
+                $neighborMap[$sid] = [
+                    'id' => $sid,
+                    'name' => (string) $sys->name,
+                    'x' => (float) $sys->position2d_x,
+                    'y' => (float) $sys->position2d_y,
+                    'sec' => $sys->security_status !== null ? (float) $sys->security_status : null,
+                    'region_id' => (int) $sys->region_id,
+                    'n' => 0,
+                    'active' => false,
+                    // hop unused in full-region mode; keep for compat.
+                    'hop' => 0,
+                ];
             }
-            $neighborIds = array_keys($neighborIds);
-            if ($neighborIds !== []) {
-                DB::table('ref_solar_systems')
-                    ->whereIn('id', $neighborIds)
-                    ->whereNotNull('position2d_x')
-                    ->select('id', 'name', 'position2d_x', 'position2d_y', 'security_status', 'region_id')
-                    ->get()
-                    ->each(function ($sys) use (&$neighborMap, $activeMap, $depth): void {
-                        $sid = (int) $sys->id;
-                        if (isset($activeMap[$sid])) return;
-                        $neighborMap[$sid] = [
-                            'id' => $sid,
-                            'name' => (string) $sys->name,
-                            'x' => (float) $sys->position2d_x,
-                            'y' => (float) $sys->position2d_y,
-                            'sec' => $sys->security_status !== null ? (float) $sys->security_status : null,
-                            'region_id' => (int) $sys->region_id,
-                            'n' => 0,
-                            'active' => false,
-                            'hop' => (int) ($depth[$sid] ?? 0),
-                        ];
-                    });
-            }
-            // Gate pairs — all stargates where both endpoints are in
-            // the shown set. Uses cached adjacency so no extra SQL.
             $shownFlip = array_flip(array_merge($activeIds, array_keys($neighborMap)));
             foreach ($shownFlip as $a => $_) {
                 foreach ($adj[$a] ?? [] as $b => $__) {
