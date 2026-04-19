@@ -131,6 +131,12 @@ final class CounterIntelDossierService
                 'a.cohort_size',
                 'a.hostile_alliance_count_history',
                 'a.hostile_cooccurrence_count',
+                'a.ring_id',
+                'a.ring_size',
+                'a.bridge_internal_pct',
+                'a.seed_neighbors_count',
+                'a.seed_neighbors_max_score',
+                'a.is_seed',
                 'a.review_priority_score',
                 'a.review_priority_band',
             )
@@ -285,6 +291,30 @@ final class CounterIntelDossierService
 
         if ((int) ($anomaly->recent_hostile_join ?? 0) === 1) {
             $lines[] = 'Recent change: joined a hostile-tagged alliance within the last 30 days.';
+        }
+
+        // Step-2 graph-feature sentences. Only render when the
+        // graph_features pass has populated them (non-null).
+        $seedN = (int) ($anomaly->seed_neighbors_count ?? 0);
+        if ($seedN > 0) {
+            $lines[] = (int) ($anomaly->is_seed ?? 0) === 1
+                ? "Seed flag: already in the raw-signal seed set for this bloc (hostile-history or high hostile-overlap). "
+                    ."Structurally similar to {$seedN} other seed-set pilots."
+                : "Structurally similar to {$seedN} pilots already in this bloc's seed set (" .
+                    'CI_SIMILAR_TO → seed overlap).';
+        }
+
+        $internalPct = $anomaly->bridge_internal_pct ?? null;
+        if ($internalPct !== null && (float) $internalPct >= 0.95) {
+            $lines[] = 'Internal bridge: connects otherwise-separate fleet groups inside the bloc (top 5% internal betweenness).';
+        }
+
+        $ringSize = (int) ($anomaly->ring_size ?? 0);
+        if ($ringSize >= 5 && $ringSize <= 50) {
+            $lines[] = "Recurring ring: co-flight community of {$ringSize} pilots (Leiden weighted on internal CI_CO_OCCURS_WITH). "
+                .'Tight-group signal — worth checking the other members.';
+        } elseif ($ringSize > 50 && $ringSize <= 1000) {
+            $lines[] = "Ring size: {$ringSize} (mid-size fleet grouping, informational).";
         }
 
         $lines[] = "Cohort confidence: {$anomaly->cohort_confidence} ({$anomaly->cohort_size} peers, "

@@ -84,6 +84,13 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
     if not scored:
         return {"written": 0, "internal": len(internal_cids)}
 
+    # Step-2 graph features (community + seed-anchored similarity) —
+    # keyed per viewer bloc. Computed by counter_intel.graph_features.
+    # Missing rows = ran without step 2; scoring falls back to the
+    # pre-Step-2 path.
+    graph_feats = _load_graph_features(conn, viewer_bloc_id, window_end, cfg.window_days)
+    log.info("graph features loaded", {"n": len(graph_feats)})
+
     # Pre-compute global pagerank/betweenness/battles distributions for
     # fallback percentiles when cohort too sparse. (Not directly used
     # yet but we'll want it for v1.1 confidence tuning.)
@@ -102,6 +109,7 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
                 clean_cids=clean_cids,
                 hostile_counts=hostile_counts,
                 hostile_aids=hostile_aids,
+                graph_feat=graph_feats.get(int(c["character_id"])),
                 viewer_bloc_id=viewer_bloc_id,
                 window_end=window_end,
                 window_days=cfg.window_days,
@@ -229,6 +237,30 @@ def _clean_pilot_set(conn, hostile_aids: set[int]) -> set[int]:
     return tenure_ok - hostile_history
 
 
+def _load_graph_features(conn, viewer_bloc_id: int, window_end: date,
+                         window_days: int) -> dict[int, dict]:
+    """Load Step-2 graph features for the viewer bloc. Missing table =
+    graph_features never ran yet (we return {}, scoring path skips the
+    boosts)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT character_id, ring_id, ring_size,
+                       bridge_internal_score, bridge_internal_pct,
+                       similarity_to_flagged_max, similarity_to_flagged_count,
+                       is_seed
+                  FROM ci_character_graph_features_rolling
+                 WHERE viewer_bloc_id=%s AND window_end_date=%s AND window_days=%s
+                """,
+                (viewer_bloc_id, window_end, window_days),
+            )
+            return {int(r["character_id"]): dict(r) for r in cur.fetchall()}
+    except pymysql.err.ProgrammingError:
+        # Table doesn't exist (migration not yet run in this env).
+        return {}
+
+
 def _hostile_count_per_character(conn, hostile_aids: set[int]) -> dict[int, int]:
     """For every character, count of distinct hostile-tagged alliances
     in their history. 0 = clean."""
@@ -289,9 +321,11 @@ def _load_cohort(sess, cid: int) -> list[dict]:
 
 def _score_one(conn, sess, character: dict, peers: list[dict], clean_cids: set[int],
                hostile_counts: dict[int, int], hostile_aids: set[int],
+               graph_feat: dict | None,
                viewer_bloc_id: int, window_end: date, window_days: int) -> dict:
     """Produce one ci_character_anomalies_rolling row."""
     cid = int(character["character_id"])
+    gf = graph_feat or {}
     row: dict = {
         "character_id": cid,
         "viewer_bloc_id": viewer_bloc_id,
@@ -305,6 +339,12 @@ def _score_one(conn, sess, character: dict, peers: list[dict], clean_cids: set[i
         "affiliation_churn_pct": None,
         "hostile_overlap_pct": None,
         "bridge_anomaly_pct": None,
+        "ring_id": gf.get("ring_id"),
+        "ring_size": int(gf.get("ring_size") or 0),
+        "bridge_internal_pct": float(gf["bridge_internal_pct"]) if gf.get("bridge_internal_pct") is not None else None,
+        "seed_neighbors_count": int(gf.get("similarity_to_flagged_count") or 0),
+        "seed_neighbors_max_score": float(gf["similarity_to_flagged_max"]) if gf.get("similarity_to_flagged_max") is not None else None,
+        "is_seed": int(gf.get("is_seed") or 0),
         "hostile_alliance_count_history": int(hostile_counts.get(cid, 0)),
         "hostile_cooccurrence_count": 0,
         "recent_hostile_join": 0,
@@ -379,15 +419,36 @@ def _score_one(conn, sess, character: dict, peers: list[dict], clean_cids: set[i
     if (row["affiliation_churn_pct"] or 0) >= 0.95:
         signals += 1
 
-    # Continuous score = weighted sum of percentiles.
+    # Graph-feature soft signals (Step 2):
+    #   - seed_boost: scales with how many of the character's 100
+    #     similarity peers are in the seed set. Soft-capped at 20 (=1.0).
+    #   - internal_bridge_boost: binary, fires when the character
+    #     sits at top-5% of internal-scoped betweenness.
+    seed_n = int(row["seed_neighbors_count"] or 0)
+    seed_boost = min(1.0, seed_n / 20.0)
+    internal_bridge = 1.0 if (row["bridge_internal_pct"] or 0) >= 0.95 else 0.0
+    # Small-ring signal: tight community (5..50 members) suggests a
+    # recurring ring; oversized rings are fleet blobs (low signal).
+    ring_size = int(row["ring_size"] or 0)
+    small_ring = 1.0 if (5 <= ring_size <= 50) else 0.0
+
+    # Weighted sum of percentiles. Pre-Step-2 signals keep 80% of the
+    # weight; graph features contribute the remaining 20%.
     score = (
-        0.35 * (row["affiliation_anomaly_pct"] or 0)
-        + 0.30 * (row["hostile_overlap_pct"] or 0)
-        + 0.15 * (row["bridge_anomaly_pct"] or 0)
-        + 0.10 * (row["affiliation_churn_pct"] or 0)
-        + 0.10 * (1.0 if row["recent_hostile_join"] else 0)
+        0.28 * (row["affiliation_anomaly_pct"] or 0)
+        + 0.24 * (row["hostile_overlap_pct"] or 0)
+        + 0.12 * (row["bridge_anomaly_pct"] or 0)
+        + 0.08 * (row["affiliation_churn_pct"] or 0)
+        + 0.08 * (1.0 if row["recent_hostile_join"] else 0)
+        + 0.10 * seed_boost
+        + 0.05 * internal_bridge
+        + 0.05 * small_ring
     )
     row["review_priority_score"] = round(score, 4)
+    if seed_n >= 10:
+        signals += 1
+    if internal_bridge and not row.get("is_seed"):
+        signals += 1
 
     if signals >= 3 or score >= 0.75:
         band = "critical"
@@ -525,11 +586,13 @@ def _persist(conn, rows: list[dict]) -> None:
                activity_decile,
                affiliation_anomaly_pct, affiliation_churn_pct,
                hostile_overlap_pct, bridge_anomaly_pct,
+               ring_id, ring_size, bridge_internal_pct,
+               seed_neighbors_count, seed_neighbors_max_score, is_seed,
                hostile_alliance_count_history, hostile_cooccurrence_count,
                recent_hostile_join, pagerank, betweenness,
                review_priority_score, review_priority_band,
                review_priority_score_30d_ago, computed_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
             ON DUPLICATE KEY UPDATE
                cohort_size = VALUES(cohort_size),
                cohort_clean_pct = VALUES(cohort_clean_pct),
@@ -539,6 +602,12 @@ def _persist(conn, rows: list[dict]) -> None:
                affiliation_churn_pct = VALUES(affiliation_churn_pct),
                hostile_overlap_pct = VALUES(hostile_overlap_pct),
                bridge_anomaly_pct = VALUES(bridge_anomaly_pct),
+               ring_id = VALUES(ring_id),
+               ring_size = VALUES(ring_size),
+               bridge_internal_pct = VALUES(bridge_internal_pct),
+               seed_neighbors_count = VALUES(seed_neighbors_count),
+               seed_neighbors_max_score = VALUES(seed_neighbors_max_score),
+               is_seed = VALUES(is_seed),
                hostile_alliance_count_history = VALUES(hostile_alliance_count_history),
                hostile_cooccurrence_count = VALUES(hostile_cooccurrence_count),
                recent_hostile_join = VALUES(recent_hostile_join),
@@ -555,6 +624,8 @@ def _persist(conn, rows: list[dict]) -> None:
                     r["activity_decile"],
                     r["affiliation_anomaly_pct"], r["affiliation_churn_pct"],
                     r["hostile_overlap_pct"], r["bridge_anomaly_pct"],
+                    r["ring_id"], r["ring_size"], r["bridge_internal_pct"],
+                    r["seed_neighbors_count"], r["seed_neighbors_max_score"], r["is_seed"],
                     r["hostile_alliance_count_history"], r["hostile_cooccurrence_count"],
                     r["recent_hostile_join"], r["pagerank"], r["betweenness"],
                     r["review_priority_score"], r["review_priority_band"],
