@@ -424,15 +424,19 @@
                             @else
                                 <div style="display:flex; flex-direction:column; gap:0.35rem;">
                                     @foreach ($fc as $p)
+                                        @php $rel = $p['current_relationship'] ?? 'unlabeled'; @endphp
                                         <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.78rem;">
                                             <img src="https://images.evetech.net/characters/{{ $p['character_id'] }}/portrait?size=32"
                                                  referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:50%;" alt="">
                                             <div style="flex:1; min-width:0;">
                                                 <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                     {{ $p['name'] ?? ('Pilot #'.$p['character_id']) }}
+                                                    @if ($rel === 'hostile_bloc')
+                                                        <span title="Flew with you historically; their current alliance is in a hostile bloc now" style="color:#fca5a5;font-size:0.6rem;padding:0 4px;border:1px solid rgba(239,68,68,0.4);border-radius:8px;margin-left:3px;">⚠ hostile now</span>
+                                                    @endif
                                                 </div>
                                                 @if ($p['alliance_name'])
-                                                    <div style="font-size:0.62rem; color:#7a7a82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
+                                                    <div style="font-size:0.62rem; color:{{ $rel === 'hostile_bloc' ? '#fca5a5' : '#7a7a82' }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
                                                 @endif
                                             </div>
                                             <span style="color:#86efac; font-size:0.7rem;" title="{{ $p['distinct_interactions'] }} distinct sessions · {{ number_format($p['total_weight'], 1) }} weighted">
@@ -451,15 +455,19 @@
                             @else
                                 <div style="display:flex; flex-direction:column; gap:0.35rem;">
                                     @foreach ($ae as $p)
+                                        @php $rel = $p['current_relationship'] ?? 'unlabeled'; @endphp
                                         <div style="display:flex; gap:0.4rem; align-items:center; font-size:0.78rem;">
                                             <img src="https://images.evetech.net/characters/{{ $p['character_id'] }}/portrait?size=32"
                                                  referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:50%;" alt="">
                                             <div style="flex:1; min-width:0;">
                                                 <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                     {{ $p['name'] ?? ('Pilot #'.$p['character_id']) }}
+                                                    @if ($rel === 'same_bloc')
+                                                        <span title="Fought historically; their current alliance is now in YOUR bloc" style="color:#86efac;font-size:0.6rem;padding:0 4px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;margin-left:3px;">✓ now ally</span>
+                                                    @endif
                                                 </div>
                                                 @if ($p['alliance_name'])
-                                                    <div style="font-size:0.62rem; color:#7a7a82; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
+                                                    <div style="font-size:0.62rem; color:{{ $rel === 'same_bloc' ? '#86efac' : '#7a7a82' }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
                                                 @endif
                                             </div>
                                             <span style="color:#fca5a5; font-size:0.7rem;" title="{{ $p['distinct_interactions'] }} distinct sessions · {{ number_format($p['total_weight'], 1) }} weighted">

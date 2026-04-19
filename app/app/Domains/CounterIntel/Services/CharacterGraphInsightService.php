@@ -31,11 +31,11 @@ final class CharacterGraphInsightService
     public function __construct(private readonly ?ClientInterface $client = null) {}
 
     /**
-     * @return list<array{character_id: int, name: ?string, alliance_id: ?int, total_weight: float, distinct_interactions: int, last_seen_at: ?string}>
+     * @return list<array{character_id: int, name: ?string, alliance_id: ?int, total_weight: float, distinct_interactions: int, last_seen_at: ?string, current_relationship: string}>
      */
     public function flightCrew(int $cid, int $limit = 8): array
     {
-        return $this->safeCache("ci.insight.fc.{$cid}.{$limit}", function () use ($cid, $limit): array {
+        return $this->safeCache("ci.insight.fc.{$cid}.v2.{$limit}", function () use ($cid, $limit): array {
             $c = $this->client();
             if ($c === null) return [];
             $res = $c->run(
@@ -46,8 +46,64 @@ final class CharacterGraphInsightService
                  LIMIT $lim',
                 ['cid' => $cid, 'lim' => $limit],
             );
-            return $this->hydrate($res);
+            $rows = $this->hydrate($res);
+            return $this->tagRelationship($cid, $rows);
         });
+    }
+
+    /**
+     * For each peer row, compare their current alliance's bloc with
+     * the viewer's current alliance bloc. Annotates rows with a
+     * `current_relationship` key: 'same_bloc' | 'hostile_bloc' |
+     * 'unlabeled'. Lets the UI flag "flew with X · now hostile" so
+     * stale-ally data from CI_CO_OCCURS_WITH doesn't read as a
+     * live-ally claim after a bloc flip.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function tagRelationship(int $viewerCid, array $rows): array
+    {
+        if ($rows === []) return $rows;
+        $viewerAlliance = \Illuminate\Support\Facades\DB::table('characters')
+            ->where('character_id', $viewerCid)
+            ->value('alliance_id');
+        $viewerBlocId = null;
+        if ($viewerAlliance) {
+            $viewerBlocId = \Illuminate\Support\Facades\DB::table('coalition_entity_labels')
+                ->where('entity_type', 'alliance')
+                ->where('entity_id', $viewerAlliance)
+                ->where('is_active', 1)
+                ->value('bloc_id');
+            $viewerBlocId = $viewerBlocId !== null ? (int) $viewerBlocId : null;
+        }
+
+        $peerAllianceIds = array_values(array_unique(array_filter(array_column($rows, 'alliance_id'))));
+        $blocByAid = [];
+        if ($peerAllianceIds !== []) {
+            \Illuminate\Support\Facades\DB::table('coalition_entity_labels')
+                ->where('entity_type', 'alliance')
+                ->whereIn('entity_id', $peerAllianceIds)
+                ->where('is_active', 1)
+                ->select('entity_id', 'bloc_id')
+                ->get()
+                ->each(function ($r) use (&$blocByAid): void {
+                    $blocByAid[(int) $r->entity_id] = (int) $r->bloc_id;
+                });
+        }
+        foreach ($rows as &$row) {
+            $aid = (int) ($row['alliance_id'] ?? 0);
+            $peerBloc = $aid > 0 ? ($blocByAid[$aid] ?? null) : null;
+            if ($viewerBlocId === null || $peerBloc === null) {
+                $row['current_relationship'] = 'unlabeled';
+            } elseif ($peerBloc === $viewerBlocId) {
+                $row['current_relationship'] = 'same_bloc';
+            } else {
+                $row['current_relationship'] = 'hostile_bloc';
+            }
+        }
+        unset($row);
+        return $rows;
     }
 
     /**
@@ -73,7 +129,7 @@ final class CharacterGraphInsightService
                     ['cid' => $cid, 'lim' => $limit],
                 );
                 $graphRows = $this->hydrate($res);
-                if ($graphRows !== []) return $graphRows;
+                if ($graphRows !== []) return $this->tagRelationship($cid, $graphRows);
             }
 
             // MariaDB fallback: top individual VICTIMS across killmails
@@ -107,7 +163,7 @@ final class CharacterGraphInsightService
                     'last_seen_at' => $r->last ? (string) $r->last : null,
                 ];
             }
-            return $out;
+            return $this->tagRelationship($cid, $out);
         });
     }
 
