@@ -1180,9 +1180,12 @@ final class BattleTheaterViewData
         array $roleByChar = [],
         array $groupIdByTypeId = [],
     ): array {
+        // Tier-0 flagship hull groups — Command Ships (540) + Flag
+        // Cruisers (1972, Monitor). These are "command & control"
+        // platforms; user-requested above capitals in the sort.
+        $flagGroups = [540, 1972];
         // Capital-class hull group IDs — dreadnought, carrier, super,
-        // titan, FAX, Rorqual. Used to bump capital pilots above DPS
-        // in the top-damage ordering.
+        // titan, FAX, Rorqual. Tier 1, above DPS.
         $capitalGroups = [485, 547, 659, 30, 1538, 883];
         $bySide = [
             BattleTheaterSideResolver::SIDE_A => [],
@@ -1228,13 +1231,18 @@ final class BattleTheaterViewData
             }
             usort($shipsFlown, fn ($a, $b) => $b['damage'] <=> $a['damage'] ?: $b['count'] <=> $a['count']);
 
-            // Priority tier: FC/Command → Capital → Support (logi,
-            // tackle, bomber) → DPS → other. Within a tier, sort by
-            // damage descending. Keeps the column readable: leadership
-            // first, cap pilots second, then the wrecking-ball DPS.
+            // Priority tier:
+            //   0 — Flagship: FC role, command role, Command Ship hull,
+            //       Flag Cruiser hull (Monitor). Leadership + force
+            //       multipliers go on top of the card.
+            //   1 — Capital hulls (dread/carrier/super/titan/FAX/rorq).
+            //   2 — Support (logi, tackle, bomber roles).
+            //   3 — Mainline DPS.
+            //   4 — Other / uninferred.
+            // Within a tier: damage descending.
             $role = $roleByChar[$cid] ?? null;
             $primaryGid = $primaryTid !== null ? ($groupIdByTypeId[$primaryTid] ?? 0) : 0;
-            if ($role === 'fc' || $role === 'command') {
+            if ($role === 'fc' || $role === 'command' || in_array($primaryGid, $flagGroups, true)) {
                 $tier = 0;
             } elseif (in_array($primaryGid, $capitalGroups, true)) {
                 $tier = 1;
