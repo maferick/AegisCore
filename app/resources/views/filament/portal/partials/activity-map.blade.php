@@ -12,9 +12,13 @@
         {{ $activeCount }} active · {{ $neighborCount }} neighbor systems · {{ count($regions) }} region(s)
     </div>
     @php
-        $cols = count($regions) === 1 ? '1fr' : 'repeat(auto-fit, minmax(420px, 1fr))';
+        // Horizontal strip — regions sit next to each other and the
+        // strip scrolls horizontally if the total is wider than the
+        // container. Each panel stays ~380px wide so 3-4 fit on a
+        // laptop viewport without shrinking individually.
+        $colWidth = count($regions) === 1 ? 'minmax(520px, 1fr)' : 'repeat(' . count($regions) . ', minmax(380px, 1fr))';
     @endphp
-    <div style="display:grid; grid-template-columns: {{ $cols }}; gap:0.6rem;">
+    <div style="display:grid; grid-template-columns: {{ $colWidth }}; gap:0.6rem; overflow-x:auto;">
         @foreach ($regions as $region)
             @php
                 $amActive = $region['active'];

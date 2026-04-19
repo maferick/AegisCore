@@ -83,22 +83,42 @@ class CharacterActivityMapController extends Controller
             return ['active' => [], 'neighbors' => [], 'gates' => [], 'titan' => []];
         }
 
-        // Lightweight fast path: only pull stargates for the active
-        // systems themselves (bounded by at most ~200 * 6-ish gate
-        // rows). No full adjacency load, no BFS, no titan pairs yet —
-        // those live behind a "show more" toggle we can add later.
+        // 4-jump BFS halo around active systems so each per-region
+        // panel shows the surrounding constellation + a few jumps out
+        // for real map context. Cache the full stargate adjacency
+        // (~13k edges, static SDE data) so the BFS is an in-memory
+        // walk instead of N SQL round-trips.
         $activeIds = array_keys($activeMap);
         $neighborMap = [];
         $gatePairs = [];
         if ($activeIds !== []) {
-            $gateRows = DB::table('ref_stargates')
-                ->whereIn('solar_system_id', $activeIds)
-                ->whereNotNull('destination_system_id')
-                ->select('solar_system_id', 'destination_system_id')
-                ->get();
+            $adj = Cache::remember('map.stargate_adj.v1', 3600, function (): array {
+                $a = [];
+                DB::table('ref_stargates')
+                    ->whereNotNull('destination_system_id')
+                    ->select('solar_system_id', 'destination_system_id')
+                    ->get()
+                    ->each(function ($r) use (&$a): void {
+                        $a[(int) $r->solar_system_id][(int) $r->destination_system_id] = true;
+                    });
+                return $a;
+            });
+
             $neighborIds = [];
-            foreach ($gateRows as $r) {
-                $neighborIds[(int) $r->destination_system_id] = true;
+            $depth = [];
+            foreach ($activeIds as $aid) $depth[$aid] = 0;
+            $queue = $activeIds;
+            $maxHops = 4;
+            while ($queue !== []) {
+                $u = array_shift($queue);
+                $d = $depth[$u];
+                if ($d >= $maxHops) continue;
+                foreach ($adj[$u] ?? [] as $v => $_) {
+                    if (isset($depth[$v])) continue;
+                    $depth[$v] = $d + 1;
+                    $neighborIds[$v] = true;
+                    $queue[] = $v;
+                }
             }
             $neighborIds = array_keys($neighborIds);
             if ($neighborIds !== []) {
@@ -122,13 +142,15 @@ class CharacterActivityMapController extends Controller
                         ];
                     });
             }
+            // Gate pairs — all stargates where both endpoints are in
+            // the shown set. Uses cached adjacency so no extra SQL.
             $shownFlip = array_flip(array_merge($activeIds, array_keys($neighborMap)));
-            foreach ($gateRows as $r) {
-                $a = (int) $r->solar_system_id;
-                $b = (int) $r->destination_system_id;
-                if (! isset($shownFlip[$a]) || ! isset($shownFlip[$b])) continue;
-                $key = $a < $b ? "{$a}-{$b}" : "{$b}-{$a}";
-                $gatePairs[$key] = [$a < $b ? $a : $b, $a < $b ? $b : $a];
+            foreach ($shownFlip as $a => $_) {
+                foreach ($adj[$a] ?? [] as $b => $__) {
+                    if (! isset($shownFlip[$b])) continue;
+                    $key = $a < $b ? "{$a}-{$b}" : "{$b}-{$a}";
+                    $gatePairs[$key] = [$a < $b ? $a : $b, $a < $b ? $b : $a];
+                }
             }
             $gatePairs = array_values($gatePairs);
         }
