@@ -25,7 +25,16 @@
                 $amNeighbors = $region['neighbors'];
                 $amGates = $region['gates'];
                 $amAnsiblex = $region['ansiblex'] ?? [];
+                $amSov = $region['sov'] ?? [];
                 $amAll = array_merge($amActive, $amNeighbors);
+                $sovText = function (int $sid) use ($amSov): string {
+                    $o = $amSov[$sid] ?? null;
+                    if ($o === null) return '';
+                    $a = $o['alliance'] ?? null;
+                    $c = $o['corporation'] ?? null;
+                    if ($a && $c) return "{$a} · {$c}";
+                    return (string) ($a ?? $c ?? '');
+                };
                 $xs = array_column($amAll, 'x');
                 $ys = array_column($amAll, 'y');
                 $minX = min($xs); $maxX = max($xs);
@@ -105,10 +114,14 @@
                     @endforeach
 
                     @foreach ($amNeighbors as $sys)
-                        @php [$cx, $cy] = $toPx($sys['x'], $sys['y']); $col = $secColor($sys['sec'] ?? null); @endphp
+                        @php
+                            [$cx, $cy] = $toPx($sys['x'], $sys['y']);
+                            $col = $secColor($sys['sec'] ?? null);
+                            $sovLine = $sovText((int) $sys['id']);
+                        @endphp
                         <circle cx="{{ round($cx, 1) }}" cy="{{ round($cy, 1) }}" r="1.8"
                                 fill="{{ $col }}" fill-opacity="0.3" stroke="none">
-                            <title>{{ $sys['name'] }} · {{ $sys['hop'] ?? '?' }}-jump neighbor · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}</title>
+                            <title>{{ $sys['name'] }} · {{ $sys['hop'] ?? '?' }}-jump neighbor · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}{{ $sovLine ? ' · ' . $sovLine : '' }}</title>
                         </circle>
                     @endforeach
 
@@ -146,22 +159,33 @@
                             $r = max(3, min(16, 3 + sqrt($sys['n']) * 1.8));
                             $opacity = 0.45 + ($sys['n'] / max(1, $maxN)) * 0.5;
                             $col = $secColor($sys['sec'] ?? null);
+                            $sovLine = $sovText((int) $sys['id']);
                         @endphp
                         <circle cx="{{ round($cx, 1) }}" cy="{{ round($cy, 1) }}"
                                 r="{{ round($r, 1) }}"
                                 fill="{{ $col }}" fill-opacity="{{ round($opacity, 2) }}"
                                 stroke="{{ $col }}" stroke-opacity="0.5" stroke-width="0.8">
-                            <title>{{ $sys['name'] }} · {{ number_format($sys['n']) }} kills · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}</title>
+                            <title>{{ $sys['name'] }} · {{ number_format($sys['n']) }} kills · sec {{ $sys['sec'] !== null ? number_format($sys['sec'], 2) : '—' }}{{ $sovLine ? ' · ' . $sovLine : '' }}</title>
                         </circle>
                     @endforeach
 
                     @foreach (array_slice($amActive, 0, 6) as $sys)
-                        @php [$cx, $cy] = $toPx($sys['x'], $sys['y']); @endphp
+                        @php
+                            [$cx, $cy] = $toPx($sys['x'], $sys['y']);
+                            $sovLine = $sovText((int) $sys['id']);
+                        @endphp
                         <text x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 3, 1) }}"
                               font-size="11" fill="#e5e5e7" style="font-family: ui-monospace, monospace;"
                               stroke="#05070b" stroke-width="2.5" paint-order="stroke">
                             {{ $sys['name'] }}
                         </text>
+                        @if ($sovLine)
+                            <text x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 13, 1) }}"
+                                  font-size="7" fill="#94a3b8" style="font-family: ui-monospace, monospace;"
+                                  stroke="#05070b" stroke-width="2" paint-order="stroke">
+                                {{ \Illuminate\Support\Str::limit($sovLine, 38) }}
+                            </text>
+                        @endif
                     @endforeach
                 </svg>
             </div>

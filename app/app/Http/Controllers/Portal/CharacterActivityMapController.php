@@ -152,6 +152,32 @@ class CharacterActivityMapController extends Controller
             $gatePairs = array_values($gatePairs);
         }
 
+        // Sovereignty owner info per visible system. Joined to
+        // esi_entity_names for display.
+        $sovByCid = [];
+        if ($activeIds !== []) {
+            $shownSovIds = array_merge($activeIds, array_keys($neighborMap));
+            $rows = DB::table('system_sovereignty AS s')
+                ->leftJoin('esi_entity_names AS ea', function ($j): void {
+                    $j->on('ea.entity_id', '=', 's.alliance_id')->where('ea.category', 'alliance');
+                })
+                ->leftJoin('esi_entity_names AS ec', function ($j): void {
+                    $j->on('ec.entity_id', '=', 's.corporation_id')->where('ec.category', 'corporation');
+                })
+                ->whereIn('s.solar_system_id', $shownSovIds)
+                ->where(function ($q): void {
+                    $q->whereNotNull('s.alliance_id')->orWhereNotNull('s.corporation_id');
+                })
+                ->select('s.solar_system_id', 'ea.name AS alliance_name', 'ec.name AS corporation_name')
+                ->get();
+            foreach ($rows as $r) {
+                $sovByCid[(int) $r->solar_system_id] = [
+                    'alliance' => $r->alliance_name ? (string) $r->alliance_name : null,
+                    'corporation' => $r->corporation_name ? (string) $r->corporation_name : null,
+                ];
+            }
+        }
+
         // Ansiblex corridors — static player-owned jump bridges,
         // populated via map:import-ansiblex. One row per pair (lo<hi).
         // We pass the full set down; blade filters per-region.
@@ -201,6 +227,10 @@ class CharacterActivityMapController extends Controller
             ));
             $regionGates = array_values(array_filter($gatePairs, fn ($p) => isset($regionShownIds[$p[0]]) && isset($regionShownIds[$p[1]])));
             $regionAnsiblex = array_values(array_filter($ansiblexPairs, fn ($p) => isset($regionShownIds[$p[0]]) && isset($regionShownIds[$p[1]])));
+            $regionSov = [];
+            foreach ($regionShownIds as $sid => $_) {
+                if (isset($sovByCid[$sid])) $regionSov[$sid] = $sovByCid[$sid];
+            }
             $regions[] = [
                 'id' => (int) $rid,
                 'name' => (string) ($regionNames[$rid] ?? "Region #{$rid}"),
@@ -208,6 +238,7 @@ class CharacterActivityMapController extends Controller
                 'neighbors' => array_values($regionNeighbors),
                 'gates' => $regionGates,
                 'ansiblex' => $regionAnsiblex,
+                'sov' => $regionSov,
             ];
         }
         // Sort regions so the one with the most kills renders first.
