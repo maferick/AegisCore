@@ -349,9 +349,11 @@ class PipelineHealthService
                 return self::level('no market rows', 'down');
             }
             $days = now()->startOfDay()->diffInDays(Carbon::parse($row->latest)->startOfDay(), absolute: true);
-            // EVE Ref daily dump plus live poller → current day or
-            // day-before should always be present.
-            $level = $days <= 1 ? 'ok' : ($days <= 3 ? 'warn' : 'down');
+            // EVE Ref mirrors CCP's market-history endpoints once per
+            // day with an inherent 2-3 day lag (CCP only publishes
+            // finalized days). A 3-4 day gap here is normal; only
+            // treat as degraded when the importer itself has stalled.
+            $level = $days <= 3 ? 'ok' : ($days <= 6 ? 'warn' : 'down');
             return self::level(
                 'Jita latest='.$row->latest.' · '.(int) $days.'d old',
                 $level,
