@@ -87,6 +87,20 @@ final class MarketHubComparisonService
 
         // Research / blueprint-adjacent
         333,   // Datacores
+
+        // Mission loot / tags / containers / drugs / starter junk
+        101,   // Mining Drone
+        237,   // Corvette — starter ships
+        282,   // Radioactive — Toxic Waste etc
+        313,   // Drugs — Blue Pill, Exile, Sooth Sayer, Drop
+        370,   // Criminal Tags — pirate bounty tags
+        409,   // Empire Insignia Drops — faction navy tags
+        448,   // Audit Log Secure Container
+        5067,  // Fabricator Data
+
+        // Abyssal / reaction raw
+        1996,  // Abyssal Materials (incl. mutaplasmid residue)
+        4096,  // Molecular-Forged Materials
     ];
 
     /**
