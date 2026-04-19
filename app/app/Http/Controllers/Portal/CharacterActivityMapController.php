@@ -152,6 +152,26 @@ class CharacterActivityMapController extends Controller
             $gatePairs = array_values($gatePairs);
         }
 
+        // Ansiblex corridors — static player-owned jump bridges,
+        // populated via map:import-ansiblex. One row per pair (lo<hi).
+        // We pass the full set down; blade filters per-region.
+        $ansiblexPairs = [];
+        if ($activeIds !== []) {
+            $shownIds = array_merge($activeIds, array_keys($neighborMap));
+            $shownFlipAns = array_flip($shownIds);
+            DB::table('ansiblex_jump_bridges')
+                ->whereIn('from_system_id', $shownIds)
+                ->whereIn('to_system_id', $shownIds)
+                ->select('from_system_id', 'to_system_id', 'name')
+                ->get()
+                ->each(function ($r) use (&$ansiblexPairs, $shownFlipAns): void {
+                    $a = (int) $r->from_system_id;
+                    $b = (int) $r->to_system_id;
+                    if (! isset($shownFlipAns[$a]) || ! isset($shownFlipAns[$b])) return;
+                    $ansiblexPairs[] = [$a, $b, $r->name ? (string) $r->name : null];
+                });
+        }
+
         // Group by region so visually disconnected clusters render as
         // separate per-region sub-maps instead of one wide map with
         // empty space between.
@@ -180,12 +200,14 @@ class CharacterActivityMapController extends Controller
                 array_keys($regionNeighbors),
             ));
             $regionGates = array_values(array_filter($gatePairs, fn ($p) => isset($regionShownIds[$p[0]]) && isset($regionShownIds[$p[1]])));
+            $regionAnsiblex = array_values(array_filter($ansiblexPairs, fn ($p) => isset($regionShownIds[$p[0]]) && isset($regionShownIds[$p[1]])));
             $regions[] = [
                 'id' => (int) $rid,
                 'name' => (string) ($regionNames[$rid] ?? "Region #{$rid}"),
                 'active' => array_values($regionActive),
                 'neighbors' => array_values($regionNeighbors),
                 'gates' => $regionGates,
+                'ansiblex' => $regionAnsiblex,
             ];
         }
         // Sort regions so the one with the most kills renders first.

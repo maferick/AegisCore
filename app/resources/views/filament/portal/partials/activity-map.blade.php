@@ -24,6 +24,7 @@
                 $amActive = $region['active'];
                 $amNeighbors = $region['neighbors'];
                 $amGates = $region['gates'];
+                $amAnsiblex = $region['ansiblex'] ?? [];
                 $amAll = array_merge($amActive, $amNeighbors);
                 $xs = array_column($amAll, 'x');
                 $ys = array_column($amAll, 'y');
@@ -83,6 +84,24 @@
                         <line x1="{{ round($px1, 1) }}" y1="{{ round($py1, 1) }}"
                               x2="{{ round($px2, 1) }}" y2="{{ round($py2, 1) }}"
                               stroke="rgba(148,163,184,0.32)" stroke-width="0.7" />
+                    @endforeach
+
+                    {{-- Ansiblex bridges (player jump bridges), yellow
+                         dashed curves drawn above stargate lines. --}}
+                    @foreach ($amAnsiblex as $pair)
+                        @php
+                            [$a, $b, $label] = $pair;
+                            if (! isset($posById[$a]) || ! isset($posById[$b])) continue;
+                            [$ax, $ay] = $posById[$a];
+                            [$bx, $by] = $posById[$b];
+                            [$px1, $py1] = $toPx($ax, $ay);
+                            [$px2, $py2] = $toPx($bx, $by);
+                        @endphp
+                        <line x1="{{ round($px1, 1) }}" y1="{{ round($py1, 1) }}"
+                              x2="{{ round($px2, 1) }}" y2="{{ round($py2, 1) }}"
+                              stroke="rgba(250,204,21,0.55)" stroke-width="1.2" stroke-dasharray="4 3">
+                            <title>ansiblex{{ $label ? ' · ' . $label : '' }}</title>
+                        </line>
                     @endforeach
 
                     @foreach ($amNeighbors as $sys)
@@ -150,6 +169,6 @@
         <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#4ade80; vertical-align:middle;"></span> hi-sec</span>
         <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#fbbf24; vertical-align:middle;"></span> lo-sec</span>
         <span><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444; vertical-align:middle;"></span> null-/w-sec</span>
-        <span style="margin-left:auto;">dot size = kill count · tiny dots = 1-jump neighbors</span>
+        <span style="margin-left:auto;">solid = stargate · <span style="color:#fde047;">yellow dashed</span> = ansiblex · dot size = kill count · click region to zoom</span>
     </div>
 @endif
