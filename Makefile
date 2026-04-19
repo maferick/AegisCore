@@ -432,6 +432,11 @@ ci-projection:
 ci-similarity:
 	$(COMPOSE) --profile tools run --rm --build counter_intel similarity $(CI_ARGS)
 
+# Counter-Intel Dossier — Commit 4: anomaly compute (per viewer bloc).
+# Args: VIEWER_BLOC=1 CI_ARGS="--window-end=2026-04-18"
+ci-anomalies:
+	$(COMPOSE) --profile tools run --rm --build counter_intel anomalies --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Quick read-only check that market data is landing in BOTH planes.
 # Hits MariaDB for raw row counts + date ranges of market_history /
 # market_orders, then InfluxDB for point counts + latest timestamps
