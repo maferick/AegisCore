@@ -14,6 +14,7 @@ from counter_intel.config import Config
 from counter_intel.db import connection, neo_driver
 from counter_intel.features import extract_and_persist
 from counter_intel.projection import project
+from counter_intel.similarity import run as run_similarity
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -31,11 +32,17 @@ def main() -> int:
     p.add_argument("--window-end", type=str, default=None,
                    help="YYYY-MM-DD (default: today UTC)")
 
+    s = sub.add_parser("similarity", help="Run GDS knn + pageRank + betweenness on the projected graph.")
+    s.add_argument("--top-k", type=int, default=100)
+    s.add_argument("--similarity-cutoff", type=float, default=0.60)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
     if args.cmd == "projection":
         return _run_projection(args)
+    if args.cmd == "similarity":
+        return _run_similarity(args)
     parser.print_help()
     return 2
 
@@ -55,4 +62,12 @@ def _run_projection(args) -> int:
     with connection(cfg) as conn, neo_driver(cfg) as driver:
         stats = project(conn, driver, cfg, window_end=window_end)
     log.info("projection pass complete", stats)
+    return 0
+
+
+def _run_similarity(args) -> int:
+    cfg = Config.from_env()
+    with neo_driver(cfg) as driver:
+        stats = run_similarity(driver, cfg, top_k=args.top_k, sim_cutoff=args.similarity_cutoff)
+    log.info("similarity pass complete", stats)
     return 0

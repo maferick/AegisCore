@@ -428,6 +428,10 @@ ci-features:
 ci-projection:
 	$(COMPOSE) --profile tools run --rm --build counter_intel projection $(CI_ARGS)
 
+# Counter-Intel Dossier — Commit 3: GDS similarity + graph scores.
+ci-similarity:
+	$(COMPOSE) --profile tools run --rm --build counter_intel similarity $(CI_ARGS)
+
 # Quick read-only check that market data is landing in BOTH planes.
 # Hits MariaDB for raw row counts + date ranges of market_history /
 # market_orders, then InfluxDB for point counts + latest timestamps
