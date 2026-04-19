@@ -329,6 +329,12 @@ outbox-relay:
 killmail-backfill:
 	$(COMPOSE) --profile tools run --rm --build killmail_backfill $(KILLMAIL_BACKFILL_ARGS)
 
+# Targeted backfill of killmails.victim_faction_id from EVE Ref archives.
+# Skips full attacker/item re-ingest — only updates the one column.
+# Args: KILLMAIL_VF_ARGS="--days=90"
+killmail-backfill-victim-faction:
+	$(COMPOSE) --profile tools run --rm --build killmail_backfill backfill-victim-faction $(KILLMAIL_VF_ARGS)
+
 # One-shot battle-theater clustering pass. Walks the last
 # THEATER_WINDOW_HOURS of enriched killmails, rebuilds every unlocked
 # theater, and locks any that aged past THEATER_LOCK_AFTER_HOURS. Safe

@@ -46,6 +46,7 @@ def emit_killmail_ingested(
         "victim_character_id": km.victim_character_id,
         "victim_corporation_id": km.victim_corporation_id,
         "victim_alliance_id": km.victim_alliance_id,
+        "victim_faction_id": km.victim_faction_id,
         "victim_ship_type_id": km.victim_ship_type_id,
         "attacker_character_ids": attacker_character_ids,
         "total_value": "0.00",

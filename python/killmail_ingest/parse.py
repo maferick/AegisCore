@@ -43,6 +43,7 @@ class ParsedKillmail:
     victim_character_id: int | None
     victim_corporation_id: int | None
     victim_alliance_id: int | None
+    victim_faction_id: int | None
     victim_ship_type_id: int
     victim_damage_taken: int
     war_id: int | None
@@ -135,6 +136,7 @@ def parse_esi_killmail(raw: dict, killmail_hash: str = "") -> ParsedKillmail:
         victim_character_id=victim.get("character_id"),
         victim_corporation_id=victim.get("corporation_id"),
         victim_alliance_id=victim.get("alliance_id"),
+        victim_faction_id=victim.get("faction_id"),
         victim_ship_type_id=int(victim.get("ship_type_id", 0)),
         victim_damage_taken=int(victim.get("damage_taken", 0)),
         war_id=raw.get("war_id"),

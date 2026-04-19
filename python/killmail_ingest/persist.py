@@ -41,16 +41,18 @@ def ingest_killmail(
             INSERT INTO killmails
                 (killmail_id, killmail_hash, solar_system_id, constellation_id,
                  region_id, killed_at, victim_character_id, victim_corporation_id,
-                 victim_alliance_id, victim_ship_type_id, victim_damage_taken,
+                 victim_alliance_id, victim_faction_id, victim_ship_type_id,
+                 victim_damage_taken,
                  attacker_count, is_npc_kill, is_solo_kill, war_id,
                  ingested_at, created_at, updated_at)
-            VALUES (%s, %s, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 killmail_hash = VALUES(killmail_hash),
                 solar_system_id = VALUES(solar_system_id),
                 victim_character_id = VALUES(victim_character_id),
                 victim_corporation_id = VALUES(victim_corporation_id),
                 victim_alliance_id = VALUES(victim_alliance_id),
+                victim_faction_id = VALUES(victim_faction_id),
                 victim_ship_type_id = VALUES(victim_ship_type_id),
                 victim_damage_taken = VALUES(victim_damage_taken),
                 attacker_count = VALUES(attacker_count),
@@ -63,7 +65,8 @@ def ingest_killmail(
                 km.killmail_id, km.killmail_hash, km.solar_system_id,
                 killed_at,
                 km.victim_character_id, km.victim_corporation_id,
-                km.victim_alliance_id, km.victim_ship_type_id,
+                km.victim_alliance_id, km.victim_faction_id,
+                km.victim_ship_type_id,
                 km.victim_damage_taken, km.attacker_count,
                 int(km.is_npc_kill), int(km.is_solo_kill), km.war_id,
                 now, now, now,

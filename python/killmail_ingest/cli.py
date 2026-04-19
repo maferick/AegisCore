@@ -9,6 +9,7 @@ from datetime import date
 
 from killmail_ingest import log as logmod
 from killmail_ingest.backfill import run_backfill
+from killmail_ingest.backfill_victim_faction import run as run_victim_faction_backfill
 from killmail_ingest.config import Config
 from killmail_ingest.stream import run_stream
 
@@ -39,6 +40,14 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--dry-run", action="store_true", help="Fetch + parse, rollback all writes.")
     st.add_argument("--log-level", default="INFO")
 
+    # -- backfill-victim-faction subcommand --------------------------------
+
+    bvf = sub.add_parser("backfill-victim-faction",
+                         help="Backfill killmails.victim_faction_id from EVE Ref archives only.")
+    bvf.add_argument("--days", type=int, default=90, help="Last N days to cover (default 90).")
+    bvf.add_argument("--only-date", type=str, action="append", default=[], help="Only process these dates.")
+    bvf.add_argument("--log-level", default="INFO")
+
     args = parser.parse_args(argv)
     logmod.setup(args.log_level)
 
@@ -46,9 +55,22 @@ def main(argv: list[str] | None = None) -> int:
         return _run_backfill(args)
     elif args.command == "stream":
         return _run_stream(args)
+    elif args.command == "backfill-victim-faction":
+        return _run_backfill_victim_faction(args)
     else:
         parser.print_help()
         return 2
+
+
+def _run_backfill_victim_faction(args: argparse.Namespace) -> int:
+    try:
+        cfg = Config.from_env()
+    except RuntimeError as exc:
+        log.error("config error", error=str(exc))
+        return 2
+    only_dates = [date.fromisoformat(d) for d in args.only_date] if args.only_date else None
+    run_victim_faction_backfill(cfg, days=args.days, only_dates=only_dates)
+    return 0
 
 
 def _run_backfill(args: argparse.Namespace) -> int:
