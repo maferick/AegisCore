@@ -30,11 +30,11 @@ class MarketItemHistory extends Page
 
     protected string $view = 'filament.portal.pages.market-item-history';
 
-    public int $type;
+    public int $typeId;
 
     public function mount(int $type): void
     {
-        $this->type = $type;
+        $this->typeId = $type;
     }
 
     /**
@@ -43,7 +43,7 @@ class MarketItemHistory extends Page
     public function getViewData(): array
     {
         $typeRow = DB::table('ref_item_types')
-            ->where('id', $this->type)
+            ->where('id', $this->typeId)
             ->select('id', 'name', 'group_id')
             ->first();
         if ($typeRow === null) {
@@ -58,16 +58,16 @@ class MarketItemHistory extends Page
         $hubBook = $ownHub ? $svc->latestOrderbook((int) $ownHub->location_id) : [];
         $jitaBook = $jita ? $svc->latestOrderbook((int) $jita->location_id) : [];
 
-        $hubEntry = $hubBook[$this->type] ?? null;
-        $jitaEntry = $jitaBook[$this->type] ?? null;
+        $hubEntry = $hubBook[$this->typeId] ?? null;
+        $jitaEntry = $jitaBook[$this->typeId] ?? null;
 
         // History — use own hub's region. Fall back to Jita's region
         // (The Forge, 10000002) when own hub has no region set.
         $historyRegion = $ownHub && (int) $ownHub->region_id > 0
             ? (int) $ownHub->region_id
             : (int) ($jita->region_id ?? 10000002);
-        $history = $svc->priceHistory($this->type, $historyRegion, 90);
-        $jitaHistory = $svc->priceHistory($this->type, (int) ($jita->region_id ?? 10000002), 90);
+        $history = $svc->priceHistory($this->typeId, $historyRegion, 90);
+        $jitaHistory = $svc->priceHistory($this->typeId, (int) ($jita->region_id ?? 10000002), 90);
 
         return [
             'not_found' => false,
@@ -95,7 +95,7 @@ class MarketItemHistory extends Page
 
     public function getTitle(): string
     {
-        $name = DB::table('ref_item_types')->where('id', $this->type)->value('name');
+        $name = DB::table('ref_item_types')->where('id', $this->typeId)->value('name');
         return $name ? "Market — {$name}" : 'Market item';
     }
 }
