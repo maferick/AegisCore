@@ -46,6 +46,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pymysql
+import pymysql.cursors
 from neo4j import Driver
 
 from counter_intel.config import Config
@@ -429,30 +430,34 @@ def _upsert_co_occurs(conn, driver: Driver, cfg: Config, ws: datetime, we: datet
             )
     log.info("stale edges cleared")
 
-    # 2) Build killmail metadata map for the window.
+    # 2) Materialize the eligible-character set into a temp table so we
+    #    can JOIN instead of building a 200k-entry IN list (MariaDB
+    #    rejects / stalls on lists that large).
+    _create_eligible_temp_table(conn, scored_ids)
+    log.info("eligible characters staged", {"n": len(scored_ids)})
+
+    # 3) Build killmail metadata map for the window.
     #    km_id → (attacker_count, theater_participant_count or None).
     log.info("loading killmail metadata")
     km_meta = _load_killmail_metadata(conn, ws, we)
     log.info("killmail metadata loaded", {"n": len(km_meta)})
 
-    # 3) Fetch SAME-side shared events in bulk.
-    log.info("loading same-side events")
-    same_events = _load_same_side_events(conn, scored_ids, ws, we)
-    log.info("same-side events", {"rows": len(same_events)})
-
-    # 4) Fetch OPPOSING-side shared events in bulk.
-    log.info("loading opposing-side events")
-    opposing_events = _load_opposing_side_events(conn, scored_ids, ws, we)
-    log.info("opposing-side events", {"rows": len(opposing_events)})
-
-    # 5) Per-pair aggregation with weights + sessions.
-    same_edges = _aggregate_weighted(
-        same_events, km_meta, session_gap_seconds, theater_floor, large_theater_threshold,
+    # 4) Stream SAME-side events, aggregate online. At 16M+ rows this
+    #    cannot be materialized into a Python list without OOM.
+    log.info("streaming same-side events")
+    same_edges = _stream_and_aggregate(
+        conn, _iter_same_side_events, ws, we, km_meta,
+        session_gap_seconds, theater_floor, large_theater_threshold,
     )
-    opp_edges = _aggregate_weighted(
-        opposing_events, km_meta, session_gap_seconds, theater_floor, large_theater_threshold,
+    log.info("same-side pairs aggregated", {"pairs": len(same_edges)})
+
+    # 5) Stream OPPOSING-side events, aggregate online.
+    log.info("streaming opposing-side events")
+    opp_edges = _stream_and_aggregate(
+        conn, _iter_opposing_side_events, ws, we, km_meta,
+        session_gap_seconds, theater_floor, large_theater_threshold,
     )
-    log.info("pair aggregation complete", {"same_pairs": len(same_edges), "opposing_pairs": len(opp_edges)})
+    log.info("opposing-side pairs aggregated", {"pairs": len(opp_edges)})
 
     # 6) Threshold.
     same_kept = [e for e in same_edges if e["distinct_interactions"] >= min_interactions and e["total_weight"] >= min_weight]
@@ -498,76 +503,113 @@ def _load_killmail_metadata(conn, ws: datetime, we: datetime) -> dict[int, tuple
     return meta
 
 
-def _load_same_side_events(conn, scored_ids: list[int], ws: datetime, we: datetime) -> list[tuple[int, int, int, datetime]]:
-    """Return list of (a, b, killmail_id, killed_at) for every pair of
-    eligible characters who co-attacked on the same killmail. Keyed a<b."""
-    ph = ",".join(["%s"] * len(scored_ids))
-    out: list[tuple[int, int, int, datetime]] = []
+def _create_eligible_temp_table(conn, scored_ids: list[int]) -> None:
+    """Stage eligible character_ids into a session temp table for JOIN.
+    Avoids IN-list stalls when scored set reaches 100k+ characters."""
     with conn.cursor() as cur:
+        cur.execute("DROP TEMPORARY TABLE IF EXISTS ci_eligible_chars")
         cur.execute(
-            f"""
-            SELECT LEAST(ka1.character_id, ka2.character_id) AS a,
-                   GREATEST(ka1.character_id, ka2.character_id) AS b,
-                   ka1.killmail_id AS kid,
-                   k.killed_at AS t
-              FROM killmail_attackers ka1
-              JOIN killmail_attackers ka2 ON ka2.killmail_id = ka1.killmail_id
-                                          AND ka2.character_id IS NOT NULL
-                                          AND ka2.character_id > ka1.character_id
-              JOIN killmails k ON k.killmail_id = ka1.killmail_id
-             WHERE ka1.character_id IN ({ph})
-               AND ka2.character_id IN ({ph})
-               AND k.killed_at BETWEEN %s AND %s
-            """,
-            scored_ids + scored_ids + [ws, we],
+            """
+            CREATE TEMPORARY TABLE ci_eligible_chars (
+                character_id BIGINT UNSIGNED NOT NULL PRIMARY KEY
+            ) ENGINE=MEMORY
+            """
         )
-        for r in cur.fetchall():
-            out.append((int(r["a"]), int(r["b"]), int(r["kid"]), r["t"]))
-    return out
-
-
-def _load_opposing_side_events(conn, scored_ids: list[int], ws: datetime, we: datetime) -> list[tuple[int, int, int, datetime]]:
-    """attacker vs victim on same km, across eligible characters. Keyed a<b."""
-    ph = ",".join(["%s"] * len(scored_ids))
-    out: list[tuple[int, int, int, datetime]] = []
+    # Batch insert.
+    batch = 10000
     with conn.cursor() as cur:
+        for i in range(0, len(scored_ids), batch):
+            chunk = scored_ids[i:i + batch]
+            ph = ",".join(["(%s)"] * len(chunk))
+            cur.execute(f"INSERT INTO ci_eligible_chars (character_id) VALUES {ph}", chunk)
+    conn.commit()
+
+
+def _iter_same_side_events(conn, ws: datetime, we: datetime):
+    """Stream (a, b, killmail_id, killed_at) tuples for every eligible
+    co-attacker pair on each killmail. ORDER BY killed_at so per-pair
+    events arrive chronologically — required for online session counting.
+
+    Uses a server-side (SSCursor) cursor on the same connection so the
+    session-scoped ci_eligible_chars temp table is visible.
+    """
+    cur = conn.cursor(pymysql.cursors.SSCursor)
+    try:
         cur.execute(
-            f"""
-            SELECT LEAST(ka.character_id, k.victim_character_id) AS a,
+            """
+            SELECT STRAIGHT_JOIN
+                   LEAST(ka1.character_id, ka2.character_id) AS a,
+                   GREATEST(ka1.character_id, ka2.character_id) AS b,
+                   k.killmail_id AS kid,
+                   k.killed_at AS t
+              FROM killmails k
+              JOIN killmail_attackers ka1 ON ka1.killmail_id = k.killmail_id
+              JOIN ci_eligible_chars e1 ON e1.character_id = ka1.character_id
+              JOIN killmail_attackers ka2 ON ka2.killmail_id = k.killmail_id
+                                          AND ka2.character_id > ka1.character_id
+              JOIN ci_eligible_chars e2 ON e2.character_id = ka2.character_id
+             WHERE k.killed_at BETWEEN %s AND %s
+             ORDER BY k.killed_at
+            """,
+            (ws, we),
+        )
+        for r in cur:
+            yield (int(r[0]), int(r[1]), int(r[2]), r[3])
+    finally:
+        cur.close()
+
+
+def _iter_opposing_side_events(conn, ws: datetime, we: datetime):
+    """Stream (a, b, killmail_id, killed_at) — attacker vs victim pairs,
+    both eligible. ORDER BY killed_at for chronological online aggregation."""
+    cur = conn.cursor(pymysql.cursors.SSCursor)
+    try:
+        cur.execute(
+            """
+            SELECT STRAIGHT_JOIN
+                   LEAST(ka.character_id, k.victim_character_id) AS a,
                    GREATEST(ka.character_id, k.victim_character_id) AS b,
                    k.killmail_id AS kid,
                    k.killed_at AS t
               FROM killmails k
+              JOIN ci_eligible_chars ev ON ev.character_id = k.victim_character_id
               JOIN killmail_attackers ka ON ka.killmail_id = k.killmail_id
-                                         AND ka.character_id IS NOT NULL
-             WHERE k.victim_character_id IS NOT NULL
-               AND ka.character_id <> k.victim_character_id
-               AND ka.character_id IN ({ph})
-               AND k.victim_character_id IN ({ph})
-               AND k.killed_at BETWEEN %s AND %s
+                                         AND ka.character_id <> k.victim_character_id
+              JOIN ci_eligible_chars ea ON ea.character_id = ka.character_id
+             WHERE k.killed_at BETWEEN %s AND %s
+             ORDER BY k.killed_at
             """,
-            scored_ids + scored_ids + [ws, we],
+            (ws, we),
         )
-        for r in cur.fetchall():
-            out.append((int(r["a"]), int(r["b"]), int(r["kid"]), r["t"]))
-    return out
+        for r in cur:
+            yield (int(r[0]), int(r[1]), int(r[2]), r[3])
+    finally:
+        cur.close()
 
 
-def _aggregate_weighted(
-    events: list[tuple[int, int, int, datetime]],
+def _stream_and_aggregate(
+    conn,
+    iter_fn,
+    ws: datetime,
+    we: datetime,
     km_meta: dict[int, tuple[int, int | None]],
     session_gap_seconds: int,
     theater_floor: float,
     large_theater_threshold: int,
 ) -> list[dict]:
-    """Group events by pair, compute per-event weight, session counts,
-    and weighted aggregates. Returns one dict per pair."""
+    """Consume an event stream, maintain per-pair running state, emit one
+    dict per pair at end. Online session counting assumes events arrive
+    in chronological order (enforced via ORDER BY killed_at in the
+    iter_fn queries). iter_fn uses an SSCursor on the caller's
+    connection so the session-bound ci_eligible_chars temp table is
+    visible."""
     from math import sqrt
-    from collections import defaultdict
 
-    pair_events: dict[tuple[int, int], list[tuple[datetime, float, int | None]]] = defaultdict(list)
-    # One row per event: (killed_at, weight, theater_pc)
-    for a, b, kid, t in events:
+    # Per-pair running state. One entry per (a, b). Tracks totals so we
+    # can emit edge dicts at end.
+    pairs: dict[tuple[int, int], dict] = {}
+    kept_rows = 0
+    for a, b, kid, t in iter_fn(conn, ws, we):
         ac, tpc = km_meta.get(kid, (1, None))
         attendee = 1.0 / sqrt(max(1, ac))
         if tpc is None:
@@ -575,40 +617,62 @@ def _aggregate_weighted(
         else:
             theater_damp = max(theater_floor, sqrt(10.0) / sqrt(max(1, tpc)))
         weight = attendee * theater_damp
-        pair_events[(a, b)].append((t, weight, tpc))
+        key = (a, b)
+        st = pairs.get(key)
+        if st is None:
+            st = {
+                "event_count": 0,
+                "sessions": 0,
+                "prev_t": None,
+                "first_t": t,
+                "last_t": t,
+                "days": set(),
+                "weeks": set(),
+                "total_w": 0.0,
+                "max_w": 0.0,
+                "large_w": 0.0,
+            }
+            pairs[key] = st
+        st["event_count"] += 1
+        if st["prev_t"] is None or (t - st["prev_t"]).total_seconds() > session_gap_seconds:
+            st["sessions"] += 1
+        st["prev_t"] = t
+        if t < st["first_t"]:
+            st["first_t"] = t
+        if t > st["last_t"]:
+            st["last_t"] = t
+        st["days"].add(t.date())
+        st["weeks"].add(t.isocalendar()[:2])
+        st["total_w"] += weight
+        if weight > st["max_w"]:
+            st["max_w"] = weight
+        if tpc is not None and tpc >= large_theater_threshold:
+            st["large_w"] += weight
+        kept_rows += 1
+        if kept_rows % 2_000_000 == 0:
+            log.info("streamed events", {"rows": kept_rows, "pairs": len(pairs)})
 
     out: list[dict] = []
-    for (a, b), rows in pair_events.items():
-        rows.sort(key=lambda r: r[0])
-        # Sessions.
-        interactions = 1 if rows else 0
-        prev_t = rows[0][0]
-        for t, _w, _tpc in rows[1:]:
-            if (t - prev_t).total_seconds() > session_gap_seconds:
-                interactions += 1
-            prev_t = t
-        # Day / week counts.
-        days = {t.date() for t, _w, _tpc in rows}
-        weeks = {t.isocalendar()[:2] for t, _w, _tpc in rows}
-        total_w = sum(w for _t, w, _tpc in rows)
-        max_w = max(w for _t, w, _tpc in rows) if rows else 0.0
+    for (a, b), st in pairs.items():
+        total_w = st["total_w"]
+        max_w = st["max_w"]
         share = (max_w / total_w) if total_w > 0 else 0.0
-        large_w = sum(w for _t, w, tpc in rows if tpc is not None and tpc >= large_theater_threshold)
-        small_w = total_w - large_w
+        small_w = total_w - st["large_w"]
         out.append({
             "a": a,
             "b": b,
-            "event_count": len(rows),
-            "distinct_interactions": interactions,
-            "distinct_days": len(days),
-            "distinct_weeks": len(weeks),
+            "event_count": st["event_count"],
+            "distinct_interactions": st["sessions"],
+            "distinct_days": len(st["days"]),
+            "distinct_weeks": len(st["weeks"]),
             "total_weight": round(total_w, 6),
-            "large_theater_weighted_count": round(large_w, 6),
+            "large_theater_weighted_count": round(st["large_w"], 6),
             "non_theater_weighted_count": round(small_w, 6),
             "max_single_event_weight_share": round(share, 4),
-            "first_seen_at": rows[0][0].isoformat(),
-            "last_seen_at": rows[-1][0].isoformat(),
+            "first_seen_at": st["first_t"].isoformat(),
+            "last_seen_at": st["last_t"].isoformat(),
         })
+    log.info("stream aggregation done", {"rows": kept_rows, "pairs": len(out)})
     return out
 
 
