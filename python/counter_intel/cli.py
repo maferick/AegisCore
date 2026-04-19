@@ -11,8 +11,9 @@ import argparse
 from datetime import date
 
 from counter_intel.config import Config
-from counter_intel.db import connection
+from counter_intel.db import connection, neo_driver
 from counter_intel.features import extract_and_persist
+from counter_intel.projection import project
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -26,9 +27,15 @@ def main() -> int:
     f.add_argument("--window-end", type=str, default=None,
                    help="YYYY-MM-DD window end date (default: today UTC)")
 
+    p = sub.add_parser("projection", help="Project characters + CO_OCCURS edges into Neo4j.")
+    p.add_argument("--window-end", type=str, default=None,
+                   help="YYYY-MM-DD (default: today UTC)")
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
+    if args.cmd == "projection":
+        return _run_projection(args)
     parser.print_help()
     return 2
 
@@ -39,4 +46,13 @@ def _run_features(args) -> int:
     with connection(cfg) as conn:
         stats = extract_and_persist(conn, cfg, window_end=window_end)
     log.info("features pass complete", stats)
+    return 0
+
+
+def _run_projection(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    with connection(cfg) as conn, neo_driver(cfg) as driver:
+        stats = project(conn, driver, cfg, window_end=window_end)
+    log.info("projection pass complete", stats)
     return 0

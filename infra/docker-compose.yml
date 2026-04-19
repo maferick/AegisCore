@@ -1311,13 +1311,21 @@ services:
       DB_PASSWORD: "${MARIADB_PASSWORD}"
       CI_WINDOW_DAYS: "${CI_WINDOW_DAYS:-90}"
       CI_MIN_BATTLES_90D: "${CI_MIN_BATTLES_90D:-5}"
+      CI_EDGE_MIN_BATTLES: "${CI_EDGE_MIN_BATTLES:-3}"
+      CI_EDGE_MIN_KMS: "${CI_EDGE_MIN_KMS:-5}"
+      CI_EDGE_MIN_DAYS: "${CI_EDGE_MIN_DAYS:-2}"
+      NEO4J_HOST: "${NEO4J_HOST:-bolt://neo4j:7687}"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
     command: ["features"]
     depends_on:
       mariadb:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
     networks:
-      aegiscore:
-        ipv4_address: 172.16.238.47
+      - aegiscore
 
 volumes:
   # Named volume for MariaDB data. Named volumes survive container
