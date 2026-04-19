@@ -374,13 +374,31 @@ def _upsert_member_edges(conn, driver: Driver, cfg: Config) -> int:
 
 
 def _upsert_co_occurs(conn, driver: Driver, cfg: Config, ws: datetime, we: datetime, window_end: date) -> int:
-    """Aggregate in MariaDB, stream to Neo4j.
+    """Weighted full-ingest projection (Commit A of the rework).
 
-    Thresholded: shared_battles ≥ N OR (shared_killmails ≥ M AND shared_days ≥ K).
-    Undirected edge stored as :CI_CO_OCCURS_WITH between char_a < char_b
-    (deterministic direction avoids duplicates).
+    Semantics:
+      - SAME-side events = both characters appear as attackers on the
+        same killmail.
+      - OPPOSING-side events = one character is an attacker while the
+        other is the victim on the same killmail.
+      - Per-event weight = (1 / sqrt(attacker_count)) × theater_dampener,
+        where theater_dampener = 1.0 if km is outside any battle
+        theater, else sqrt(10) / sqrt(theater_participant_count)
+        floored at 0.15 to prevent a Keepstar brawl from being flatlined.
+      - Persistence = `distinct_interactions`, sessions of shared events
+        separated by ≥CI_SESSION_GAP_HOURS (default 8h).
+      - Two edge types per pair:
+          CI_CO_OCCURS_WITH — aggregated SAME-side evidence.
+          CI_FOUGHT_AGAINST — aggregated OPPOSING-side evidence.
+        A pair can have both.
+      - Threshold to promote (per edge independently):
+          distinct_interactions >= CI_EDGE_MIN_INTERACTIONS (default 2)
+          AND total_weight >= CI_EDGE_MIN_WEIGHT (default 0.5)
+      - Diagnostic property `max_single_event_weight_share` on every edge
+        so a validation pass can catch single-event-dominated edges.
+
+    Returns total edges written across both types.
     """
-    # Wipe current-window edges first so rebuild is clean.
     char_ids_sql = """
         SELECT character_id FROM ci_character_features_rolling
          WHERE has_sufficient_history = 1 AND window_end_date = %s AND window_days = %s
@@ -388,116 +406,262 @@ def _upsert_co_occurs(conn, driver: Driver, cfg: Config, ws: datetime, we: datet
     with conn.cursor() as cur:
         cur.execute(char_ids_sql, (window_end, cfg.window_days))
         scored_ids = sorted({int(r["character_id"]) for r in cur.fetchall()})
-
     if not scored_ids:
         return 0
 
+    # Tunables (read via env on the Config; default values live there).
+    session_gap_seconds = cfg.session_gap_hours * 3600
+    min_interactions = cfg.edge_min_interactions
+    min_weight = cfg.edge_min_weight
+    theater_floor = cfg.theater_dampener_floor
+    large_theater_threshold = cfg.large_theater_threshold_participants
+
+    # 1) Wipe stale edges for covered characters.
     with neo_session(driver, cfg) as sess:
         for i in range(0, len(scored_ids), 5000):
             sess.run(
                 """
                 UNWIND $ids AS cid
-                MATCH (c:CICharacter {character_id: cid})-[e:CI_CO_OCCURS_WITH]-()
-                WHERE e.window_end_date = $we
+                MATCH (c:CICharacter {character_id: cid})-[e:CI_CO_OCCURS_WITH|CI_FOUGHT_AGAINST]-()
                 DELETE e
                 """,
                 ids=scored_ids[i:i + 5000],
-                we=window_end.isoformat(),
             )
+    log.info("stale edges cleared")
 
-    # Compute co-occurrence aggregates keyed by (char_a < char_b).
-    # Filter to pairs where BOTH characters are in scored_ids.
-    ph = ",".join(["%s"] * len(scored_ids))
-    agg_sql = f"""
-        SELECT LEAST(ka1.character_id, ka2.character_id) AS a,
-               GREATEST(ka1.character_id, ka2.character_id) AS b,
-               COUNT(DISTINCT ka1.killmail_id) AS shared_killmails,
-               COUNT(DISTINCT DATE(k.killed_at)) AS shared_days,
-               MIN(k.killed_at) AS first_seen_at,
-               MAX(k.killed_at) AS last_seen_at
-          FROM killmail_attackers ka1
-          JOIN killmail_attackers ka2 ON ka2.killmail_id = ka1.killmail_id
-                                      AND ka2.character_id IS NOT NULL
-                                      AND ka2.character_id > ka1.character_id
-          JOIN killmails k ON k.killmail_id = ka1.killmail_id
-         WHERE ka1.character_id IN ({ph})
-           AND ka2.character_id IN ({ph})
-           AND k.killed_at BETWEEN %s AND %s
-         GROUP BY LEAST(ka1.character_id, ka2.character_id),
-                  GREATEST(ka1.character_id, ka2.character_id)
-        HAVING shared_killmails >= %s
-    """
-    bindings = list(scored_ids) + list(scored_ids) + [ws, we, cfg.coedge_min_shared_killmails]
-    log.info("co_occurs aggregation starting", {"scored": len(scored_ids)})
-    with conn.cursor() as cur:
-        cur.execute(agg_sql, bindings)
-        pairs = cur.fetchall()
-    log.info("co_occurs pairs loaded", {"n": len(pairs)})
+    # 2) Build killmail metadata map for the window.
+    #    km_id → (attacker_count, theater_participant_count or None).
+    log.info("loading killmail metadata")
+    km_meta = _load_killmail_metadata(conn, ws, we)
+    log.info("killmail metadata loaded", {"n": len(km_meta)})
 
-    # Battle-level shared count — compute separately to avoid huge join.
-    # Fold into pairs dict.
-    battles_sql = f"""
-        SELECT LEAST(p1.character_id, p2.character_id) AS a,
-               GREATEST(p1.character_id, p2.character_id) AS b,
-               COUNT(DISTINCT p1.theater_id) AS shared_battles
-          FROM battle_theater_participants p1
-          JOIN battle_theater_participants p2 ON p2.theater_id = p1.theater_id
-                                              AND p2.character_id > p1.character_id
-          JOIN battle_theaters bt ON bt.id = p1.theater_id
-         WHERE p1.character_id IN ({ph})
-           AND p2.character_id IN ({ph})
-           AND bt.end_time BETWEEN %s AND %s
-         GROUP BY LEAST(p1.character_id, p2.character_id),
-                  GREATEST(p1.character_id, p2.character_id)
-    """
+    # 3) Fetch SAME-side shared events in bulk.
+    log.info("loading same-side events")
+    same_events = _load_same_side_events(conn, scored_ids, ws, we)
+    log.info("same-side events", {"rows": len(same_events)})
+
+    # 4) Fetch OPPOSING-side shared events in bulk.
+    log.info("loading opposing-side events")
+    opposing_events = _load_opposing_side_events(conn, scored_ids, ws, we)
+    log.info("opposing-side events", {"rows": len(opposing_events)})
+
+    # 5) Per-pair aggregation with weights + sessions.
+    same_edges = _aggregate_weighted(
+        same_events, km_meta, session_gap_seconds, theater_floor, large_theater_threshold,
+    )
+    opp_edges = _aggregate_weighted(
+        opposing_events, km_meta, session_gap_seconds, theater_floor, large_theater_threshold,
+    )
+    log.info("pair aggregation complete", {"same_pairs": len(same_edges), "opposing_pairs": len(opp_edges)})
+
+    # 6) Threshold.
+    same_kept = [e for e in same_edges if e["distinct_interactions"] >= min_interactions and e["total_weight"] >= min_weight]
+    opp_kept = [e for e in opp_edges if e["distinct_interactions"] >= min_interactions and e["total_weight"] >= min_weight]
+    log.info("same-side thresholded", {"kept": len(same_kept), "dropped": len(same_edges) - len(same_kept)})
+    log.info("opposing-side thresholded", {"kept": len(opp_kept), "dropped": len(opp_edges) - len(opp_kept)})
+
+    # 7) Diagnostic: max_single_event_weight_share distribution.
+    _log_weight_diagnostic(same_kept, "CI_CO_OCCURS_WITH")
+    _log_weight_diagnostic(opp_kept, "CI_FOUGHT_AGAINST")
+
+    # 8) Write both edge types into Neo4j.
+    total = 0
+    total += _write_edges(driver, cfg, same_kept, "CI_CO_OCCURS_WITH", window_end)
+    total += _write_edges(driver, cfg, opp_kept, "CI_FOUGHT_AGAINST", window_end)
+    return total
+
+
+def _load_killmail_metadata(conn, ws: datetime, we: datetime) -> dict[int, tuple[int, int | None]]:
+    """km_id → (attacker_count, theater_participant_count-or-None)."""
+    meta: dict[int, tuple[int, int | None]] = {}
     with conn.cursor() as cur:
-        cur.execute(battles_sql, list(scored_ids) + list(scored_ids) + [ws, we])
-        battle_map: dict[tuple[int, int], int] = {}
+        cur.execute(
+            """
+            SELECT k.killmail_id, k.attacker_count, bt.participant_count AS theater_pc
+              FROM killmails k
+              LEFT JOIN battle_theater_killmails btk ON btk.killmail_id = k.killmail_id
+              LEFT JOIN battle_theaters bt ON bt.id = btk.theater_id
+             WHERE k.killed_at BETWEEN %s AND %s
+            """,
+            (ws, we),
+        )
         for r in cur.fetchall():
-            battle_map[(int(r["a"]), int(r["b"]))] = int(r["shared_battles"])
-    log.info("co_occurs battle pairs loaded", {"n": len(battle_map)})
+            kid = int(r["killmail_id"])
+            ac = int(r["attacker_count"] or 1)
+            tpc = int(r["theater_pc"]) if r.get("theater_pc") is not None else None
+            # LEFT JOIN can produce duplicates if a km appears in
+            # multiple theaters (shouldn't but be safe). Keep the largest
+            # theater participant count observed.
+            existing = meta.get(kid)
+            if existing is None or (tpc is not None and (existing[1] is None or tpc > existing[1])):
+                meta[kid] = (ac, tpc)
+    return meta
 
-    # Threshold + merge.
-    kept: list[dict] = []
-    for p in pairs:
-        a = int(p["a"]); b = int(p["b"])
-        shared_kms = int(p["shared_killmails"])
-        shared_days = int(p["shared_days"])
-        shared_battles = battle_map.get((a, b), 0)
-        if shared_battles >= cfg.coedge_min_shared_battles or (
-            shared_kms >= cfg.coedge_min_shared_killmails and shared_days >= cfg.coedge_min_shared_days
-        ):
-            kept.append({
-                "a": a,
-                "b": b,
-                "shared_killmails": shared_kms,
-                "shared_battles": shared_battles,
-                "shared_days": shared_days,
-                "first_seen_at": p["first_seen_at"].isoformat() if p["first_seen_at"] else None,
-                "last_seen_at": p["last_seen_at"].isoformat() if p["last_seen_at"] else None,
-                "window_end_date": window_end.isoformat(),
-            })
-    log.info("co_occurs pairs above threshold", {"kept": len(kept), "dropped": len(pairs) - len(kept)})
 
+def _load_same_side_events(conn, scored_ids: list[int], ws: datetime, we: datetime) -> list[tuple[int, int, int, datetime]]:
+    """Return list of (a, b, killmail_id, killed_at) for every pair of
+    eligible characters who co-attacked on the same killmail. Keyed a<b."""
+    ph = ",".join(["%s"] * len(scored_ids))
+    out: list[tuple[int, int, int, datetime]] = []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT LEAST(ka1.character_id, ka2.character_id) AS a,
+                   GREATEST(ka1.character_id, ka2.character_id) AS b,
+                   ka1.killmail_id AS kid,
+                   k.killed_at AS t
+              FROM killmail_attackers ka1
+              JOIN killmail_attackers ka2 ON ka2.killmail_id = ka1.killmail_id
+                                          AND ka2.character_id IS NOT NULL
+                                          AND ka2.character_id > ka1.character_id
+              JOIN killmails k ON k.killmail_id = ka1.killmail_id
+             WHERE ka1.character_id IN ({ph})
+               AND ka2.character_id IN ({ph})
+               AND k.killed_at BETWEEN %s AND %s
+            """,
+            scored_ids + scored_ids + [ws, we],
+        )
+        for r in cur.fetchall():
+            out.append((int(r["a"]), int(r["b"]), int(r["kid"]), r["t"]))
+    return out
+
+
+def _load_opposing_side_events(conn, scored_ids: list[int], ws: datetime, we: datetime) -> list[tuple[int, int, int, datetime]]:
+    """attacker vs victim on same km, across eligible characters. Keyed a<b."""
+    ph = ",".join(["%s"] * len(scored_ids))
+    out: list[tuple[int, int, int, datetime]] = []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT LEAST(ka.character_id, k.victim_character_id) AS a,
+                   GREATEST(ka.character_id, k.victim_character_id) AS b,
+                   k.killmail_id AS kid,
+                   k.killed_at AS t
+              FROM killmails k
+              JOIN killmail_attackers ka ON ka.killmail_id = k.killmail_id
+                                         AND ka.character_id IS NOT NULL
+             WHERE k.victim_character_id IS NOT NULL
+               AND ka.character_id <> k.victim_character_id
+               AND ka.character_id IN ({ph})
+               AND k.victim_character_id IN ({ph})
+               AND k.killed_at BETWEEN %s AND %s
+            """,
+            scored_ids + scored_ids + [ws, we],
+        )
+        for r in cur.fetchall():
+            out.append((int(r["a"]), int(r["b"]), int(r["kid"]), r["t"]))
+    return out
+
+
+def _aggregate_weighted(
+    events: list[tuple[int, int, int, datetime]],
+    km_meta: dict[int, tuple[int, int | None]],
+    session_gap_seconds: int,
+    theater_floor: float,
+    large_theater_threshold: int,
+) -> list[dict]:
+    """Group events by pair, compute per-event weight, session counts,
+    and weighted aggregates. Returns one dict per pair."""
+    from math import sqrt
+    from collections import defaultdict
+
+    pair_events: dict[tuple[int, int], list[tuple[datetime, float, int | None]]] = defaultdict(list)
+    # One row per event: (killed_at, weight, theater_pc)
+    for a, b, kid, t in events:
+        ac, tpc = km_meta.get(kid, (1, None))
+        attendee = 1.0 / sqrt(max(1, ac))
+        if tpc is None:
+            theater_damp = 1.0
+        else:
+            theater_damp = max(theater_floor, sqrt(10.0) / sqrt(max(1, tpc)))
+        weight = attendee * theater_damp
+        pair_events[(a, b)].append((t, weight, tpc))
+
+    out: list[dict] = []
+    for (a, b), rows in pair_events.items():
+        rows.sort(key=lambda r: r[0])
+        # Sessions.
+        interactions = 1 if rows else 0
+        prev_t = rows[0][0]
+        for t, _w, _tpc in rows[1:]:
+            if (t - prev_t).total_seconds() > session_gap_seconds:
+                interactions += 1
+            prev_t = t
+        # Day / week counts.
+        days = {t.date() for t, _w, _tpc in rows}
+        weeks = {t.isocalendar()[:2] for t, _w, _tpc in rows}
+        total_w = sum(w for _t, w, _tpc in rows)
+        max_w = max(w for _t, w, _tpc in rows) if rows else 0.0
+        share = (max_w / total_w) if total_w > 0 else 0.0
+        large_w = sum(w for _t, w, tpc in rows if tpc is not None and tpc >= large_theater_threshold)
+        small_w = total_w - large_w
+        out.append({
+            "a": a,
+            "b": b,
+            "event_count": len(rows),
+            "distinct_interactions": interactions,
+            "distinct_days": len(days),
+            "distinct_weeks": len(weeks),
+            "total_weight": round(total_w, 6),
+            "large_theater_weighted_count": round(large_w, 6),
+            "non_theater_weighted_count": round(small_w, 6),
+            "max_single_event_weight_share": round(share, 4),
+            "first_seen_at": rows[0][0].isoformat(),
+            "last_seen_at": rows[-1][0].isoformat(),
+        })
+    return out
+
+
+def _log_weight_diagnostic(edges: list[dict], label: str) -> None:
+    """Emit a single log line with the max_single_event_weight_share
+    distribution so the validation pass can eyeball curve-fit quality
+    without a separate query."""
+    if not edges:
+        log.info(f"{label} diagnostic: no edges")
+        return
+    shares = sorted(e["max_single_event_weight_share"] for e in edges)
+    n = len(shares)
+    p50 = shares[n // 2]
+    p90 = shares[int(n * 0.9)]
+    p99 = shares[min(n - 1, int(n * 0.99))]
+    hi_dom = sum(1 for s in shares if s >= 0.8)
+    log.info(f"{label} weight-share diagnostic", {
+        "n_edges": n,
+        "p50_max_share": round(p50, 3),
+        "p90_max_share": round(p90, 3),
+        "p99_max_share": round(p99, 3),
+        "edges_single_event_dominated_gte_0_8": hi_dom,
+    })
+
+
+def _write_edges(driver: Driver, cfg: Config, edges: list[dict], rel_type: str, window_end: date) -> int:
+    if not edges:
+        return 0
+    we_iso = window_end.isoformat()
     total = 0
     with neo_session(driver, cfg) as sess:
-        for i in range(0, len(kept), 1000):
-            b = kept[i:i + 1000]
-            sess.run(
-                """
+        for i in range(0, len(edges), 1000):
+            batch = edges[i:i + 1000]
+            cypher = f"""
                 UNWIND $batch AS r
-                MATCH (a:CICharacter {character_id: r.a})
-                MATCH (b:CICharacter {character_id: r.b})
-                CREATE (a)-[:CI_CO_OCCURS_WITH {
-                    shared_killmails: r.shared_killmails,
-                    shared_battles: r.shared_battles,
-                    shared_days: r.shared_days,
+                MATCH (a:CICharacter {{character_id: r.a}})
+                MATCH (b:CICharacter {{character_id: r.b}})
+                CREATE (a)-[:{rel_type} {{
+                    event_count: r.event_count,
+                    distinct_interactions: r.distinct_interactions,
+                    distinct_days: r.distinct_days,
+                    distinct_weeks: r.distinct_weeks,
+                    total_weight: r.total_weight,
+                    large_theater_weighted_count: r.large_theater_weighted_count,
+                    non_theater_weighted_count: r.non_theater_weighted_count,
+                    max_single_event_weight_share: r.max_single_event_weight_share,
                     first_seen_at: r.first_seen_at,
                     last_seen_at: r.last_seen_at,
-                    window_end_date: r.window_end_date
-                }]->(b)
-                """,
-                batch=b,
-            )
-            total += len(b)
+                    window_end_date: $we
+                }}]->(b)
+            """
+            sess.run(cypher, batch=batch, we=we_iso)
+            total += len(batch)
     return total
+
+

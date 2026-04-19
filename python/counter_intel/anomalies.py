@@ -55,6 +55,16 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
     hostile_aids, friendly_aids = _resolve_bloc_alliance_sets(conn, viewer_bloc_id)
     log.info("bloc alliance sets resolved", {"hostile_alliances": len(hostile_aids), "friendly_alliances": len(friendly_aids)})
 
+    # Counter-intel subject set: characters currently affiliated with an
+    # alliance inside the viewer's own bloc. External hostiles remain
+    # in the graph (we need them as counterparts for hostile-overlap
+    # calculations) but are NOT scored or ranked — the review queue is
+    # an insider-detection surface, not an enemy directory.
+    internal_cids = _load_internal_characters(conn, friendly_aids)
+    log.info("internal subject set resolved", {"n": len(internal_cids)})
+    if not internal_cids:
+        return {"written": 0, "internal": 0}
+
     # Clean-pilot set: characters in current corp ≥365d, zero hostile-
     # tagged alliance in history.
     clean_cids = _clean_pilot_set(conn, hostile_aids)
@@ -67,9 +77,12 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
     # Scored characters from Neo4j with pagerank + betweenness.
     with neo_session(driver, cfg) as sess:
         scored = _load_scored_characters(sess)
-    log.info("scored characters loaded", {"n": len(scored)})
+    # Filter to internal subject set — external hostiles stay in the
+    # graph as counterparts but don't get scored.
+    scored = [c for c in scored if int(c["character_id"]) in internal_cids]
+    log.info("scored characters (internal only)", {"n": len(scored)})
     if not scored:
-        return {"written": 0}
+        return {"written": 0, "internal": len(internal_cids)}
 
     # Pre-compute global pagerank/betweenness/battles distributions for
     # fallback percentiles when cohort too sparse. (Not directly used
@@ -97,9 +110,14 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
             if (i + 1) % 500 == 0:
                 log.info("anomaly progress", {"done": i + 1, "total": len(scored)})
 
+    # Purge stale rows for this viewer bloc that are NOT in the current
+    # internal subject set — catches external characters persisted by
+    # an earlier, pre-filter run of this job so the dashboard stays
+    # insider-only.
+    _purge_external_rows(conn, viewer_bloc_id, internal_cids, window_end, cfg.window_days)
     _persist(conn, rows_out)
     log.info("anomalies written", {"n": len(rows_out)})
-    return {"written": len(rows_out)}
+    return {"written": len(rows_out), "internal": len(internal_cids)}
 
 
 # ----- Supporting queries ----------------------------------------------
@@ -139,6 +157,30 @@ def _resolve_bloc_alliance_sets(conn, viewer_bloc_id: int) -> tuple[set[int], se
             # coalition_entity_labels design.
             hostile.add(aid)
     return hostile, friendly
+
+
+def _load_internal_characters(conn, friendly_aids: set[int]) -> set[int]:
+    """Characters whose current corp belongs to an alliance in the
+    viewer's own bloc (aka 'internal'). These are the counter-intel
+    subjects — the only ones the dashboard ranks."""
+    if not friendly_aids:
+        return set()
+    aph = ",".join(["%s"] * len(friendly_aids))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT cch.character_id
+              FROM character_corporation_history cch
+              JOIN corporation_alliance_history cah ON cah.corporation_id = cch.corporation_id
+             WHERE cch.is_deleted = 0
+               AND (cch.end_date IS NULL OR cch.end_date > NOW())
+               AND cah.alliance_id IN ({aph})
+               AND (cah.end_date IS NULL OR cah.end_date > NOW())
+               AND cah.start_date <= NOW()
+            """,
+            list(friendly_aids),
+        )
+        return {int(r["character_id"]) for r in cur.fetchall()}
 
 
 def _clean_pilot_set(conn, hostile_aids: set[int]) -> set[int]:
@@ -425,6 +467,50 @@ def _recent_hostile_join(conn, cid: int, hostile_aids: set[int]) -> bool:
 
 
 # ----- persist ---------------------------------------------------------
+
+
+def _purge_external_rows(conn, viewer_bloc_id: int, internal_cids: set[int],
+                         window_end: date, window_days: int) -> None:
+    """Delete stale anomaly rows for this (viewer_bloc, window) whose
+    character_id is NOT in the current internal subject set. Catches
+    external hostiles persisted by pre-filter runs so the dashboard
+    stays insider-only.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT character_id
+              FROM ci_character_anomalies_rolling
+             WHERE viewer_bloc_id = %s
+               AND window_end_date = %s
+               AND window_days = %s
+            """,
+            (viewer_bloc_id, window_end, window_days),
+        )
+        existing = {int(r["character_id"]) for r in cur.fetchall()}
+    stale = [cid for cid in existing if cid not in internal_cids]
+    if not stale:
+        log.info("purge external rows", {"stale": 0})
+        return
+    batch = 5000
+    deleted = 0
+    for i in range(0, len(stale), batch):
+        chunk = stale[i:i + batch]
+        ph = ",".join(["%s"] * len(chunk))
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                DELETE FROM ci_character_anomalies_rolling
+                 WHERE viewer_bloc_id = %s
+                   AND window_end_date = %s
+                   AND window_days = %s
+                   AND character_id IN ({ph})
+                """,
+                [viewer_bloc_id, window_end, window_days] + chunk,
+            )
+            deleted += cur.rowcount or 0
+    conn.commit()
+    log.info("purge external rows", {"stale": len(stale), "deleted": deleted})
 
 
 def _persist(conn, rows: list[dict]) -> None:

@@ -32,6 +32,13 @@ class Config:
     coedge_min_shared_killmails: int
     coedge_min_shared_days: int
 
+    # Weighted projection tunables (rework).
+    session_gap_hours: int
+    edge_min_interactions: int
+    edge_min_weight: float
+    theater_dampener_floor: float
+    large_theater_threshold_participants: int
+
     @classmethod
     def from_env(cls) -> "Config":
         def env(key: str, default: str | None = None, required: bool = False) -> str:
@@ -57,4 +64,9 @@ class Config:
             coedge_min_shared_battles=int(env("CI_EDGE_MIN_BATTLES", "3") or "3"),
             coedge_min_shared_killmails=int(env("CI_EDGE_MIN_KMS", "5") or "5"),
             coedge_min_shared_days=int(env("CI_EDGE_MIN_DAYS", "2") or "2"),
+            session_gap_hours=int(env("CI_SESSION_GAP_HOURS", "8") or "8"),
+            edge_min_interactions=int(env("CI_EDGE_MIN_INTERACTIONS", "2") or "2"),
+            edge_min_weight=float(env("CI_EDGE_MIN_WEIGHT", "0.5") or "0.5"),
+            theater_dampener_floor=float(env("CI_THEATER_DAMP_FLOOR", "0.15") or "0.15"),
+            large_theater_threshold_participants=int(env("CI_LARGE_THEATER_THRESHOLD", "100") or "100"),
         )
