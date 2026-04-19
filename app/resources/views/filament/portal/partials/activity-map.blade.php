@@ -181,12 +181,13 @@
                             {{ $sys['name'] }}
                         </text>
                         @if ($sovAid)
-                            <image x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 5, 1) }}"
-                                   width="12" height="12"
-                                   href="https://images.evetech.net/alliances/{{ $sovAid }}/logo?size=32"
-                                   preserveAspectRatio="xMidYMid meet">
-                                <title>{{ $sovName }}</title>
-                            </image>
+                            <foreignObject x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 5, 1) }}" width="14" height="14">
+                                <img xmlns="http://www.w3.org/1999/xhtml"
+                                     src="https://images.evetech.net/alliances/{{ $sovAid }}/logo?size=32"
+                                     referrerpolicy="no-referrer"
+                                     title="{{ $sovName }}"
+                                     style="width:14px;height:14px;display:block;" alt="">
+                            </foreignObject>
                         @endif
                     @endforeach
                 </svg>
