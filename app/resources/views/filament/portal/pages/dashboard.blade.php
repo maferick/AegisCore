@@ -1,4 +1,43 @@
 <x-filament-panels::page>
+    {{-- Region-panel pop-out styles + click handler — lives in the
+         parent page so it runs on initial load, not inside the
+         innerHTML-injected map partial (innerHTML doesn't execute
+         script tags). --}}
+    <style>
+        .wc-region-panel { cursor: zoom-in; transition: box-shadow 0.15s; }
+        .wc-region-panel:hover { box-shadow: 0 0 0 1px rgba(79,208,208,0.4); }
+        .wc-region-panel.wc-pop-open {
+            position: fixed; inset: 3vh 3vw; z-index: 100;
+            background: #050709; border: 1px solid rgba(79,208,208,0.35);
+            padding: 1rem; overflow: auto; cursor: zoom-out;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+        }
+        .wc-region-panel.wc-pop-open svg { min-height: 85vh !important; }
+        body.wc-map-pop-active { overflow: hidden; }
+        body.wc-map-pop-active::before {
+            content: ''; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 99;
+        }
+    </style>
+    <script>
+        (function () {
+            if (window.__wcMapPopBound) return;
+            window.__wcMapPopBound = true;
+            document.addEventListener('click', function (e) {
+                var panel = e.target.closest('.wc-region-panel');
+                if (!panel) return;
+                panel.classList.toggle('wc-pop-open');
+                document.body.classList.toggle('wc-map-pop-active',
+                    !!document.querySelector('.wc-region-panel.wc-pop-open'));
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key !== 'Escape') return;
+                document.querySelectorAll('.wc-region-panel.wc-pop-open').forEach(function (el) {
+                    el.classList.remove('wc-pop-open');
+                });
+                document.body.classList.remove('wc-map-pop-active');
+            });
+        })();
+    </script>
     @php
         $fmtIsk = function (float $v): string {
             if ($v >= 1e12) return number_format($v / 1e12, 2) . ' T';

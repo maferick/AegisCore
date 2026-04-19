@@ -18,41 +18,6 @@
         // laptop viewport without shrinking individually.
         $colWidth = count($regions) === 1 ? 'minmax(780px, 1fr)' : 'repeat(' . count($regions) . ', minmax(570px, 1fr))';
     @endphp
-    <style>
-        .wc-region-panel { cursor: zoom-in; transition: box-shadow 0.15s; }
-        .wc-region-panel:hover { box-shadow: 0 0 0 1px rgba(79,208,208,0.4); }
-        .wc-region-panel.wc-pop-open {
-            position: fixed; inset: 3vh 3vw; z-index: 100;
-            background: #050709; border: 1px solid rgba(79,208,208,0.35);
-            padding: 1rem; overflow: auto; cursor: zoom-out;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.7);
-        }
-        .wc-region-panel.wc-pop-open svg { min-height: 85vh !important; }
-        body.wc-map-pop-active { overflow: hidden; }
-        body.wc-map-pop-active::before {
-            content: ''; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 99;
-        }
-    </style>
-    <script>
-        (function () {
-            if (window.__wcMapPopBound) return;
-            window.__wcMapPopBound = true;
-            document.addEventListener('click', function (e) {
-                var panel = e.target.closest('.wc-region-panel');
-                if (!panel) return;
-                panel.classList.toggle('wc-pop-open');
-                document.body.classList.toggle('wc-map-pop-active',
-                    !!document.querySelector('.wc-region-panel.wc-pop-open'));
-            });
-            document.addEventListener('keydown', function (e) {
-                if (e.key !== 'Escape') return;
-                document.querySelectorAll('.wc-region-panel.wc-pop-open').forEach(function (el) {
-                    el.classList.remove('wc-pop-open');
-                });
-                document.body.classList.remove('wc-map-pop-active');
-            });
-        })();
-    </script>
     <div style="display:grid; grid-template-columns: {{ $colWidth }}; gap:0.6rem; overflow-x:auto;">
         @foreach ($regions as $region)
             @php
@@ -128,15 +93,24 @@
                         </circle>
                     @endforeach
 
-                    {{-- Waypoint labels at hop 2, 4, 5, 6 so the
-                         corridor into the active region is readable. --}}
+                    {{-- Neighbor labels — 1..6 jumps out from an active
+                         system get named, dimmer the further out. Past
+                         hop 6 the names stay on the hover tooltip only
+                         so the map doesn't turn into a wall of text. --}}
                     @foreach ($amNeighbors as $sys)
                         @php
                             $hop = (int) ($sys['hop'] ?? 0);
-                            if ($hop !== 2 && $hop !== 4 && $hop !== 5 && $hop !== 6) continue;
+                            if ($hop < 1 || $hop > 6) continue;
                             [$cx, $cy] = $toPx($sys['x'], $sys['y']);
-                            $labelColor = match ($hop) { 2 => '#94a3b8', 4 => '#64748b', 5 => '#475569', 6 => '#334155' };
-                            $labelFont = match ($hop) { 2 => 8, 4 => 7, 5 => 6, 6 => 6 };
+                            $labelColor = match ($hop) {
+                                1 => '#cbd5e1',
+                                2 => '#94a3b8',
+                                3 => '#94a3b8',
+                                4 => '#64748b',
+                                5 => '#475569',
+                                6 => '#334155',
+                            };
+                            $labelFont = match ($hop) { 1 => 9, 2 => 8, 3 => 8, 4 => 7, 5 => 7, 6 => 6 };
                         @endphp
                         <text x="{{ round($cx + 5, 1) }}" y="{{ round($cy + 2.5, 1) }}"
                               font-size="{{ $labelFont }}" fill="{{ $labelColor }}" style="font-family: ui-monospace, monospace;"

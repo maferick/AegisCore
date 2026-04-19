@@ -103,6 +103,23 @@ class CharacterActivityMapController extends Controller
                 return $a;
             });
 
+            // BFS from actives first so we can tag every system with
+            // its hop distance — blade uses this to decide which
+            // names to label.
+            $depth = [];
+            foreach ($activeIds as $aid) $depth[$aid] = 0;
+            $queue = $activeIds;
+            while ($queue !== []) {
+                $u = array_shift($queue);
+                $d = $depth[$u];
+                if ($d >= 99) continue;
+                foreach ($adj[$u] ?? [] as $v => $_) {
+                    if (isset($depth[$v])) continue;
+                    $depth[$v] = $d + 1;
+                    $queue[] = $v;
+                }
+            }
+
             $regionIds = array_values(array_unique(array_column($activeMap, 'region_id')));
             $coords = DB::table('ref_solar_systems')
                 ->whereIn('region_id', $regionIds)
@@ -121,8 +138,7 @@ class CharacterActivityMapController extends Controller
                     'region_id' => (int) $sys->region_id,
                     'n' => 0,
                     'active' => false,
-                    // hop unused in full-region mode; keep for compat.
-                    'hop' => 0,
+                    'hop' => (int) ($depth[$sid] ?? 99),
                 ];
             }
             $shownFlip = array_flip(array_merge($activeIds, array_keys($neighborMap)));
