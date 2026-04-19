@@ -44,9 +44,12 @@ final class ZkillTheaterValueService
         $hourAligned = $mid->copy()->minute(0)->second(0)->format('YmdHi');
 
         $cacheKey = sprintf('zkill.theater.total.%s', $theater->public_slug ?: "{$theater->id}.{$hourAligned}");
-        return Cache::remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($theater, $hourAligned): ?float {
+        $cached = Cache::remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($theater, $hourAligned): ?float {
             return $this->fetch($theater->primary_system_id, $hourAligned);
         });
+        // Some cache drivers (Redis w/ serializer) return a stringified
+        // float on read — cast defensively to satisfy the ?float return.
+        return $cached === null ? null : (float) $cached;
     }
 
     private function fetch(int $systemId, string $hourAlignedTs): ?float
