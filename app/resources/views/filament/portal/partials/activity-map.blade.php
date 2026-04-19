@@ -27,13 +27,13 @@
                 $amAnsiblex = $region['ansiblex'] ?? [];
                 $amSov = $region['sov'] ?? [];
                 $amAll = array_merge($amActive, $amNeighbors);
+                $sovAllianceId = function (int $sid) use ($amSov): ?int {
+                    $o = $amSov[$sid] ?? null;
+                    return $o['alliance_id'] ?? null;
+                };
                 $sovText = function (int $sid) use ($amSov): string {
                     $o = $amSov[$sid] ?? null;
-                    if ($o === null) return '';
-                    $a = $o['alliance'] ?? null;
-                    $c = $o['corporation'] ?? null;
-                    if ($a && $c) return "{$a} · {$c}";
-                    return (string) ($a ?? $c ?? '');
+                    return $o['alliance'] ?? '';
                 };
                 $xs = array_column($amAll, 'x');
                 $ys = array_column($amAll, 'y');
@@ -172,19 +172,21 @@
                     @foreach (array_slice($amActive, 0, 6) as $sys)
                         @php
                             [$cx, $cy] = $toPx($sys['x'], $sys['y']);
-                            $sovLine = $sovText((int) $sys['id']);
+                            $sovAid = $sovAllianceId((int) $sys['id']);
+                            $sovName = $sovText((int) $sys['id']);
                         @endphp
                         <text x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 3, 1) }}"
                               font-size="11" fill="#e5e5e7" style="font-family: ui-monospace, monospace;"
                               stroke="#05070b" stroke-width="2.5" paint-order="stroke">
                             {{ $sys['name'] }}
                         </text>
-                        @if ($sovLine)
-                            <text x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 13, 1) }}"
-                                  font-size="7" fill="#94a3b8" style="font-family: ui-monospace, monospace;"
-                                  stroke="#05070b" stroke-width="2" paint-order="stroke">
-                                {{ \Illuminate\Support\Str::limit($sovLine, 38) }}
-                            </text>
+                        @if ($sovAid)
+                            <image x="{{ round($cx + 9, 1) }}" y="{{ round($cy + 5, 1) }}"
+                                   width="12" height="12"
+                                   href="https://images.evetech.net/alliances/{{ $sovAid }}/logo?size=32"
+                                   preserveAspectRatio="xMidYMid meet">
+                                <title>{{ $sovName }}</title>
+                            </image>
                         @endif
                     @endforeach
                 </svg>

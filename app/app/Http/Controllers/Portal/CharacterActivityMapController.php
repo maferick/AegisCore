@@ -161,19 +161,14 @@ class CharacterActivityMapController extends Controller
                 ->leftJoin('esi_entity_names AS ea', function ($j): void {
                     $j->on('ea.entity_id', '=', 's.alliance_id')->where('ea.category', 'alliance');
                 })
-                ->leftJoin('esi_entity_names AS ec', function ($j): void {
-                    $j->on('ec.entity_id', '=', 's.corporation_id')->where('ec.category', 'corporation');
-                })
                 ->whereIn('s.solar_system_id', $shownSovIds)
-                ->where(function ($q): void {
-                    $q->whereNotNull('s.alliance_id')->orWhereNotNull('s.corporation_id');
-                })
-                ->select('s.solar_system_id', 'ea.name AS alliance_name', 'ec.name AS corporation_name')
+                ->whereNotNull('s.alliance_id')
+                ->select('s.solar_system_id', 's.alliance_id', 'ea.name AS alliance_name')
                 ->get();
             foreach ($rows as $r) {
                 $sovByCid[(int) $r->solar_system_id] = [
+                    'alliance_id' => (int) $r->alliance_id,
                     'alliance' => $r->alliance_name ? (string) $r->alliance_name : null,
-                    'corporation' => $r->corporation_name ? (string) $r->corporation_name : null,
                 ];
             }
         }
