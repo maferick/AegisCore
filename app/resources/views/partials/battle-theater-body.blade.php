@@ -168,6 +168,33 @@
         'B' => '#ff3838',   // red  — Side B
         default => '#7a7a82',
     };
+
+    // N-side view model. Every per-side section iterates $sideList
+    // (auto-fit grid, compact 2×4 stats, share-bar segment, roster
+    // card, etc.). Colour palette is additive: A→red/cyan stays, C
+    // gains amber so third-party reads as a team not as grey filler.
+    // Ordered by isk_killed desc so the biggest contributor lands
+    // left-most on wide screens.
+    $sideList = [
+        [
+            'key' => S::SIDE_A, 'tone' => 'a', 'color' => '#4fd0d0',
+            'headline' => $sideAHeadline, 'sub' => $blocA, 'logo' => $flagA,
+            'totals' => $tA, 'eff' => $effA, 'bar' => $barA,
+        ],
+        [
+            'key' => S::SIDE_B, 'tone' => 'b', 'color' => '#ff3838',
+            'headline' => $sideBHeadline, 'sub' => $blocB, 'logo' => $flagB,
+            'totals' => $tB, 'eff' => $effB, 'bar' => $barB,
+        ],
+    ];
+    if ($hasSideC) {
+        $sideList[] = [
+            'key' => S::SIDE_C, 'tone' => 'c', 'color' => '#fbbf24',
+            'headline' => $sideCHeadline, 'sub' => null, 'logo' => $flagC,
+            'totals' => $tC, 'eff' => $effC, 'bar' => $barC,
+        ];
+    }
+    usort($sideList, fn ($x, $y) => (float) $y['totals']['isk_killed'] <=> (float) $x['totals']['isk_killed']);
 @endphp
 
 <style>
@@ -314,6 +341,45 @@
     .bt-pilot-link:hover .bt-pilot-clickable { background: rgba(255,56,56,0.06); }
     .bt-pilot-link:hover .km-attacker-name { color: #ff8080; }
     .bt-pilot-group-count { margin-left: auto; color: #7a7a82; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+    /* N-side generic layout. Replaces km-grid-3 for per-side sections —
+       wraps automatically when 2 sides, expands to 3 / 5 columns when
+       more sides exist or the screen is wide enough. --side-color is
+       passed through inline style="--side-color: …". */
+    .side-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; align-items: stretch; margin-bottom: 1.5rem; }
+    .side-card {
+        background: rgba(17,17,19,0.6);
+        border: 1px solid #26262b;
+        border-left: 2px solid var(--side-color, #7a7a82);
+        border-radius: 8px;
+        padding: 1rem 1.1rem;
+    }
+    .side-card h3 {
+        font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em;
+        color: var(--side-color, #7a7a82); margin: 0 0 0.6rem;
+        font-family: 'JetBrains Mono', monospace; font-weight: 700;
+    }
+    .side-card h3 .muted { color: #3a3a42; font-weight: 400; margin-left: 0.25rem; }
+    .side-card h3 .headline { color: #e5e5e7; font-weight: 600; margin-left: 0.25rem; text-transform: none; letter-spacing: 0; font-size: 0.78rem; }
+
+    /* Compact 2×4 stats tile inside each side-card. Tabular nums so
+       columns align across cards on wide screens. */
+    .side-stats { display: grid; grid-template-columns: 1fr 1fr; column-gap: 1rem; row-gap: 0.15rem; font-variant-numeric: tabular-nums; }
+    .side-stats .cell { display: flex; align-items: baseline; justify-content: space-between; padding: 0.25rem 0; border-bottom: 1px solid #1a1a1e; }
+    .side-stats .cell:nth-last-child(-n+2) { border-bottom: none; }
+    .side-stats .label { font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(229,229,231,0.45); font-family: 'JetBrains Mono', monospace; }
+    .side-stats .value { font-size: 0.85rem; color: rgba(229,229,231,0.92); font-family: 'JetBrains Mono', monospace; text-align: right; }
+    .side-stats .value.kill { color: #4ade80; font-weight: 700; }
+    .side-stats .value.loss { color: #ff3838; font-weight: 700; }
+    .side-stats .value.accent { color: var(--side-color, #e5a900); font-weight: 700; }
+
+    /* N-segment share-of-destruction bar (generalised from 3-way
+       teal/red/muted to any N using --side-color from the inline
+       style on each segment). */
+    .share-bar { height: 8px; border-radius: 4px; overflow: hidden; display: flex; background: #1a1a1e; margin-top: 1rem; }
+    .share-bar > span { display: block; height: 100%; background: var(--side-color, #7a7a82); }
+    .share-legend { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.35rem; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; }
+    .share-legend > span { color: var(--side-color, #7a7a82); }
 </style>
 
 {{-- ================================================================
@@ -435,21 +501,19 @@
          side's efficiency % (isk_killed / (isk_killed + isk_lost))
          so operators see both "who destroyed how much" (the bar)
          and "how well they traded" (the percentages). --}}
-    <div class="bt-bar">
-        <div class="bt-bar-a" style="width: {{ $barA }}%"></div>
-        <div class="bt-bar-b" style="width: {{ $barB }}%"></div>
-        <div class="bt-bar-c" style="width: {{ $barC }}%"></div>
+    <div class="share-bar">
+        @foreach ($sideList as $s)
+            <span style="--side-color: {{ $s['color'] }}; width: {{ $s['bar'] }}%"></span>
+        @endforeach
     </div>
-    <div class="bt-bar-legend">
-        <span class="a">Side A · {{ $effA }}% eff · {{ $barA }}% of destroyed</span>
-        <span class="b">Side B · {{ $effB }}% eff · {{ $barB }}% of destroyed</span>
-        @if ($hasSideC)
-            <span class="c">
-                Third parties
-                · {{ $effC !== null ? $effC.'% eff' : '—' }}
-                · {{ $barC }}% of destroyed
+    <div class="share-legend">
+        @foreach ($sideList as $s)
+            <span style="--side-color: {{ $s['color'] }};">
+                {{ $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'] }}
+                · {{ $s['eff'] !== null ? $s['eff'].'% eff' : '—' }}
+                · {{ $s['bar'] }}% of destroyed
             </span>
-        @endif
+        @endforeach
     </div>
 
     {{-- Public surface suppresses the "Set your coalition" nag —
@@ -466,96 +530,56 @@
 </div>
 
 {{-- ================================================================
-     SIDE SUMMARY — two or three cards, one per side
+     SIDE SUMMARY — compact 2×4 stats tile per side
      ================================================================ --}}
-@php
-    $summarySides = [
-        S::SIDE_A => [$sideAHeadline, $blocA, 'a', $tA],
-        S::SIDE_B => [$sideBHeadline, $blocB, 'b', $tB],
-    ];
-    if ($hasSideC) {
-        $summarySides[S::SIDE_C] = ['Other / third parties', null, 'c', $tC];
-    }
-@endphp
-<div class="{{ count($summarySides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
-    @foreach ($summarySides as $sideKey => $meta)
+<div class="side-columns">
+    @foreach ($sideList as $s)
         @php
-            [$label, $sub, $toneClass, $t] = $meta;
+            $t = $s['totals'];
             $traded = (float) ($t['isk_killed'] + $t['isk_lost']);
             $eff = $traded > 0 ? round($t['isk_killed'] / $traded * 100, 1) : null;
+            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
         @endphp
-        <div class="km-card">
-            <h3 class="bt-side-{{ $toneClass }}">
-                Side {{ $sideKey }}
-                <span class="muted">{{ $label }}</span>
+        <div class="side-card" style="--side-color: {{ $s['color'] }};">
+            <h3>
+                {{ $sideLabel }}
+                <span class="headline">{{ $s['headline'] }}</span>
+                @if ($s['sub'] && $s['sub'] !== $s['headline'])
+                    <span class="muted">· {{ $s['sub'] }} bloc</span>
+                @endif
             </h3>
-            @if ($sub && $sub !== $label)
-                <div class="bt-side-sub" style="margin-top: -0.5rem; margin-bottom: 0.5rem;">{{ $sub }} bloc</div>
-            @endif
-
-            <div class="km-stat">
-                <span class="km-stat-label">Pilots</span>
-                <span class="km-stat-value">{{ $t['pilots'] }}</span>
+            <div class="side-stats">
+                <div class="cell"><span class="label">Pilots</span><span class="value">{{ number_format($t['pilots']) }}</span></div>
+                <div class="cell"><span class="label">Losses</span><span class="value {{ $t['deaths'] > 0 ? 'loss' : '' }}">{{ number_format($t['deaths']) }}</span></div>
+                <div class="cell"><span class="label">Kills</span><span class="value">{{ number_format($t['kills']) }}</span></div>
+                <div class="cell"><span class="label">ISK dst</span><span class="value accent">{{ $formatIsk((float) $t['isk_killed']) }}</span></div>
+                <div class="cell"><span class="label">FB</span><span class="value">{{ number_format($t['final_blows']) }}</span></div>
+                <div class="cell"><span class="label">ISK lst</span><span class="value {{ $t['isk_lost'] > 0 ? 'loss' : '' }}">{{ $formatIsk((float) $t['isk_lost']) }}</span></div>
+                <div class="cell"><span class="label">Damage</span><span class="value">{{ number_format($t['damage_done']) }}</span></div>
+                <div class="cell"><span class="label">Eff</span><span class="value">{{ $eff !== null ? $eff.'%' : '—' }}</span></div>
             </div>
-            <div class="km-stat">
-                <span class="km-stat-label">Kills</span>
-                <span class="km-stat-value">{{ $t['kills'] }}</span>
-            </div>
-            <div class="km-stat">
-                <span class="km-stat-label">Final blows</span>
-                <span class="km-stat-value">{{ $t['final_blows'] }}</span>
-            </div>
-            <div class="km-stat">
-                <span class="km-stat-label">Losses</span>
-                <span class="km-stat-value">{{ $t['deaths'] }}</span>
-            </div>
-            <div class="km-stat">
-                <span class="km-stat-label">ISK destroyed</span>
-                <span class="km-stat-value {{ $t['isk_killed'] > 0 ? 'kill' : '' }}">{{ $formatIsk((float) $t['isk_killed']) }}</span>
-            </div>
-            <div class="km-stat">
-                <span class="km-stat-label">ISK lost</span>
-                <span class="km-stat-value {{ $t['isk_lost'] > 0 ? 'loss' : '' }}">{{ $formatIsk((float) $t['isk_lost']) }}</span>
-            </div>
-            <div class="km-stat">
-                <span class="km-stat-label">Damage done</span>
-                <span class="km-stat-value">{{ number_format($t['damage_done']) }}</span>
-            </div>
-            @if ($eff !== null)
-                <div class="km-stat">
-                    <span class="km-stat-label">Efficiency</span>
-                    <span class="km-stat-value">{{ $eff }}%</span>
-                </div>
-            @endif
         </div>
     @endforeach
 </div>
-
 {{-- ================================================================
      MOST VALUABLE KILLS per side
      ================================================================ --}}
-@if (!empty($most_valuable_kills[S::SIDE_A]) || !empty($most_valuable_kills[S::SIDE_B]) || !empty($most_valuable_kills[S::SIDE_C]))
-@php
-    $mvkSides = [
-        S::SIDE_A => ['Top kills — Side A', 'a', $sideAHeadline],
-        S::SIDE_B => ['Top kills — Side B', 'b', $sideBHeadline],
-    ];
-    if ($hasSideC || !empty($most_valuable_kills[S::SIDE_C])) {
-        $mvkSides[S::SIDE_C] = ['Top kills — Third parties', 'c', $sideCHeadline];
-    }
-@endphp
-<div class="{{ count($mvkSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
-    @foreach ($mvkSides as $sideKey => $meta)
-        @php [$title, $toneClass, $labelFor] = $meta; $rows = $most_valuable_kills[$sideKey] ?? []; @endphp
-        <div class="km-card">
-            <h3>{{ $title }} <span class="muted">· kills by {{ $labelFor }}</span></h3>
+@if (collect($sideList)->contains(fn ($s) => ! empty($most_valuable_kills[$s['key']])))
+<div class="side-columns">
+    @foreach ($sideList as $s)
+        @php
+            $rows = $most_valuable_kills[$s['key']] ?? [];
+            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+        @endphp
+        <div class="side-card" style="--side-color: {{ $s['color'] }};">
+            <h3>Top kills — {{ $sideLabel }} <span class="muted">· by {{ $s['headline'] }}</span></h3>
             @if ($rows === [])
-                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No kills credited to this side.</div>
+                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">—</div>
             @else
                 @foreach ($rows as $km)
                     <div class="km-attacker">
                         <img src="https://images.evetech.net/types/{{ $km['ship_type_id'] }}/render?size=64"
-                             referrerpolicy="no-referrer" class="bt-mvk-ship {{ $toneClass }}" alt="">
+                             referrerpolicy="no-referrer" class="bt-mvk-ship {{ $s['tone'] }}" style="border-color: {{ $s['color'] }}40;" alt="">
                         <div class="km-attacker-info">
                             <div class="km-attacker-name">{{ $km['ship_name'] }}</div>
                             <div class="km-attacker-corp">
@@ -565,7 +589,7 @@
                                 @endif
                             </div>
                         </div>
-                        <div class="km-attacker-damage">
+                        <div class="km-attacker-damage" style="font-variant-numeric: tabular-nums;">
                             <span style="color:#e5a900;font-weight:700;">{{ $formatIsk((float) $km['total_value']) }}</span>
                             <div style="font-size:0.6rem;color:#7a7a82;">{{ $km['attacker_count'] }} inv.</div>
                         </div>
@@ -580,26 +604,17 @@
 {{-- ================================================================
      SHIP COMPOSITION per side
      ================================================================ --}}
-@php
-    $compSides = [
-        S::SIDE_A => ['Composition — Side A', 'a', $sideAHeadline],
-        S::SIDE_B => ['Composition — Side B', 'b', $sideBHeadline],
-    ];
-    if ($hasSideC || !empty($composition[S::SIDE_C])) {
-        $compSides[S::SIDE_C] = ['Composition — Third parties', 'c', $sideCHeadline];
-    }
-@endphp
-<div class="{{ count($compSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
-    @foreach ($compSides as $sideKey => $meta)
+<div class="side-columns">
+    @foreach ($sideList as $s)
         @php
-            [$title, $toneClass, $labelFor] = $meta;
-            $rows = $composition[$sideKey] ?? [];
+            $rows = $composition[$s['key']] ?? [];
             $max = 0; foreach ($rows as $r) { if ($r['count'] > $max) $max = $r['count']; }
+            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
         @endphp
-        <div class="km-card">
-            <h3>{{ $title }} <span class="muted">· {{ $labelFor }}</span></h3>
+        <div class="side-card" style="--side-color: {{ $s['color'] }};">
+            <h3>Composition — {{ $sideLabel }} <span class="muted">· {{ $s['headline'] }}</span></h3>
             @if ($rows === [])
-                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No ships flown for this side.</div>
+                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">—</div>
             @else
                 @foreach ($rows as $r)
                     @php $pct = $max > 0 ? round($r['count'] / $max * 100) : 0; @endphp
@@ -607,10 +622,10 @@
                         <img src="https://images.evetech.net/types/{{ $r['sample_type_id'] }}/icon?size=32"
                              referrerpolicy="no-referrer" class="km-item-icon" alt="">
                         <div class="km-item-name">{{ $r['class'] }}</div>
-                        <div class="bt-comp-bar {{ $toneClass }}" style="max-width:120px;">
-                            <div style="width: {{ $pct }}%;"></div>
+                        <div class="bt-comp-bar" style="max-width:120px;">
+                            <div style="width: {{ $pct }}%; background: {{ $s['color'] }};"></div>
                         </div>
-                        <div class="km-item-value" style="color:#e5e5e7;min-width:30px;">{{ $r['count'] }}</div>
+                        <div class="km-item-value" style="color:#e5e5e7;min-width:30px;font-variant-numeric:tabular-nums;text-align:right;">{{ $r['count'] }}</div>
                     </div>
                 @endforeach
             @endif
@@ -621,22 +636,16 @@
 {{-- ================================================================
      TOP DAMAGE per side
      ================================================================ --}}
-@php
-    $dmgSides = [
-        S::SIDE_A => ['Top damage — Side A', 'a'],
-        S::SIDE_B => ['Top damage — Side B', 'b'],
-    ];
-    if ($hasSideC || !empty($top_damage[S::SIDE_C])) {
-        $dmgSides[S::SIDE_C] = ['Top damage — Third parties', 'c'];
-    }
-@endphp
-<div class="{{ count($dmgSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
-    @foreach ($dmgSides as $sideKey => $meta)
-        @php [$title, $toneClass] = $meta; $rows = $top_damage[$sideKey] ?? []; @endphp
-        <div class="km-card">
-            <h3>{{ $title }}</h3>
+<div class="side-columns">
+    @foreach ($sideList as $s)
+        @php
+            $rows = $top_damage[$s['key']] ?? [];
+            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+        @endphp
+        <div class="side-card" style="--side-color: {{ $s['color'] }};">
+            <h3>Top damage — {{ $sideLabel }}</h3>
             @if ($rows === [])
-                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No damage recorded.</div>
+                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">—</div>
             @else
                 @foreach ($rows as $r)
                     <div class="km-attacker">
@@ -693,20 +702,14 @@
 {{-- ================================================================
      ALLIANCE ROSTER per side
      ================================================================ --}}
-@php
-    $rosterSides = [
-        S::SIDE_A => ['Roster — Side A', 'a'],
-        S::SIDE_B => ['Roster — Side B', 'b'],
-    ];
-    if ($hasSideC) {
-        $rosterSides[S::SIDE_C] = ['Third parties', 'c'];
-    }
-@endphp
-<div class="{{ count($rosterSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
-    @foreach ($rosterSides as $sideKey => $meta)
-        @php [$title, $toneClass] = $meta; $rows = $roster_by_side[$sideKey] ?? collect(); @endphp
-        <div class="km-card">
-            <h3>{{ $title }} <span class="muted">· {{ $rows->count() }}</span></h3>
+<div class="side-columns">
+    @foreach ($sideList as $s)
+        @php
+            $rows = $roster_by_side[$s['key']] ?? collect();
+            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+        @endphp
+        <div class="side-card" style="--side-color: {{ $s['color'] }};">
+            <h3>Roster — {{ $sideLabel }} <span class="muted">· {{ $rows->count() }}</span></h3>
             @if ($rows->isEmpty())
                 <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No alliances.</div>
             @else
@@ -855,19 +858,8 @@
      PILOTS — grouped by side, km-attacker rows
      ================================================================ --}}
 @php
-    $pilotSides = [
-        S::SIDE_A => ['Side A', 'a', $sideAHeadline],
-        S::SIDE_B => ['Side B', 'b', $sideBHeadline],
-    ];
-    $pilotsByCSide = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === S::SIDE_C);
-    if ($hasSideC || $pilotsByCSide->isNotEmpty()) {
-        $pilotSides[S::SIDE_C] = ['Third parties', 'c', $sideCHeadline];
-    }
-
     // Build character_id => killmail_id lookup from the kill feed so
-    // pilots with a loss in this theater get a clickable row. Last
-    // kill wins when a pilot died more than once (usually means they
-    // reshipped).
+    // pilots with a loss in this theater get a clickable row.
     $lossKmByChar = [];
     foreach ($kill_feed as $km) {
         if (! empty($km['victim_id'])) {
@@ -875,25 +867,21 @@
         }
     }
     $killmailUrl = function (int $kmId) use ($hide_bloc_names): string {
-        // Portal viewers get the Filament-chrome'd page; public
-        // viewers get the standalone /kills/{id} page. Both render
-        // the same partial via KillmailViewData, and both include
-        // an outbound zKillboard link in the header.
         return $hide_bloc_names
             ? "/kills/{$kmId}"
             : "/portal/killmails/{$kmId}";
     };
 @endphp
-<div class="{{ count($pilotSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
-    @foreach ($pilotSides as $sideKey => $meta)
+<div class="side-columns">
+    @foreach ($sideList as $s)
         @php
-            [$label, $toneClass, $sub] = $meta;
-            $sidePilots = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $sideKey)->values();
+            $sidePilots = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $s['key'])->values();
+            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
         @endphp
-        <div class="km-card">
-            <h3>Pilots — {{ $label }} <span class="muted">· {{ $sidePilots->count() }}</span></h3>
-            <div class="bt-pilot-group-head {{ $toneClass }}">
-                @if ($sub) <span style="color:#e5e5e7;font-weight:600;letter-spacing:0.05em;text-transform:none;">{{ $sub }}</span> @endif
+        <div class="side-card" style="--side-color: {{ $s['color'] }};">
+            <h3>Pilots — {{ $sideLabel }} <span class="muted">· {{ $sidePilots->count() }}</span></h3>
+            <div class="bt-pilot-group-head {{ $s['tone'] }}" style="color: {{ $s['color'] }};">
+                @if ($s['headline']) <span style="color:#e5e5e7;font-weight:600;letter-spacing:0.05em;text-transform:none;">{{ $s['headline'] }}</span> @endif
             </div>
             @if ($sidePilots->isEmpty())
                 <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No pilots.</div>
