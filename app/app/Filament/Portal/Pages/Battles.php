@@ -57,6 +57,27 @@ class Battles extends Page implements HasTable
         return $table
             ->query(function () use ($viewerCorpId, $viewerAllianceIds): Builder {
                 $q = BattleTheater::query()->with(['primarySystem:id,name', 'region:id,name']);
+
+                // Listing threshold: require ≥ 2 distinct alliances that
+                // each fielded ≥ 20 pilots on this theater. Approximates
+                // "Side A and Side B each have 20+ pilots" without running
+                // the full side-resolver per row; third-party clusters
+                // (lone unaffiliated pilots) don't satisfy the alliance
+                // gate and therefore don't prop up the count on their own.
+                // Nested-nested subquery can't reach the outer alias in
+                // MariaDB, so use whereIn against the pre-aggregated set.
+                $q->whereIn('battle_theaters.id', function ($sub): void {
+                    $sub->select('theater_id')
+                        ->from(DB::raw('(SELECT theater_id, alliance_id
+                                            FROM battle_theater_participants
+                                           WHERE alliance_id > 0
+                                           GROUP BY theater_id, alliance_id
+                                          HAVING COUNT(DISTINCT character_id) >= 20
+                                         ) sides'))
+                        ->groupBy('theater_id')
+                        ->havingRaw('COUNT(*) >= 2');
+                });
+
                 if ($viewerCorpId !== null || $viewerAllianceIds !== []) {
                     // Threshold for "actively involved" — a random
                     // single pilot who happened to warp through shouldn't

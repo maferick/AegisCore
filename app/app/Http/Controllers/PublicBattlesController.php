@@ -26,6 +26,20 @@ class PublicBattlesController
     {
         $battles = BattleTheater::query()
             ->with(['primarySystem:id,name,security_status', 'region:id,name'])
+            // Listing threshold: require ≥ 2 alliances with ≥ 20 pilots
+            // each — filters out solo / small roams that don't read as
+            // "battles", without counting third parties.
+            ->whereIn('battle_theaters.id', function ($sub): void {
+                $sub->select('theater_id')
+                    ->from(\Illuminate\Support\Facades\DB::raw('(SELECT theater_id, alliance_id
+                                        FROM battle_theater_participants
+                                       WHERE alliance_id > 0
+                                       GROUP BY theater_id, alliance_id
+                                      HAVING COUNT(DISTINCT character_id) >= 20
+                                     ) sides'))
+                    ->groupBy('theater_id')
+                    ->havingRaw('COUNT(*) >= 2');
+            })
             ->orderByDesc('end_time')
             ->limit(50)
             ->get();
