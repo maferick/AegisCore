@@ -383,8 +383,9 @@
                                                     <div style="font-size:0.62rem; color:{{ $rel === 'hostile_bloc' ? '#fca5a5' : '#7a7a82' }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['alliance_name'] }}</div>
                                                 @endif
                                             </div>
-                                            <span style="color:#86efac; font-size:0.7rem;" title="{{ $p['distinct_interactions'] }} distinct sessions · {{ number_format($p['total_weight'], 1) }} weighted">
-                                                {{ $p['distinct_interactions'] }}×
+                                            @php $fcN = (int) ($p['event_count'] ?? $p['distinct_interactions'] ?? 0); @endphp
+                                            <span style="color:#86efac; font-size:0.7rem;" title="{{ $fcN }} shared killmails · {{ $p['distinct_interactions'] ?? 0 }} sessions">
+                                                {{ $fcN }}×
                                             </span>
                                         </div>
                                     @endforeach

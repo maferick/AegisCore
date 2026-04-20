@@ -35,27 +35,56 @@ final class CharacterGraphInsightService
      */
     public function flightCrew(int $cid, int $limit = 8): array
     {
-        return $this->safeCache("ci.insight.fc.{$cid}.v3.{$limit}", function () use ($cid, $limit): array {
+        return $this->safeCache("ci.insight.fc.{$cid}.v4.{$limit}", function () use ($cid, $limit): array {
             $c = $this->client();
             if ($c === null) return [];
-            // Sort by distinct_interactions (number of separate flight
-            // sessions) before total_weight. Session count is a more
-            // honest "fleet buddy" signal than raw weight — big blob
-            // fights have their per-event weight dampened to near zero
-            // via 1/sqrt(attacker_count) × 0.15 theater floor, which
-            // buries genuinely frequent co-fliers behind a few small-
-            // gang companions.
+            // For "who does this pilot fly with?" the honest signal is
+            // raw shared-killmail count. Every co-flight counts the
+            // same whether it was a 500-pilot blob or a 3-man roam.
+            // The weighted/dampened total_weight exists for counter-
+            // intel anomaly detection, which is a different use case
+            // and a different consumer.
             $res = $c->run(
                 'MATCH (me:CICharacter {character_id: $cid})-[r:CI_CO_OCCURS_WITH]-(peer:CICharacter)
                  RETURN peer.character_id AS cid, peer.name AS name, peer.current_alliance_id AS aid,
-                        r.total_weight AS tw, r.distinct_interactions AS di, r.last_seen_at AS last
-                 ORDER BY r.distinct_interactions DESC, r.total_weight DESC
+                        r.event_count AS ec, r.distinct_interactions AS di,
+                        r.total_weight AS tw, r.last_seen_at AS last
+                 ORDER BY r.event_count DESC, r.distinct_interactions DESC
                  LIMIT $lim',
                 ['cid' => $cid, 'lim' => $limit],
             );
-            $rows = $this->hydrate($res);
+            $rows = $this->hydrateFlightCrew($res);
             return $this->tagRelationship($cid, $rows);
         });
+    }
+
+    /**
+     * Flight-crew hydration carries event_count separately from the
+     * session count so the UI can render the raw "N shared kills" and
+     * still keep the weighted / session fields for later consumers.
+     *
+     * @param  mixed  $res
+     * @return list<array<string, mixed>>
+     */
+    private function hydrateFlightCrew($res): array
+    {
+        $out = [];
+        foreach ($res as $row) {
+            $peerCid = (int) ($row->get('cid') ?? 0);
+            if ($peerCid <= 0) continue;
+            $aid = $row->get('aid');
+            $last = $row->get('last');
+            $out[] = [
+                'character_id' => $peerCid,
+                'name' => $row->get('name') ? (string) $row->get('name') : null,
+                'alliance_id' => $aid ? (int) $aid : null,
+                'event_count' => (int) ($row->get('ec') ?? 0),
+                'distinct_interactions' => (int) ($row->get('di') ?? 0),
+                'total_weight' => (float) ($row->get('tw') ?? 0),
+                'last_seen_at' => $last ? (string) $last : null,
+            ];
+        }
+        return $out;
     }
 
     /**
