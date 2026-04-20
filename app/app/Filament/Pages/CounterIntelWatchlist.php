@@ -30,7 +30,9 @@ class CounterIntelWatchlist extends Page
 
     protected static ?string $title = 'Counter-Intel · Watchlist';
 
-    protected static ?string $slug = 'counter-intel/watchlist';
+    // Distinct slug (no `/` between ci and watchlist) so the sibling
+    // CounterIntelDossier {character} wildcard doesn't swallow it.
+    protected static ?string $slug = 'ci-watchlist';
 
     protected string $view = 'filament.pages.counter-intel-watchlist';
 

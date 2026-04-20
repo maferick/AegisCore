@@ -25,7 +25,9 @@ class CounterIntelCompare extends Page
 
     protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
 
-    protected static ?string $slug = 'counter-intel/compare';
+    // Distinct slug to avoid being swallowed by the sibling
+    // CounterIntelDossier {character} wildcard.
+    protected static ?string $slug = 'ci-compare';
 
     protected static ?string $title = 'Counter-Intel · Compare';
 
