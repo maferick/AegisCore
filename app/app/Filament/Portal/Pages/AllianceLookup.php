@@ -79,6 +79,10 @@ class AllianceLookup extends Page
             ->where('category', 'alliance')
             ->value('name');
 
+        $leadership = DB::table('alliance_leadership')
+            ->where('alliance_id', $aid)
+            ->first();
+
         $blocRow = DB::table('coalition_entity_labels AS cel')
             ->leftJoin('coalition_blocs AS cb', 'cb.id', '=', 'cel.bloc_id')
             ->leftJoin('coalition_relationship_types AS crt', 'crt.id', '=', 'cel.relationship_type_id')
@@ -126,6 +130,16 @@ class AllianceLookup extends Page
                 'bloc' => $blocRow->bloc ?? null,
                 'role' => $blocRow->role ?? null,
                 'pilot_count' => $pilotCount,
+                'creator_character_id' => $leadership?->creator_character_id ? (int) $leadership->creator_character_id : null,
+                'creator_name' => $leadership?->creator_character_id
+                    ? DB::table('esi_entity_names')->where('entity_id', $leadership->creator_character_id)->where('category', 'character')->value('name')
+                    : null,
+                'executor_corporation_id' => $leadership?->executor_corporation_id ? (int) $leadership->executor_corporation_id : null,
+                'executor_name' => $leadership?->executor_corporation_id
+                    ? DB::table('esi_entity_names')->where('entity_id', $leadership->executor_corporation_id)->where('category', 'corporation')->value('name')
+                    : null,
+                'ticker' => $leadership?->ticker,
+                'date_founded' => $leadership?->date_founded,
             ],
             'headline' => $headline,
             'layers' => $layers,

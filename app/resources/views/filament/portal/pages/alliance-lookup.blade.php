@@ -63,7 +63,12 @@
                 <img src="https://images.evetech.net/alliances/{{ $a['id'] }}/logo?size=64"
                      referrerpolicy="no-referrer" style="width:56px;height:56px;border-radius:8px;" alt="">
                 <div style="flex:1;">
-                    <div style="font-size:1.1rem; font-weight:700; color:#e5e5e7;">{{ $a['name'] }}</div>
+                    <div style="font-size:1.1rem; font-weight:700; color:#e5e5e7;">
+                        {{ $a['name'] }}
+                        @if (! empty($a['ticker']))
+                            <span style="font-size:0.7rem; color:#7a7a82; font-weight:500;">&lt;{{ $a['ticker'] }}&gt;</span>
+                        @endif
+                    </div>
                     <div style="font-size:0.72rem; color:#9ca3af; margin-top:0.15rem;">
                         @if ($a['bloc'])
                             <span style="color:#86efac;">{{ $a['bloc'] }}{{ $a['role'] ? ' · '.$a['role'] : '' }}</span>
@@ -72,6 +77,20 @@
                         @endif
                         · <span style="color:#cbd5e1;">{{ number_format($a['pilot_count']) }} active pilots (90d)</span>
                     </div>
+                    @if (! empty($a['creator_name']) || ! empty($a['executor_name']))
+                        <div style="font-size:0.68rem; color:#a5b4fc; margin-top:0.25rem;">
+                            @if ($a['creator_name'])
+                                ⭐ Founder:
+                                <a href="/portal/characters/lookup?cid={{ $a['creator_character_id'] }}" style="color:#fde047; text-decoration:none;">{{ $a['creator_name'] }}</a>
+                            @endif
+                            @if ($a['executor_name'])
+                                · Executor corp: <span style="color:#e5e5e7;">{{ $a['executor_name'] }}</span>
+                            @endif
+                            @if ($a['date_founded'])
+                                · Founded {{ \Carbon\Carbon::parse($a['date_founded'])->format('Y-m-d') }}
+                            @endif
+                        </div>
+                    @endif
                 </div>
             </div>
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:0.6rem; margin-top:0.8rem;">
@@ -102,14 +121,20 @@
                     <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $roleColor[$roleKey] ?? '#9ca3af' }}; margin-bottom:0.5rem;">{{ $label }}</h3>
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:0.5rem;">
                         @foreach ($pilots as $p)
+                            @php $isFounder = ! empty($a['creator_character_id']) && (int) $a['creator_character_id'] === (int) $p['character_id']; @endphp
                             <a href="/portal/characters/lookup?cid={{ $p['character_id'] }}"
                                style="display:flex; gap:0.5rem; align-items:center; text-decoration:none;
-                                      background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08);
+                                      background:rgba(255,255,255,0.02); border:1px solid {{ $isFounder ? 'rgba(250,204,21,0.35)' : 'rgba(255,255,255,0.08)' }};
                                       border-radius:5px; padding:0.4rem 0.6rem; color:#e5e5e7;">
                                 <img src="https://images.evetech.net/characters/{{ $p['character_id'] }}/portrait?size=32"
                                      referrerpolicy="no-referrer" style="width:28px;height:28px;border-radius:50%;" alt="">
                                 <div style="flex:1; min-width:0;">
-                                    <div style="font-size:0.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['name'] }}</div>
+                                    <div style="font-size:0.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        {{ $p['name'] }}
+                                        @if ($isFounder)
+                                            <span title="Alliance founder — anomaly signals on this pilot are structurally expected" style="color:#fde047; font-size:0.62rem;">⭐</span>
+                                        @endif
+                                    </div>
                                     <div style="font-size:0.6rem; color:#7a7a82;">
                                         {{ round($p['role_pct'] * 100) }}% role · {{ number_format($p['killmails_attacker']) }} kms
                                     </div>
