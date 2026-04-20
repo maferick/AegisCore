@@ -108,25 +108,30 @@ def _load(conn, cfg: Config, window_end: date) -> tuple[list[dict], dict[int, st
 
 
 def _ensure_constraint(sess) -> None:
+    # Canonical key on alliances is `alliance_id` (existing counter-
+    # intel convention). Every alliance node carries both labels
+    # (:Alliance for bloc-intel Cypher, :CIAlliance for counter-intel
+    # legacy queries) so a single node serves both subsystems.
     sess.run(
-        "CREATE CONSTRAINT alliance_id_uniq IF NOT EXISTS "
-        "FOR (a:Alliance) REQUIRE a.id IS UNIQUE"
+        "CREATE CONSTRAINT ci_alliance_id_uniq IF NOT EXISTS "
+        "FOR (a:CIAlliance) REQUIRE a.alliance_id IS UNIQUE"
     )
 
 
 def _merge_alliances(sess, names: dict[int, str]) -> int:
     # Chunked MERGE: one UNWIND per 500 alliances keeps the Bolt
     # frame under the default 32 MB cap by a wide margin.
-    payload = [{"id": aid, "name": name} for aid, name in names.items()]
+    payload = [{"alliance_id": aid, "name": name} for aid, name in names.items()]
     written = 0
     for i in range(0, len(payload), 500):
         chunk = payload[i:i + 500]
         sess.run(
             """
             UNWIND $rows AS r
-            MERGE (a:Alliance {id: r.id})
-              ON CREATE SET a.name = r.name
-              ON MATCH  SET a.name = r.name
+            MERGE (a:CIAlliance {alliance_id: r.alliance_id})
+              SET a:Alliance,
+                  a.name = r.name,
+                  a.id = r.alliance_id
             """,
             rows=chunk,
         )
@@ -150,8 +155,8 @@ def _write_edges(sess, rows: list[dict], window_end: date, window_days: int) -> 
     payload = []
     for r in rows:
         payload.append({
-            "a": int(r["alliance_a_id"]),
-            "b": int(r["alliance_b_id"]),
+            "a_id": int(r["alliance_a_id"]),
+            "b_id": int(r["alliance_b_id"]),
             "n_obs": float(r["n_obs"] or 0),
             "weighted_n_obs": float(r["weighted_n_obs"] or 0),
             "weighted_same_side": float(r["weighted_same_side"] or 0),
@@ -173,8 +178,8 @@ def _write_edges(sess, rows: list[dict], window_end: date, window_days: int) -> 
         sess.run(
             """
             UNWIND $rows AS r
-            MATCH (a:Alliance {id: r.a})
-            MATCH (b:Alliance {id: r.b})
+            MATCH (a:CIAlliance {alliance_id: r.a_id})
+            MATCH (b:CIAlliance {alliance_id: r.b_id})
             MERGE (a)-[e:ALLIANCE_RELATES_TO {window_end: $we, window_days: $wd}]->(b)
               SET e.n_obs = r.n_obs,
                   e.weighted_n_obs = r.weighted_n_obs,
