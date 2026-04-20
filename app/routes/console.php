@@ -243,6 +243,29 @@ Schedule::command('neo4j:sync-signals')
     ->onOneServer()
     ->name('neo4j-sync-signals');
 
+// Spatial bridges + ansiblex rarely move — hourly is overkill. Daily
+// at 03:10 staggered past the scheduler warmups above.
+Schedule::command('neo4j:sync-spatial')
+    ->dailyAt('03:10')
+    ->onOneServer()
+    ->name('neo4j-sync-spatial');
+
+// Hull + doctrine taxonomy — ship_class_category_mapping is static,
+// auto_doctrines churns daily as the learner catches new fits.
+Schedule::command('neo4j:sync-taxonomy')
+    ->dailyAt('03:20')
+    ->onOneServer()
+    ->name('neo4j-sync-taxonomy');
+
+// Theater projection is heavier (2M+ FOUGHT_IN edges) — weekly
+// is enough for recurring spy-cluster analysis; on-demand via
+// `php artisan neo4j:sync-theaters --days=N` covers ad-hoc deeper
+// windows.
+Schedule::command('neo4j:sync-theaters')
+    ->weeklyOn(1, '03:40')
+    ->onOneServer()
+    ->name('neo4j-sync-theaters');
+
 // Allegiance graph backfill — project the last 24h of locked battle
 // theaters into the Neo4j allegiance graph so the resolver's
 // historical-allegiance tiebreaker accumulates signal on its own
