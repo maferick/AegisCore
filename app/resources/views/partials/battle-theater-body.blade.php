@@ -58,6 +58,44 @@
     // assignments fire; every other pilot gets no badge (silent
     // per Spec 5 epistemic stance).
     $roleByChar = $role_by_character ?? [];
+
+    // Crowded-Monitor guard. When a side fields several Monitors
+    // (45534, FC-seat command ship), the role pipeline picks one of
+    // them as "the FC" but the signal is noisy — any of those five
+    // pilots could be the actual fleet boss, and flagging one looks
+    // presumptuous. Demote FC → Cmd on that side when there are 3+
+    // Monitors, so we still show a leadership-ish badge without
+    // committing to a specific pilot.
+    $_monitorTypeIdForRoles = 45534;
+    $_monitorSidesFlooded = [];
+    if (isset($sides, $participants, $ships_by_character)) {
+        $countsBySide = [];
+        foreach ($participants as $_p) {
+            $_cid = (int) $_p->character_id;
+            $_ships = $ships_by_character[$_cid] ?? [];
+            if (! isset($_ships[$_monitorTypeIdForRoles])) continue;
+            $_side = $sides->sideByCharacterId[$_cid] ?? 'C';
+            $countsBySide[$_side] = ($countsBySide[$_side] ?? 0) + 1;
+        }
+        foreach ($countsBySide as $_side => $_n) {
+            if ($_n >= 3) $_monitorSidesFlooded[$_side] = true;
+        }
+    }
+    // Rewrite any 'fc' in a flooded side down to 'command'.
+    if ($_monitorSidesFlooded !== []) {
+        $_rewritten = [];
+        foreach ($roleByChar as $_cid => $_role) {
+            if ($_role === 'fc') {
+                $_side = $sides->sideByCharacterId[(int) $_cid] ?? 'C';
+                if (isset($_monitorSidesFlooded[$_side])) {
+                    $_rewritten[$_cid] = 'command';
+                    continue;
+                }
+            }
+            $_rewritten[$_cid] = $_role;
+        }
+        $roleByChar = $_rewritten;
+    }
     $roleByKmChar = $role_by_killmail_character ?? [];
     $roleLabel = fn (string $r): string => match ($r) {
         'fc' => 'FC',
@@ -907,11 +945,41 @@
             ? "/kills/{$kmId}"
             : "/portal/killmails/{$kmId}";
     };
+
+    // Hull priority map. Monitors (FC-seat command ship, type 45534)
+    // surface at the absolute top of each side's pilot column, then
+    // capitals (dreadnought / carrier / supercarrier / titan / force-
+    // aux / lancer groups) — matches the operator mental model of
+    // "leadership first, then heavy hulls, then everyone else". All
+    // type_ids referenced across the battle get their group_id looked
+    // up once so the sort closure is cheap.
+    $_monitorTypeId = 45534;
+    $_capitalGroupIds = [485, 547, 659, 30, 1538, 4594];
+    $_typeIdsInBattle = [];
+    foreach ($ships_by_character as $rows) {
+        foreach ((array) $rows as $tid => $_n) $_typeIdsInBattle[(int) $tid] = true;
+    }
+    $_groupByType = $_typeIdsInBattle
+        ? \Illuminate\Support\Facades\DB::table('ref_item_types')
+            ->whereIn('id', array_keys($_typeIdsInBattle))
+            ->pluck('group_id', 'id')->all()
+        : [];
+    $pilotHullPriority = function (int $cid) use ($primaryShipOf, $_monitorTypeId, $_capitalGroupIds, $_groupByType): int {
+        $ship = $primaryShipOf($cid);
+        $tid = (int) ($ship['type_id'] ?? 0);
+        if ($tid === $_monitorTypeId) return 0;
+        $gid = (int) ($_groupByType[$tid] ?? 0);
+        if (in_array($gid, $_capitalGroupIds, true)) return 1;
+        return 2;
+    };
 @endphp
 <div class="side-columns">
     @foreach ($sideList as $s)
         @php
-            $sidePilots = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $s['key'])->values();
+            $sidePilots = $participants
+                ->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $s['key'])
+                ->sortBy(fn ($p) => [$pilotHullPriority((int) $p->character_id), -((float) $p->isk_lost)])
+                ->values();
             $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
