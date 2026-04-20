@@ -1,238 +1,410 @@
-# Find-the-spy + Neo4j upgrade plan (2026-04-20)
+# Find-the-spy + Neo4j upgrade plan (v2, 2026-04-20)
 
 Owner: director / counter-intel team
-Focus: decision latency on the "is this pilot a spy?" call and make Neo4j
-carry more of the weight instead of just being a graph store.
+Scope: decision latency on "is this pilot a spy?" and convert Neo4j from
+passive graph store to active intel engine using the full stack
+available: **GDS 2026.03 + APOC 425-proc core + APOC Extended (ML, JDBC,
+triggers, import/export)**.
+
+v1 of this doc (committed 81f73ce) under-counted the data we have and
+ignored APOC entirely. v2 rebuilds against the real inventory.
 
 ---
 
-## Part 1 — UX audit summary (from portal walk-through)
+## Part 0 — actual data inventory (what we have *right now*)
 
-### Current state
+### Neo4j state
 
-Counter-intel surfaces data across three places:
-
-1. **/admin/counter-intel review queue** — 100-char priority list sorted by
-   `review_priority_band` + 10 metric columns. Click through to dossier.
-2. **/admin/counter-intel/{character} dossier** — 5 templated sentences + a
-   score strip + a two-column "hostile history vs full timeline" view.
-3. **Portal surfaces** — CharacterLookup, AllianceLookup, Dashboard
-   character card. These mix role info, flight crew, arch-enemies,
-   structural rank. Useful but scattered across three pages.
-
-### Top 10 friction points (blockers to fast triage)
-
-| # | Issue | Impact |
+| Label | Count | Source |
 |---|---|---|
-| 1 | No side-by-side pilot compare — clicks + mental math only | **high** |
-| 2 | Dossier has prose, no 1-line verdict or next-action | **high** |
-| 3 | Band buckets 100s of rows with no sub-rank within a band | med |
-| 4 | No watchlist / persistent case file | **high** |
-| 5 | `cohort_confidence` never explained (what's "medium"?) | med |
-| 6 | AllianceLookup doesn't flag anomaly-band pilots in the command layer | **high** |
-| 7 | Flight-crew / arch-enemies list has no anomaly-coloring of partners | med |
-| 8 | Timelines flat — no coordinated-join / bloc-flip overlay | med |
-| 9 | Typical suspicion → verdict path takes 3–4 clicks + reading | **high** |
-| 10 | No "similar-to-flagged-set" view — `CI_SIMILAR_TO` isn't rendered | med |
+| CICharacter | 204,211 | counter_intel projection |
+| Character | 17,965 | battle_graph projection (separate!) |
+| CIAlliance | 8,064 | old bloc-overlay in CI graph |
+| System | 5,485 | universe sync |
+| Station | 5,150 | universe sync |
+| Alliance | 843 | bloc_intel projection (new today) |
+| Constellation | 799 | universe sync |
+| Region | 70 | universe sync |
 
-### Top 10 missing "find-the-spy" features
-
-| # | Feature | Data already exists? |
+| Edge | Count | Source |
 |---|---|---|
-| 1 | 2-second triage card (band + reason 1-liner per row) | yes |
-| 2 | Cohort baseline mini-chart on dossier (p5/p50/p95) | yes |
-| 3 | Temporal anomaly flag — "joined red within N days" + co-join overlay | yes |
-| 4 | Watchlist with persisted notes + cross-session reload | new table |
-| 5 | Side-by-side dossier compare (?compare=A,B,C) | yes |
-| 6 | Anomaly badges on AllianceLookup role layers | yes |
-| 7 | Ring-expand — one click to see full co-flight community + bands | yes |
-| 8 | Mini co-flight graph on dossier (top 3 neighbours, coloured by band) | yes (Neo4j) |
-| 9 | Coordinated-join timeline (who else joined same alliance same week) | yes |
-| 10 | Watchlist CSV / PDF export for hand-off to leadership | yes |
+| CI_SIMILAR_TO | 11.1M | counter_intel similarity |
+| CO_ENGAGED | 7.26M | battle_graph |
+| CI_CO_OCCURS_WITH | 3.83M | counter_intel |
+| CI_MEMBER_OF | 471K | character↔alliance (CI side) |
+| CI_FOUGHT_AGAINST | 163K | counter_intel |
+| ALLIED_WITH | 12.8K | battle allegiance |
+| OPPOSED | 9.4K | battle allegiance |
+| JUMPS_TO | 6.98K | universe gate edges |
+| ALLIANCE_RELATES_TO | 4,948 | bloc_intel (today) |
 
-**All 10 are renderable from existing `ci_character_anomalies_rolling` +
-Neo4j edges.** No new backends required for #1–10 except the watchlist
-(item 4) which needs one `ci_review_watchlist` table.
+**Dupe alert**: `Character` (18K, battle_graph) and `CICharacter` (204K,
+counter_intel) are the same real-world entity. Ditto `Alliance` vs
+`CIAlliance`. Schema split = parallel subgraphs that don't query together.
+
+### MariaDB — tables not yet in Neo4j but should be
+
+| Table | Rows | What it'd become |
+|---|---|---|
+| `character_corporation_history` | 4.4M | `(c:Character)-[:IN_CORP {start, end}]->(:Corporation)` |
+| `corporation_alliance_history` | 161K | `(:Corporation)-[:IN_ALLIANCE {start, end}]->(:Alliance)` |
+| `alliance_leadership` | 1,616 | `Alliance` props + `(:Character)-[:FOUNDED]->(:Alliance)` |
+| `corporation_fw_enlistment` | 4,632 | `Corporation` props (566 enlisted) |
+| `ci_character_anomalies_rolling` | 37K | `CICharacter` props (score, band, bridge pct, etc.) |
+| `ci_character_graph_features_rolling` | 51K | `CICharacter` props (ring_id, size, bridge_internal_pct) |
+| `alliance_pair_behavior_rolling` | 10K | `ALLIANCE_RELATES_TO` props (already projecting) |
+| `battle_character_role_inference` | 154K | per-battle `ROLE_IN` edges or aggregated `Character` props |
+| `battle_theater_participants` | 7.47M | `(:Character)-[:FOUGHT_IN {side, role}]->(:Theater)` |
+| `character_role_historical_priors` | 5.3K | `Character` props (`prior_fc`, `prior_logi`, etc.) |
+| `ship_class_category_mapping` | 334 | `(:Hull)-[:IN_CLASS]->(:HullClass)` taxonomy |
+| `coalition_entity_labels` | 62 | `Alliance` / `Corporation` `bloc_id` props |
+| `coalition_blocs` | 6 | `(:Bloc)` nodes + `(:Alliance)-[:IN_BLOC]->(:Bloc)` |
+| `system_sovereignty` | 8,878 | `(:System).sov_holder_id` + `(:Alliance)-[:HOLDS_SOV]->(:System)` |
+| `ansiblex_jump_bridges` | 33 | `(:System)-[:ANSIBLEX_TO]->(:System)` |
+| `system_titan_bridges` | 372K | `(:System)-[:TITAN_RANGE]->(:System)` |
+| `auto_doctrine_pilots` | 432K | `(:Character)-[:FLIES_DOCTRINE {n_kills}]->(:Doctrine)` |
+
+That's ~14M additional graph edges we could carry if we projected
+everything. Current graph has ~22.7M edges. **Headroom is plenty** — Neo4j
+5.x on a 64-GB host handles 100M+ edges cleanly.
+
+### Available plugins (verified live)
+
+- **APOC** — 425 procedures. Key ones we aren't using:
+  - `apoc.load.jdbc` / `apoc.load.jdbcUpdate` — direct MariaDB→Neo4j in
+    Cypher, replaces Python ETL for simple sync paths.
+  - `apoc.periodic.iterate` — batched property writes, essential for
+    the 7.47M participants projection.
+  - `apoc.trigger.*` — reactive graph updates; could drive live sync
+    from outbox events.
+  - `apoc.export.graphml` / `apoc.import.graphml` — dev / snapshot /
+    portable query packs.
+  - `apoc.ml.bedrock.*` — AWS Bedrock chat / completion / embedding
+    callable from Cypher. GraphRAG becomes one-liner procedures.
+  - `apoc.ml.cypher` / `apoc.ml.fromCypher` — LLM→Cypher and back.
+  - `apoc.text.sorensenDiceSimilarity` / `apoc.coll.intersection` —
+    lightweight in-query similarity helpers.
+- **GDS 2026.03** — Filtered KNN, FastRP, HashGNN, Node2Vec, Leiden,
+  Louvain, link-prediction pipelines, node-classification pipelines.
 
 ---
 
-## Part 2 — Neo4j upgrade plan
+## Part 1 — UX audit (condensed — unchanged since v1)
 
-AegisCore uses Neo4j today for: CI character graph (`CICharacter` +
-`CI_CO_OCCURS_WITH`, `CI_FOUGHT_AGAINST`, `CI_SIMILAR_TO`), the universe
-graph (`System` / `Region` / `JUMPS_TO`), and the new alliance bloc-intel
-graph (`Alliance` + `ALLIANCE_RELATES_TO`). Leiden fires once for counter-
-intel ring detection. Not much else.
+### Friction (ranked by blast radius)
 
-Neo4j 5.x + GDS 2026.03 give us far more. Research sources:
-- [Neo4j GDS Leiden algorithm](https://neo4j.com/docs/graph-data-science/current/algorithms/leiden/)
-- [Node Similarity](https://neo4j.com/docs/graph-data-science/current/algorithms/node-similarity/)
-- [Filtered K-Nearest Neighbors](https://neo4j.com/docs/graph-data-science/current/algorithms/filtered-knn/)
-- [Node2Vec embeddings](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-embeddings/node2vec/)
-- [Link prediction pipelines](https://neo4j.com/docs/graph-data-science/current/machine-learning/linkprediction-pipelines/link-prediction/)
-- [Node classification pipelines](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-property-prediction/nodeclassification-pipelines/node-classification/)
-- [Cypher query tuning](https://neo4j.com/docs/cypher-manual/current/planning-and-tuning/query-tuning/)
-- [Temporal graph fraud detection](https://neo4j.com/blog/developer/mastering-fraud-detection-temporal-graph/)
+1. No side-by-side pilot compare → mental math across dossier tabs.
+2. Dossier = prose, no 1-line verdict or suggested next action.
+3. Band buckets hundreds of pilots with no within-band rank.
+4. No watchlist / persistent case file.
+5. `cohort_confidence` never explained.
+6. `AllianceLookup` has no anomaly badges in the command layer.
+7. Flight-crew / arch-enemies partners aren't anomaly-coloured.
+8. Timelines flat — no coordinated-join / bloc-flip overlay.
+9. Typical "suspicion → verdict" is 3-4 clicks + synthesis.
+10. `CI_SIMILAR_TO` 11M edges never surfaced in UI.
 
-### Phase A — quick wins (days, not weeks)
+### Missing features — every one renderable from data already on hand
 
-**A1. Index audit + PROFILE pass on hot queries.**
-Every counter-intel Cypher should hit an index. Add:
+Details in v1. Summary: triage card, cohort baseline chart, temporal
+anomaly flag, watchlist + notes + CSV export, side-by-side dossier,
+AllianceLookup anomaly badges, ring-expand, mini co-flight graph,
+coordinated-join timeline, ring-stability badge.
+
+---
+
+## Part 2 — revised Neo4j plan, exploiting APOC + GDS
+
+### Phase 0 — schema hygiene (1-2 days, blocker)
+
+**0.1. Merge dupe labels.**
+`Character` = `CICharacter`. `Alliance` = `CIAlliance`. Decide canonical
+names and rewrite projection code:
+- Keep `Character` (shorter, matches the battle-graph convention).
+- Keep `Alliance` (shorter, matches bloc_intel convention).
+- Drop `CICharacter` / `CIAlliance` labels — retire after one-pass
+  relabel via `MATCH (n:CICharacter) SET n:Character REMOVE n:CICharacter`.
+- Counter-intel subgraph gets `:Internal` secondary label to mark the
+  current viewer-bloc-scoped subset.
+
+**0.2. Introduce `:Corporation`.**
+Right now corp info is inline in `Character` properties. Project
+`corporation_alliance_history` and `character_corporation_history` as
+edges on a `:Corporation` node. Cost: ~161K Corp nodes + 4.4M `IN_CORP`
+edges. Enables path queries through the corp layer.
+
+**0.3. Bloc nodes.**
+6 rows in `coalition_blocs` → 6 `:Bloc` nodes + `(:Alliance)-[:IN_BLOC]->(:Bloc)`
+edges derived from `coalition_entity_labels`. Enables
+`MATCH (a)-[:IN_BLOC]->(b)-[r:ALLIANCE_RELATES_TO]-(b2:Bloc)` graph-level
+bloc-vs-bloc queries.
+
+### Phase A — APOC-driven live sync (3-5 days)
+
+**A1. Direct JDBC sync for stable-ish tables.**
+Replace bespoke Python projectors with `apoc.load.jdbc` for tables that
+don't need enrichment:
 ```cypher
-CREATE INDEX cic_bloc_band IF NOT EXISTS
-  FOR (c:CICharacter) ON (c.viewer_bloc_id, c.review_priority_band);
-CREATE INDEX cic_score IF NOT EXISTS
-  FOR (c:CICharacter) ON (c.review_priority_score);
+CALL apoc.load.jdbc(
+  'jdbc:mariadb://mariadb:3306/aegiscore',
+  "SELECT corporation_id, faction_id, is_enlisted, kills_total
+     FROM corporation_fw_enlistment WHERE is_enlisted = 1"
+) YIELD row
+MATCH (c:Corporation {id: row.corporation_id})
+SET c.fw_faction_id = row.faction_id,
+    c.fw_is_enlisted = row.is_enlisted = 1,
+    c.fw_kills_total = row.kills_total;
 ```
-Run `PROFILE` on the 5 most-used queries (review queue, dossier peers,
-flight crew, arch-enemies, ring expand). Target: every query under 200 ms
-p95 on 500k nodes.
+Eliminates a worker for FW enlistment + alliance leadership + role
+priors + ship class mapping.
 
-**A2. Named projections.** Stop building an ad-hoc graph per call. Cache
-projections: `ci_internal`, `ci_all`, `alliance_recent`. Refresh on data
-reload, reuse across GDS calls. Cuts most GDS starts from seconds to ms.
-
-**A3. Replace Jaccard with Filtered KNN.** The existing `CI_SIMILAR_TO`
-seeding is a whole-graph Jaccard on co-flight sets. Filtered KNN scales
-better, lets you constrain the peer pool (e.g. "only score against
-internal pilots" or "only against clean-baseline pilots"). Direct swap in
-`counter_intel.similarity`, same output schema.
-
-**A4. Richer `ALLIANCE_RELATES_TO` queries.** With the edge live (shipped
-today in d399879) add two Cypher views:
-- "Who does this alliance *always* fight?"
-  `MATCH (a:Alliance {id: …})-[r:ALLIANCE_RELATES_TO]-(b) WHERE r.hostility > 0.7 AND r.weighted_n_obs > 50 RETURN b.name, r.hostility, r.weighted_opposed ORDER BY r.weighted_opposed DESC`
-- "Who ran parallel ops with us recently?"
-  same pattern on `parallel_ops_strength > 0.3` + `last_seen_at`.
-Ship as two blade panels on AllianceLookup.
-
-### Phase B — embedding-driven similarity (1–2 weeks)
-
-**B1. Train Node2Vec embeddings per viewer bloc.** 128-d vector per
-`CICharacter`, projected against `CI_CO_OCCURS_WITH` edge weight. Run
-once per day alongside `counter_intel graph-features`. Store as
-`c.embedding` node property.
-
-**B2. Nearest-neighbour lookup on dossier.** "Who flies most like this
-pilot?" Top-20 cosine neighbours with band + viewing filter. Replaces the
-current Jaccard similarity with a representation that survives schedule
-gaps + captures multi-hop structure.
-
-**B3. Similarity-to-flagged-set reason on dossier.** Compute `avg_cosine`
-from a pilot's embedding to the seed set. If > threshold: render "matches
-flagged-set pattern (k=N seeds, avg sim 0.74)". Addresses UX gap #10.
-
-### Phase C — node classification (2–4 weeks)
-
-**C1. Node classification pipeline.** Target label: "internal pilot
-eventually flagged as spy (true/false)". Features:
-`hostile_overlap_pct`, `bridge_anomaly_pct`, `recent_hostile_join`,
-`seed_neighbors_count`, `ring_size`, `ring_density`, `embedding`.
-GDS pipeline + Logistic Regression first, LightGBM later via GDS ML.
-
-**C2. Ship a single `spy_probability` 0-1 on every dossier.** Alongside
-the existing rule-based `review_priority_score`. Run the model nightly,
-store as `c.spy_probability`. UI shows the rule-score AND the model
-score side by side — agreement is a strong signal, disagreement is an
-interesting case to review.
-
-**C3. Calibration vs operator ground-truth.** Once ops flag dossiers as
-"confirmed spy / confirmed clean", retrain the classifier every 30 days.
-Each confirmation tightens the model.
-
-### Phase D — temporal graph patterns (2–4 weeks)
-
-**D1. `(:CICharacter)-[:JOINED]->(:CIAlliance {at: ts})` temporal edges.**
-Persist the affiliation timeline as time-stamped edges rather than a
-flat MariaDB table. Enables "coordinated-join" queries:
+**A2. Periodic.iterate for the 7.47M participant projection.**
+Project battle_theater_participants as FOUGHT_IN edges. One-time load:
 ```cypher
-MATCH (p:CICharacter)-[j:JOINED {alliance_id: $aid}]->()
- WHERE j.at > $red_flag_date - duration('P7D')
-   AND j.at < $red_flag_date + duration('P7D')
-RETURN p, j.at ORDER BY j.at
+CALL apoc.periodic.iterate(
+  "CALL apoc.load.jdbc('...', 'SELECT character_id, theater_id, alliance_id FROM battle_theater_participants') YIELD row RETURN row",
+  "MATCH (c:Character {id: row.character_id})
+   MATCH (t:Theater {id: row.theater_id})
+   MERGE (c)-[:FOUGHT_IN {alliance_id: row.alliance_id}]->(t)",
+  {batchSize: 10000, parallel: false}
+);
+```
+Running one-shot lets us do queries like "pilots who fought in ≥ N
+theaters with Fraternity on opposing side" — a pure spy signal.
+
+**A3. APOC triggers on Character properties.**
+When `ci_character_anomalies_rolling.review_priority_score` changes in
+MariaDB, the outbox relays an event. Neo4j trigger reads the outbox and
+updates `Character.score` + `Character.band` in place, instead of
+waiting for the next full sweep. Cuts projection lag from ~24 h to
+~30 s.
+
+**A4. Index + PROFILE audit.**
+Every hot read Cypher should hit an index. Create:
+```cypher
+CREATE INDEX character_band_score IF NOT EXISTS
+  FOR (c:Character) ON (c.viewer_bloc_id, c.review_priority_band, c.score);
+CREATE INDEX character_ring IF NOT EXISTS
+  FOR (c:Character) ON (c.ring_id);
+CREATE INDEX alliance_bloc IF NOT EXISTS
+  FOR (a:Alliance) ON (a.bloc_id);
+```
+`PROFILE` every operator-facing query. Target p95 < 200 ms on 500K
+nodes. Document results in `docs/neo4j-queries.md`.
+
+### Phase B — signal enrichment (1 week)
+
+**B1. Project all MariaDB anomaly signals as node props.**
+Flatten `ci_character_anomalies_rolling` and `ci_character_graph_features_rolling`
+into `Character` node properties (score, band, cohort_confidence,
+ring_id, ring_size, bridge_internal_pct, seed_neighbors_max). No new
+storage, faster queries — don't need to cross-reference MariaDB from
+the graph.
+
+**B2. Hull + role taxonomy.**
+Add `(:HullClass)` nodes from `ship_class_category_mapping`. Each
+killmail contributes `(c:Character)-[:FLEW {n_km, total_damage}]->(:Hull)`
+edges, `Hull -> HullClass`. Enables role-aware similarity:
+"pilots whose *hull composition* matches X's" rather than just
+"pilots who shared killmails with X".
+
+**B3. Doctrine layer.**
+Project `auto_doctrines` + `auto_doctrine_pilots` as `(:Doctrine)` nodes
+with `FLIES_DOCTRINE` edges. Now you can ask: "pilots flying doctrines
+adopted primarily by Imperium alliances but who are in our bloc" —
+direct defection signal.
+
+**B4. Spatial bridge edges.**
+Add `(:System)-[:ANSIBLEX_TO]->(:System)` (33 edges) and
+`(:System)-[:TITAN_RANGE {distance_ly}]->(:System)` (372K). Sov
+ownership: `(:System).sov_holder_id`. Enables: "shortest time from
+seed pilot's home system to target" and "pilots who jump-bridge
+through hostile sov weekly".
+
+### Phase C — GDS ML pipelines (2-3 weeks)
+
+**C1. Filtered KNN replaces Jaccard.**
+Swap the current `counter_intel.similarity` (whole-graph Jaccard +
+thresholding) for `gds.knn.filtered.mutate`:
+```cypher
+CALL gds.knn.filtered.mutate('ci_internal', {
+  nodeProperties: ['score', 'ring_id', 'bridge_internal_pct'],
+  topK: 20,
+  sourceNodeFilter: 'Internal',
+  targetNodeFilter: 'Internal',
+  mutateRelationshipType: 'SIMILAR_TO_V2',
+  mutateProperty: 'score'
+});
+```
+Scales better, lets us filter the candidate pool, produces ranked
+top-K instead of a thresholded firehose.
+
+**C2. FastRP embeddings** (cheaper + faster than Node2Vec at 200K
+nodes).
+```cypher
+CALL gds.fastRP.mutate('ci_internal', {
+  embeddingDimension: 128,
+  relationshipWeightProperty: 'event_count',
+  iterationWeights: [0.0, 1.0, 1.0, 0.8],
+  propertyRatio: 0.5,
+  featureProperties: ['score', 'bridge_internal_pct', 'ring_size'],
+  mutateProperty: 'embedding'
+});
+```
+`propertyRatio: 0.5` is the HashGNN-style trick to fold node property
+signal into the embedding — critical because pure-topology embeddings
+miss the hostile-history signal.
+
+**C3. HashGNN for mixed-feature embeddings.**
+Alternative to FastRP when we want deeper feature mixing
+(`gds.hashgnn.mutate`). Use whichever calibrates better on the
+operator-confirmed ground-truth (~50 confirmed spy / clean pairs is
+enough to compare).
+
+**C4. Node-classification pipeline.**
+Binary classifier: "internal pilot, is_confirmed_spy". Features:
+embedding + anomaly scores + ring props. Train nightly, store
+`Character.spy_probability` (0-1). Display alongside the rule-based
+band — agreement = strong verdict, disagreement = interesting review.
+
+**C5. Link-prediction pipeline.**
+Predict future `OPPOSED` / `ALLIED_WITH` alliance-pair edges. Early-
+warning bloc-realignment detector. Output: "alliances likely to
+become hostile to us in the next 30 days" list on admin dashboard.
+
+### Phase D — GraphRAG via APOC ML (2-3 weeks)
+
+**D1. Cypher-from-prompt via `apoc.ml.cypher`.**
+Operator types natural-language question, Bedrock generates Cypher
+bound to our schema, we execute, Bedrock summarizes. Schema snippet
+passed in context so the LLM can't hallucinate fields.
+
+Example path:
+```cypher
+CALL apoc.ml.fromCypher.stream(
+  {prompt: 'Show pilots in my bloc who recently co-flew with Fraternity members and have rising anomaly scores'},
+  { schema: $schemaText, apiKey: $bedrockKey }
+) YIELD query, explanation
+// operator approves
+CALL apoc.cypher.run(query, {}) YIELD value RETURN value;
 ```
 
-**D2. Ring stability over time.** Record Leiden community id + timestamp
-snapshot nightly. A ring that's been stable for 30+ days with 10+
-members + ≥ 3 seed pilots = very high-signal cell. Surface as a "pinned
-ring" table on the counter-intel dashboard.
+**D2. Dossier explainer.**
+One dossier button: "explain this in a paragraph". Backend runs
+`apoc.ml.bedrock.chat` with the Character node's full property bag +
+the top-5 neighbours from `SIMILAR_TO_V2` as context, gets back
+"Character X has a 0.78 spy_probability. Key drivers: their alliance
+flipped hostile 90d ago; they retained their corp rather than
+following their former allies; they co-fly a Leshak doctrine that's
+87% Imperium-adopted."
 
-**D3. Alliance-pair trajectory.** `ALLIANCE_RELATES_TO` already has
-`first_seen_at` / `last_seen_at`. Add `window_end` snapshots as
-time-keyed edges so we can show "affinity trending up" / "hostility
-accelerating" per-pair. Drives bloc-intel graphs.
+Cost: ~1 Bedrock call per dossier view, ~2 KB context each. Effectively
+free at review-queue volumes.
 
-### Phase E — query infrastructure + observability (ongoing)
+**D3. Guardrails.**
+Every generated Cypher runs through a procedure whitelist and a
+node-count ceiling (abort if `rows_returned > 5000`). No LLM-
+generated mutations — read queries only. Schema passed in system
+prompt each call, no ad-hoc "invent a field" failures.
 
-**E1. Neo4j Metrics integration.** Enable `metrics.enabled=true`. Scrape
-page-cache hit ratio, bolt query latency, GDS job duration. Alert if
-p95 > 1 s. Addresses silent degradation when graph grows past 1M nodes.
+### Phase E — UX delivery (parallelisable from week 1)
 
-**E2. Query library with PROFILE snapshots.** One place (docs/neo4j-queries.md)
-with every operator-facing Cypher + expected plan. Reviewer diffs plans
-over time to catch planner regressions.
+Do these as soon as the underlying data is a node property (most
+after Phase B1):
 
-**E3. Named-graph refresh schedule.** Every hour for the small CI
-projection, every 6h for the alliance graph. Avoid re-projecting from
-raw tables on every dashboard load.
+| # | Feature | Depends on |
+|---|---|---|
+| E1 | Triage card row (1-line verdict) | Phase B1 |
+| E2 | AllianceLookup anomaly badges | Phase B1 |
+| E3 | Watchlist + notes (new MariaDB table) | standalone |
+| E4 | Side-by-side dossier `?compare=` | standalone |
+| E5 | Cohort baseline p5/p50/p95 chart | standalone (MariaDB aggregate) |
+| E6 | Ring-expand view | Phase 0.1 + B1 |
+| E7 | Temporal join-overlay | Phase A2 (FOUGHT_IN) |
+| E8 | Mini co-flight graph on dossier | standalone |
+| E9 | "Coordinated-join with whom" list | Phase A2 |
+| E10 | Watchlist CSV / PDF export | E3 |
+| E11 | Dossier "explain in a paragraph" | Phase D2 |
+| E12 | NL query bar "show me X" | Phase D1 |
 
-### Phase F — new signals (4–8 weeks)
+### Phase F — observability + ops (ongoing)
 
-**F1. Path-based risk score.** "Shortest path length from this pilot to
-any seed" — stretches the CI ring concept. Short path = more connected
-to flagged set. Weighted by edge co-occurrence count.
-
-**F2. Betweenness-through-hostile.** Pilot who bridges internal cluster
-to hostile cluster. `c.betweenness_internal` exists; add
-`c.betweenness_hostile` — top-5% here is nearly certainly a comms pipe.
-
-**F3. Operator-in-the-loop GraphRAG chat.** Natural-language queries
-over the CI graph ("show me pilots who recently joined red alliances AND
-co-fly with seed pilots"). GDS-backed RAG layer. Deferred until the
-rule-based surface settles — otherwise LLM drift competes with explicit
-signals.
-
----
-
-## Part 3 — suggested sequencing
-
-1. **Week 1** — Phase A (indices, PROFILE, named projections). Quick-win
-   UX items 1, 6 (dashboard triage card, AllianceLookup anomaly badges).
-2. **Week 2** — UX items 4 (watchlist), 5 (compare), 7 (ring expand),
-   plus Phase B1–B2 (node2vec + neighbour lookup).
-3. **Week 3** — UX items 3, 8, 9 (temporal flag, cohort baseline chart,
-   coordinated-join). Phase B3 (similarity-to-flagged-set).
-4. **Week 4+** — Phase C (node classification pipeline) starts, gated
-   on operator ground-truth accumulation.
-5. **Weeks 5–8** — Phase D (temporal graph) + Phase E (observability).
-6. **Month 3+** — Phase F (path risk, graphRAG chat).
+- Neo4j metrics → Prometheus → Grafana board.
+- `neo4j-admin database memory-recommendation` run whenever graph
+  size doubles; tune heap + page cache.
+- Named projections refreshed on schedule (1h CI, 6h alliance, daily
+  FOUGHT_IN), tracked in a `graph_projection_runs` table with hash of
+  underlying source counts so replays detect drift.
+- `PROFILE` snapshots checked into `docs/neo4j-queries.md`.
+- Alert: page-cache hit-ratio < 90%, bolt p95 > 1 s, GDS run > 5×
+  baseline.
 
 ---
 
-## Part 4 — what not to do
+## Part 3 — sequencing (what to start Monday)
 
-- No new Cypher without `PROFILE` — the graph is big enough now that
-  ad-hoc scan queries will brown out the UI.
-- No LLM-generated insights on the review queue. Keep the scoring
-  layer explainable. LLMs go in the "help me understand this dossier"
-  chat surface, not in the verdict.
-- No bespoke anomaly rules per viewer bloc. The hostility graph is
-  viewer-relative; the scoring layer is viewer-agnostic. Keep that
-  split. Each bloc gets its own sliced view via `viewer_bloc_id`
-  filtering, but we maintain one model.
+1. **Week 1** — Phase 0 (schema hygiene, can't skip), Phase A1–A4
+   (APOC JDBC replacing projectors + trigger on anomaly changes +
+   index audit), UX items E1, E2 (quick cards + badges).
+2. **Week 2** — Phase B1–B3 (flatten anomalies + hull class + doctrine
+   layer), UX E3 (watchlist), E4 (compare), E5 (cohort chart).
+3. **Week 3** — Phase B4 (spatial bridges), E6 (ring expand), E7
+   (temporal join overlay), E8–E10 (mini graph + coordinated-join +
+   export).
+4. **Week 4-6** — Phase C (Filtered KNN → FastRP → node-classification),
+   calibration loop starts.
+5. **Week 7-9** — Phase D (GraphRAG), E11–E12.
+6. **Ongoing** — Phase F.
+
+Total ~9 weeks to 80% of the vision. Phases B + C unlock the biggest
+analytical step-change; Phase D unlocks the operator-facing delight.
+
+---
+
+## Part 4 — anti-patterns (updated)
+
+- No unprofiled Cypher in hot paths. Every read-query on the review
+  queue PROFILEd before merge.
+- No LLM verdicts on the review queue. LLMs only in explainer + NL-
+  query surfaces. Scoring stays explainable rule + GDS model.
+- No Python projectors for tables APOC JDBC can sync directly — the
+  worker overhead isn't worth the indirection.
+- No "Character vs CICharacter" schema split post-Phase 0 — any code
+  creating either should be rejected.
+- No ad-hoc trigger logic — `apoc.trigger` uses one shared signal
+  (outbox row exists) and writes via the schema.
+
+---
+
+## Part 5 — ground-truth plan (preq for Phase C)
+
+GDS classification needs labels. Build a tiny labeling surface under
+`/admin/counter-intel/{id}/label`:
+- Buttons: "confirmed spy", "confirmed clean", "undecided".
+- Backed by `ci_character_ground_truth` table: `character_id`,
+  `label`, `labelled_by`, `labelled_at`, `reason`.
+- Counter-intel directors use it while triaging; 100 labels is
+  enough to start a model; 500 is enough to calibrate.
+- Export labels as `Character.ground_truth_label` node property for
+  the node-classification training graph.
+
+Ship with Phase A so labels start accumulating before we need them.
 
 ---
 
 ## Anchor references
 
-- [Neo4j Trends 2025–2026](https://calmops.com/database/neo4j/neo4j-trends/)
-- [Fraud Detection With Neo4j GDS (Neo4j dev blog)](https://neo4j.com/blog/developer/exploring-fraud-detection-neo4j-graph-data-science-part-3/)
-- [Financial Fraud Detection With GDS Analytics](https://neo4j.com/blog/financial-fraud-detection-graph-data-science-analytics-feature-engineering)
-- [Node Similarity algo reference](https://neo4j.com/docs/graph-data-science/current/algorithms/node-similarity/)
-- [Filtered KNN](https://neo4j.com/docs/graph-data-science/current/algorithms/filtered-knn/)
-- [Node Embeddings + Node2Vec](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-embeddings/)
-- [Link Prediction Pipelines](https://neo4j.com/docs/graph-data-science/current/machine-learning/linkprediction-pipelines/link-prediction/)
-- [Node Classification Pipelines](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-property-prediction/nodeclassification-pipelines/node-classification/)
-- [Temporal Graph Fraud Modeling](https://neo4j.com/blog/developer/mastering-fraud-detection-temporal-graph/)
+- [Neo4j GDS Leiden algorithm](https://neo4j.com/docs/graph-data-science/current/algorithms/leiden/)
+- [Filtered K-Nearest Neighbors](https://neo4j.com/docs/graph-data-science/current/algorithms/filtered-knn/)
+- [FastRP embeddings](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-embeddings/fastrp/)
+- [HashGNN embeddings](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-embeddings/hashgnn/)
+- [Node classification pipelines](https://neo4j.com/docs/graph-data-science/current/machine-learning/node-property-prediction/nodeclassification-pipelines/node-classification/)
+- [Link prediction pipelines](https://neo4j.com/docs/graph-data-science/current/machine-learning/linkprediction-pipelines/link-prediction/)
+- [APOC `apoc.load.jdbc`](https://neo4j.com/labs/apoc/current/database-integration/load-jdbc/)
+- [APOC `apoc.periodic.iterate`](https://neo4j.com/labs/apoc/current/overview/apoc.periodic/apoc.periodic.iterate/)
+- [APOC triggers](https://neo4j.com/labs/apoc/current/background-operations/triggers/)
+- [APOC Extended `apoc.ml.bedrock.*`](https://neo4j.com/labs/apoc/current/ml/bedrock/)
+- [APOC `apoc.ml.cypher`](https://neo4j.com/labs/apoc/current/ml/openai/)
 - [Cypher query tuning](https://neo4j.com/docs/cypher-manual/current/planning-and-tuning/query-tuning/)
-- [Cybersecurity Threat Hunting With Neo4j (arxiv)](https://arxiv.org/abs/2301.12013)
+- [Temporal graph fraud modelling](https://neo4j.com/blog/developer/mastering-fraud-detection-temporal-graph/)
+- [Cybersecurity threat hunting on Neo4j (arxiv 2301.12013)](https://arxiv.org/abs/2301.12013)
