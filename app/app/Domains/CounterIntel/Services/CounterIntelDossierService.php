@@ -86,6 +86,7 @@ final class CounterIntelDossierService
             : [];
         $cohortBaseline = $anomaly ? $this->cohortBaseline($viewerBlocId) : null;
         $similarPilots = $this->similarPilots($characterId);
+        $coJoins = $this->coordinatedJoins($characterId, $affiliation['current']['alliance_id'] ?? null, $affiliation['current']['start_date'] ?? null, $viewerBlocId);
 
         return [
             'not_found' => false,
@@ -101,6 +102,64 @@ final class CounterIntelDossierService
             'ring_members' => $ringMembers,
             'cohort_baseline' => $cohortBaseline,
             'similar_pilots' => $similarPilots,
+            'coordinated_joins' => $coJoins,
+        ];
+    }
+
+    /**
+     * Other characters whose most-recent corp entered the same
+     * alliance within ±7 days of the target pilot's entry. Signals
+     * coordinated joining (a cell moving together). Falls back to
+     * empty when alliance / start_date unknown.
+     *
+     * @return array{alliance_id:int,alliance_name:?string,window_days:int,total:int,peers:list<array<string,mixed>>}|null
+     */
+    private function coordinatedJoins(int $characterId, ?int $allianceId, ?string $startDate, int $viewerBlocId): ?array
+    {
+        if ($allianceId === null || $startDate === null) return null;
+        $windowDays = 7;
+        $rows = DB::select(<<<'SQL'
+            SELECT cch.character_id, cch.start_date,
+                   en.name AS character_name,
+                   a.review_priority_band, a.review_priority_score
+              FROM character_corporation_history cch
+              JOIN corporation_alliance_history cah
+                ON cah.corporation_id = cch.corporation_id
+               AND cah.start_date <= cch.start_date
+               AND (cah.end_date IS NULL OR cah.end_date >= cch.start_date)
+              LEFT JOIN esi_entity_names en
+                ON en.entity_id = cch.character_id AND en.category = 'character'
+              LEFT JOIN (
+                SELECT a.*
+                  FROM ci_character_anomalies_rolling a
+                  JOIN (
+                    SELECT character_id, MAX(window_end_date) AS mx
+                      FROM ci_character_anomalies_rolling
+                     WHERE viewer_bloc_id = ?
+                     GROUP BY character_id
+                  ) m ON m.character_id = a.character_id AND m.mx = a.window_end_date
+                 WHERE a.viewer_bloc_id = ?
+              ) a ON a.character_id = cch.character_id
+             WHERE cch.is_deleted = 0
+               AND cch.end_date IS NULL
+               AND cch.character_id <> ?
+               AND cah.alliance_id = ?
+               AND cch.start_date BETWEEN DATE_SUB(?, INTERVAL ? DAY) AND DATE_ADD(?, INTERVAL ? DAY)
+             ORDER BY a.review_priority_score DESC, cch.start_date DESC
+             LIMIT 20
+        SQL, [$viewerBlocId, $viewerBlocId, $characterId, $allianceId, $startDate, $windowDays, $startDate, $windowDays]);
+
+        $name = DB::table('esi_entity_names')
+            ->where('entity_id', $allianceId)
+            ->where('category', 'alliance')
+            ->value('name');
+
+        return [
+            'alliance_id' => $allianceId,
+            'alliance_name' => $name ? (string) $name : null,
+            'window_days' => $windowDays,
+            'total' => count($rows),
+            'peers' => array_map(fn ($r) => (array) $r, $rows),
         ];
     }
 

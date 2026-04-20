@@ -253,6 +253,40 @@
             </div>
         @endif
 
+        {{-- Coordinated-join peers — E9 --}}
+        @if (! empty($dossier['coordinated_joins']) && $dossier['coordinated_joins']['total'] > 0)
+            @php $coj = $dossier['coordinated_joins']; @endphp
+            <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-top:1rem;">
+                <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin-bottom:0.6rem;">
+                    Coordinated joins
+                    <span style="font-size:0.6rem; color:#7a7a82; font-weight:400; letter-spacing:0; text-transform:none;">
+                        ({{ $coj['total'] }} other pilot{{ $coj['total'] === 1 ? '' : 's' }} entered
+                        <strong>{{ $coj['alliance_name'] ?? 'this alliance' }}</strong>
+                        within ±{{ $coj['window_days'] }}d of this pilot)
+                    </span>
+                </h3>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.4rem;">
+                    @foreach ($coj['peers'] as $pe)
+                        @php $s = $bandStyle[$pe['review_priority_band'] ?? 'below_threshold'] ?? $bandStyle['below_threshold']; @endphp
+                        <a href="/admin/counter-intel/{{ $pe['character_id'] }}"
+                           style="display:flex; gap:0.5rem; align-items:center; text-decoration:none;
+                                  background:rgba(255,255,255,0.02); border:1px solid {{ $s['border'] }};
+                                  border-radius:5px; padding:0.35rem 0.5rem; color:#e5e5e7;">
+                            <img src="https://images.evetech.net/characters/{{ $pe['character_id'] }}/portrait?size=32"
+                                 referrerpolicy="no-referrer" style="width:24px;height:24px;border-radius:50%;" alt="">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:0.78rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $pe['character_name'] ?? "Pilot #{$pe['character_id']}" }}</div>
+                                <div style="font-size:0.6rem; color:{{ $s['fg'] }};">
+                                    joined {{ \Carbon\Carbon::parse($pe['start_date'])->format('Y-m-d') }}
+                                    @if (! empty($pe['review_priority_band'])) · {{ str_replace('_', ' ', $pe['review_priority_band']) }} @endif
+                                </div>
+                            </div>
+                        </a>
+                    @endforeach
+                </div>
+            </div>
+        @endif
+
         {{-- Structural neighbours from Neo4j embeddings — E8 --}}
         @if (! empty($dossier['similar_pilots']))
             <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-top:1rem;">
