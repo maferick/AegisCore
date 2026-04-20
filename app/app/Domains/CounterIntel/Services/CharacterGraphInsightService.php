@@ -91,16 +91,76 @@ final class CharacterGraphInsightService
                     $blocByAid[(int) $r->entity_id] = (int) $r->bloc_id;
                 });
         }
+
+        // Bloc-intel pair-behavior fallback. For peers whose alliance
+        // has no ground-truth bloc label, aggregate
+        // alliance_pair_behavior_rolling rows between EVERY alliance in
+        // the viewer's bloc and the peer's alliance. A small WC-member
+        // alliance might not have a direct pair row with OnlyFleets.,
+        // but the bloc as a whole does. Use confidence-weighted mean
+        // affinity/hostility so a 3-observation outlier can't flip a
+        // strong cross-bloc signal.
+        $pairMetrics = [];
+        if ($peerAllianceIds !== [] && $viewerBlocId !== null) {
+            $viewerBlocAllianceIds = \Illuminate\Support\Facades\DB::table('coalition_entity_labels')
+                ->where('entity_type', 'alliance')
+                ->where('bloc_id', $viewerBlocId)
+                ->where('is_active', 1)
+                ->pluck('entity_id')
+                ->map(fn ($v) => (int) $v)
+                ->all();
+            if ($viewerBlocAllianceIds !== []) {
+                \Illuminate\Support\Facades\DB::table('alliance_pair_behavior_rolling')
+                    ->where(function ($q) use ($peerAllianceIds, $viewerBlocAllianceIds): void {
+                        $q->where(function ($qq) use ($peerAllianceIds, $viewerBlocAllianceIds): void {
+                            $qq->whereIn('alliance_a_id', $viewerBlocAllianceIds)->whereIn('alliance_b_id', $peerAllianceIds);
+                        })->orWhere(function ($qq) use ($peerAllianceIds, $viewerBlocAllianceIds): void {
+                            $qq->whereIn('alliance_b_id', $viewerBlocAllianceIds)->whereIn('alliance_a_id', $peerAllianceIds);
+                        });
+                    })
+                    ->select('alliance_a_id', 'alliance_b_id', 'affinity_score', 'hostility_score', 'confidence')
+                    ->get()
+                    ->each(function ($r) use (&$pairMetrics, $viewerBlocAllianceIds): void {
+                        $blocFlip = array_flip($viewerBlocAllianceIds);
+                        $peerAid = (int) (isset($blocFlip[(int) $r->alliance_a_id]) ? $r->alliance_b_id : $r->alliance_a_id);
+                        $pairMetrics[$peerAid] ??= ['aff_num' => 0.0, 'hos_num' => 0.0, 'conf_sum' => 0.0];
+                        $w = (float) $r->confidence;
+                        $pairMetrics[$peerAid]['aff_num'] += (float) $r->affinity_score * $w;
+                        $pairMetrics[$peerAid]['hos_num'] += (float) $r->hostility_score * $w;
+                        $pairMetrics[$peerAid]['conf_sum'] += $w;
+                    });
+                foreach ($pairMetrics as &$pm) {
+                    if ($pm['conf_sum'] <= 0) { $pm = null; continue; }
+                    $pm = [
+                        'affinity' => $pm['aff_num'] / $pm['conf_sum'],
+                        'hostility' => $pm['hos_num'] / $pm['conf_sum'],
+                        'confidence' => min(1.0, $pm['conf_sum']),
+                    ];
+                }
+                unset($pm);
+            }
+        }
+
         foreach ($rows as &$row) {
             $aid = (int) ($row['alliance_id'] ?? 0);
             $peerBloc = $aid > 0 ? ($blocByAid[$aid] ?? null) : null;
-            if ($viewerBlocId === null || $peerBloc === null) {
-                $row['current_relationship'] = 'unlabeled';
-            } elseif ($peerBloc === $viewerBlocId) {
-                $row['current_relationship'] = 'same_bloc';
-            } else {
-                $row['current_relationship'] = 'hostile_bloc';
+            if ($viewerBlocId !== null && $peerBloc !== null) {
+                $row['current_relationship'] = $peerBloc === $viewerBlocId ? 'same_bloc' : 'hostile_bloc';
+                continue;
             }
+            // No ground-truth bloc either side. Try bloc-intel pair.
+            $pm = $pairMetrics[$aid] ?? null;
+            if ($pm !== null && $pm['confidence'] >= 0.4) {
+                if ($pm['hostility'] >= 0.5) {
+                    $row['current_relationship'] = 'hostile_bloc';
+                    continue;
+                }
+                if ($pm['affinity'] >= 0.7) {
+                    $row['current_relationship'] = 'same_bloc';
+                    continue;
+                }
+            }
+            $row['current_relationship'] = 'unlabeled';
         }
         unset($row);
         return $rows;
