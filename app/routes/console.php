@@ -225,6 +225,24 @@ Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCorporationFwEn
     ->onOneServer()
     ->name('fetch-corp-fw-enlistment');
 
+// Neo4j sync — flatten MariaDB intel signals onto the graph so
+// Cypher-side spy-find queries don't need a cross-database join.
+// Nightly cadence keeps load minimal; every sync is idempotent.
+Schedule::command('neo4j:sync-blocs')
+    ->dailyAt('02:15')
+    ->onOneServer()
+    ->name('neo4j-sync-blocs');
+
+Schedule::command('neo4j:sync-corps')
+    ->dailyAt('02:25')
+    ->onOneServer()
+    ->name('neo4j-sync-corps');
+
+Schedule::command('neo4j:sync-signals')
+    ->dailyAt('02:45')
+    ->onOneServer()
+    ->name('neo4j-sync-signals');
+
 // Allegiance graph backfill — project the last 24h of locked battle
 // theaters into the Neo4j allegiance graph so the resolver's
 // historical-allegiance tiebreaker accumulates signal on its own
