@@ -27,10 +27,9 @@ class CharacterActivityMapController extends Controller
         if ($user === null) {
             abort(403);
         }
-        $ownsCharacter = $user->characters()->where('character_id', $cid)->exists();
-        if (! $ownsCharacter) {
-            abort(403);
-        }
+        // Any authed portal user can render the map for any character —
+        // same info surface as public killmail detail pages + the
+        // /portal/characters/lookup tool.
 
         $payload = Cache::remember("portal.activity_map.{$cid}.v3", 600, fn () => $this->build($cid));
         return response()

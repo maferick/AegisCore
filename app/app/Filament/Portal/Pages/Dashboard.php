@@ -50,7 +50,7 @@ class Dashboard extends BaseDashboard
     /**
      * @return array<string, mixed>
      */
-    private function buildCharacterCard(object $char): array
+    public function buildCharacterCard(object $char): array
     {
         $cid = (int) $char->character_id;
 
