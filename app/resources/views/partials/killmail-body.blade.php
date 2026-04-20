@@ -233,26 +233,29 @@
         -webkit-mask-image: radial-gradient(circle, black 50%, transparent 70%);
     }
     .km-fit-mod {
-        position: absolute; width: 32px; height: 32px; border-radius: 3px;
-        background: rgba(17,17,19,0.7);
+        position: absolute; width: 36px; height: 36px; border-radius: 50%;
+        overflow: hidden; background: rgba(17,17,19,0.7);
         transition: transform 0.1s ease, box-shadow 0.1s ease;
     }
-    .km-fit-mod:hover { transform: scale(1.2); z-index: 5; }
+    .km-fit-mod:hover { transform: scale(1.18); z-index: 5; }
     .km-fit-mod.dropped   { box-shadow: 0 0 6px rgba(74,222,128,0.45); }
     .km-fit-mod.destroyed { box-shadow: 0 0 6px rgba(255,56,56,0.35); filter: saturate(0.8); }
+    .km-fit-mod > img:not(.km-fit-charge) {
+        width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block;
+    }
     .km-fit-mod-dot {
         position: absolute; width: 7px; height: 7px; border-radius: 50%;
-        bottom: -5px; right: -5px; pointer-events: none;
+        top: 5px; right: 5px; pointer-events: none; z-index: 4;
         box-shadow: 0 0 0 1.5px rgba(17,17,19,0.95);
     }
     .km-fit-mod-dot.dropped   { background: #4ade80; }
     .km-fit-mod-dot.destroyed { background: #ff3838; }
     .km-fit-charge {
-        position: absolute; width: 16px; height: 16px;
-        border-radius: 2px; right: -4px; bottom: -4px;
-        background: rgba(12,12,14,0.9);
-        border: 1px solid rgba(229,169,0,0.5);
-        pointer-events: none;
+        position: absolute; width: 14px; height: 14px;
+        right: 4px; bottom: 4px; border-radius: 50%;
+        object-fit: cover; background: rgba(17,17,19,0.95);
+        box-shadow: 0 0 0 1.5px rgba(17,17,19,0.95);
+        pointer-events: none; z-index: 3;
     }
     .km-fit-legend {
         display: flex; gap: 0.75rem; flex-wrap: wrap;
@@ -322,10 +325,10 @@
                                 . ($dropped ? ' · dropped' : '');
                         @endphp
                         <div class="km-fit-mod {{ $stateClass }}"
-                             style="left: {{ number_format($p['x'] - 16, 2, '.', '') }}px; top: {{ number_format($p['y'] - 16, 2, '.', '') }}px;"
+                             style="left: {{ number_format($p['x'] - 18, 2, '.', '') }}px; top: {{ number_format($p['y'] - 18, 2, '.', '') }}px;"
                              title="{{ $tip }}">
-                            <img src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=32"
-                                 referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:3px;display:block;" alt="">
+                            <img src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=64"
+                                 referrerpolicy="no-referrer" alt="">
                             @if ($charge)
                                 <img class="km-fit-charge" referrerpolicy="no-referrer"
                                      src="https://images.evetech.net/types/{{ $charge->type_id }}/icon?size=32" alt="">
