@@ -52,6 +52,90 @@
         return '<span style="display:inline-block;padding:1px 5px;margin-left:5px;font-size:0.6rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;line-height:1;border-radius:8px;vertical-align:middle;'
             . $roleStyle($role) . '">' . $label . '</span>';
     };
+
+    /* ---------- Fitting wheel -------------------------------------
+       Render the victim's hull as a zKill-style circle: ship render
+       in the middle, concentric rings of slot bezels, each fitted
+       module as an absolutely-positioned 32px icon on the right arc.
+       Inner ring = subsystem / service slots (T3Cs, capitals). Outer
+       ring = high / mid / low / rig arcs.
+
+       Slot counts come from ref_type_dogma JSON (attribute 14/13/12/
+       1154/1367/2056). Falls back to the count of actually-fitted
+       modules when the dogma lookup misses. */
+    $wheelShipTypeId = (int) $km->victim_ship_type_id;
+    $wheelDogmaRow = \Illuminate\Support\Facades\DB::table('ref_type_dogma')
+        ->where('id', $wheelShipTypeId)->value('data');
+    $wheelAttrs = [];
+    if ($wheelDogmaRow) {
+        $decoded = json_decode((string) $wheelDogmaRow, true);
+        foreach (($decoded['dogmaAttributes'] ?? []) as $a) {
+            $wheelAttrs[(int) ($a['attributeID'] ?? 0)] = (float) ($a['value'] ?? 0);
+        }
+    }
+    // Group → fitted modules (charges excluded, ordered by flag).
+    $wheelSlotKeys = ['high', 'mid', 'low', 'rig', 'subsystem', 'service'];
+    $wheelModulesByGroup = [];
+    foreach ($wheelSlotKeys as $k) {
+        $items = $itemsBySlot[$k] ?? collect();
+        $mods = $items->reject(fn ($i) => $chargeTypeIds->has($i->type_id))
+            ->sortBy('flag')->values();
+        $wheelModulesByGroup[$k] = $mods->all();
+    }
+    // Slot-count per group. Dogma attrs report the hull's base slot
+    // layout but T3Cs publish 0 for hi/mid/low because their totals
+    // depend on the subsystems fitted — so fall back to the number
+    // of actually-fitted modules whenever the attr reports ≤ 0.
+    $wheelCountFrom = function (int $attr, int $fittedCount) use ($wheelAttrs): int {
+        $v = (int) ($wheelAttrs[$attr] ?? 0);
+        return $v > 0 ? $v : $fittedCount;
+    };
+    $wheelCounts = [
+        'high'      => $wheelCountFrom(14,   count($wheelModulesByGroup['high'])),
+        'mid'       => $wheelCountFrom(13,   count($wheelModulesByGroup['mid'])),
+        'low'       => $wheelCountFrom(12,   count($wheelModulesByGroup['low'])),
+        'rig'       => $wheelCountFrom(1154, count($wheelModulesByGroup['rig'])),
+        'subsystem' => $wheelCountFrom(1367, count($wheelModulesByGroup['subsystem'])),
+        'service'   => $wheelCountFrom(2056, count($wheelModulesByGroup['service'])),
+    ];
+    // Layout: outer ring = high/mid/low/rig, inner ring = subsystem/
+    // service. Arcs are degrees, 0 = right, -90 = top. Starts from
+    // zKill's known-good ranges and stretches/shrinks automatically
+    // for n slots.
+    $wheelLayout = [];
+    if ($wheelCounts['high'] > 0)      $wheelLayout[] = ['key' => 'high',      'count' => $wheelCounts['high'],      'ring' => 'outer', 'arc' => [-140, -40]];
+    if ($wheelCounts['mid'] > 0)       $wheelLayout[] = ['key' => 'mid',       'count' => $wheelCounts['mid'],       'ring' => 'outer', 'arc' => [-30,   40]];
+    if ($wheelCounts['low'] > 0)       $wheelLayout[] = ['key' => 'low',       'count' => $wheelCounts['low'],       'ring' => 'outer', 'arc' => [ 50,  150]];
+    if ($wheelCounts['rig'] > 0)       $wheelLayout[] = ['key' => 'rig',       'count' => $wheelCounts['rig'],       'ring' => 'outer', 'arc' => [160,  210]];
+    if ($wheelCounts['subsystem'] > 0) $wheelLayout[] = ['key' => 'subsystem', 'count' => $wheelCounts['subsystem'], 'ring' => 'inner', 'arc' => [-135,   135]];
+    if ($wheelCounts['service'] > 0)   $wheelLayout[] = ['key' => 'service',   'count' => $wheelCounts['service'],   'ring' => 'inner', 'arc' => [-180,  180]];
+
+    $wheelPositions = function (int $count, array $arc, float $radius, float $cx, float $cy): array {
+        [$start, $end] = $arc;
+        $step = $count === 1 ? 0 : ($end - $start) / ($count - 1);
+        $out = [];
+        for ($i = 0; $i < $count; $i++) {
+            $deg = $start + $step * $i;
+            $rad = deg2rad($deg);
+            $out[] = [
+                'x' => $cx + $radius * cos($rad),
+                'y' => $cy + $radius * sin($rad),
+            ];
+        }
+        return $out;
+    };
+
+    $wheelGroupColor = fn (string $g): string => match ($g) {
+        'high'      => '#f4c542',
+        'mid'       => '#4a9eff',
+        'low'       => '#d94f4f',
+        'rig'       => '#7ddc8b',
+        'subsystem' => '#b98cff',
+        'service'   => '#ffa94d',
+        default     => '#7a7a82',
+    };
+
+    $wheelHasAny = array_sum($wheelCounts) > 0;
 @endphp
 
 <style>
@@ -99,6 +183,44 @@
         font-family: 'JetBrains Mono', monospace;
     }
     .km-zkill-link:hover { background: rgba(79,208,208,0.15); }
+
+    /* Fitting wheel — 400×400 circle, ship render center, module
+       icons on concentric arcs. zKillboard-style but SVG-driven so
+       bezels adapt to any hull slot layout. */
+    .km-fit-wrap {
+        display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap;
+        margin: 0.5rem 0 1.5rem; justify-content: center;
+    }
+    .km-fit-wheel { position: relative; width: 400px; height: 400px; flex-shrink: 0; }
+    .km-fit-wheel > svg { position: absolute; inset: 0; pointer-events: none; }
+    .km-fit-wheel > .km-fit-ship {
+        position: absolute; left: 72px; top: 72px;
+        width: 256px; height: 256px; border-radius: 50%;
+        mask-image: radial-gradient(circle, black 60%, transparent 72%);
+        -webkit-mask-image: radial-gradient(circle, black 60%, transparent 72%);
+    }
+    .km-fit-mod {
+        position: absolute; width: 32px; height: 32px; border-radius: 3px;
+        background: rgba(17,17,19,0.7);
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+    }
+    .km-fit-mod:hover { transform: scale(1.18); z-index: 5; }
+    .km-fit-mod.dropped { box-shadow: 0 0 0 1.5px rgba(74,222,128,0.75); }
+    .km-fit-mod.destroyed { box-shadow: 0 0 0 1.5px rgba(255,56,56,0.6); filter: grayscale(0.3); }
+    .km-fit-charge {
+        position: absolute; width: 16px; height: 16px;
+        border-radius: 2px; pointer-events: none;
+    }
+    .km-fit-legend {
+        display: flex; gap: 0.75rem; flex-wrap: wrap;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+        color: #7a7a82;
+    }
+    .km-fit-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .km-fit-legend span::before {
+        content: ''; display: inline-block; width: 10px; height: 10px;
+        border-radius: 2px; background: var(--tone, #7a7a82);
+    }
 </style>
 
 {{-- Victim header --}}
@@ -157,6 +279,74 @@
         View on zKillboard ↗
     </a>
 </div>
+
+@if ($wheelHasAny)
+@php
+    $wheelCx = 200.0; $wheelCy = 200.0;
+    $wheelOuterR = 165.0; $wheelInnerR = 86.0;
+@endphp
+<div class="km-fit-wrap">
+    <div class="km-fit-wheel" aria-hidden="true">
+        <svg width="400" height="400">
+            <circle cx="{{ $wheelCx }}" cy="{{ $wheelCy }}" r="{{ $wheelOuterR + 18 }}" fill="none" stroke="rgba(255,255,255,0.05)" />
+            <circle cx="{{ $wheelCx }}" cy="{{ $wheelCy }}" r="{{ $wheelInnerR + 18 }}" fill="none" stroke="rgba(255,255,255,0.04)" />
+            @foreach ($wheelLayout as $g)
+                @php
+                    $r = $g['ring'] === 'outer' ? $wheelOuterR : $wheelInnerR;
+                    $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
+                    $color = $wheelGroupColor($g['key']);
+                @endphp
+                @foreach ($positions as $p)
+                    <circle cx="{{ number_format($p['x'], 2, '.', '') }}" cy="{{ number_format($p['y'], 2, '.', '') }}" r="18"
+                            fill="rgba(17,17,19,0.5)" stroke="{{ $color }}" stroke-opacity="0.5" stroke-width="1.5" />
+                @endforeach
+            @endforeach
+        </svg>
+
+        <img class="km-fit-ship" referrerpolicy="no-referrer"
+             src="https://images.evetech.net/types/{{ $wheelShipTypeId }}/render?size=256"
+             alt="{{ $km->victim_ship_type_name ?? '' }}">
+
+        @foreach ($wheelLayout as $g)
+            @php
+                $r = $g['ring'] === 'outer' ? $wheelOuterR : $wheelInnerR;
+                $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
+                $mods = $wheelModulesByGroup[$g['key']] ?? [];
+            @endphp
+            @foreach ($positions as $i => $p)
+                @php $m = $mods[$i] ?? null; @endphp
+                @if ($m)
+                    @php
+                        $dropped = ($m->quantity_dropped ?? 0) > 0;
+                        $destroyed = ($m->quantity_destroyed ?? 0) > 0;
+                        $stateClass = $dropped ? 'dropped' : ($destroyed ? 'destroyed' : '');
+                        $modName = $m->type_name ?? $typeNames[$m->type_id] ?? 'Type #'.$m->type_id;
+                    @endphp
+                    <img class="km-fit-mod {{ $stateClass }}"
+                         referrerpolicy="no-referrer"
+                         style="left: {{ number_format($p['x'] - 16, 2, '.', '') }}px; top: {{ number_format($p['y'] - 16, 2, '.', '') }}px;"
+                         src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=32"
+                         title="{{ $modName }}{{ $destroyed ? ' · destroyed' : '' }}{{ $dropped ? ' · dropped' : '' }}"
+                         alt="">
+                @endif
+            @endforeach
+        @endforeach
+    </div>
+
+    <div style="min-width: 180px;">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:0.7rem;color:#7a7a82;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:0.5rem;">Fitting</div>
+        <div class="km-fit-legend">
+            @foreach ($wheelLayout as $g)
+                <span style="--tone: {{ $wheelGroupColor($g['key']) }};">{{ ucfirst($g['key']) }} · {{ count($wheelModulesByGroup[$g['key']] ?? []) }}/{{ $g['count'] }}</span>
+            @endforeach
+        </div>
+        <div style="margin-top:0.9rem;font-size:0.65rem;color:#7a7a82;font-family:'JetBrains Mono',monospace;">
+            <span style="color:#4ade80;">■</span> dropped
+            <span style="color:#ff3838;margin-left:0.7rem;">■</span> destroyed
+        </div>
+    </div>
+</div>
+@endif
 
 <div class="km-grid">
     {{-- Left column: Value breakdown + Attackers --}}
