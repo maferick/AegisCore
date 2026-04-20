@@ -1053,101 +1053,81 @@
         return 2;
     };
 @endphp
-@php
-    // Flatten pilots across sides. Sort key: side-index (stable slot
-    // order) → hull-priority (Monitor/capital) → isk_lost desc.
-    // Single full-width list keeps each row at full readable width
-    // even on a 3+ side brawl, and the side chip at row-start lets
-    // the reader scan by colour. Maps were hoisted to the header.
-    $allPilots = $participants
-        ->map(function ($p) use ($sides, $sideIndexByKey, $pilotHullPriority) {
-            $cid = (int) $p->character_id;
-            $sideKey = $sides->sideByCharacterId[$cid] ?? 'C';
-            return [
-                'p' => $p,
-                'side_key' => $sideKey,
-                'side_idx' => $sideIndexByKey[$sideKey] ?? 99,
-                'hull_prio' => $pilotHullPriority($cid),
-            ];
-        })
-        ->sortBy(fn ($x) => [$x['side_idx'], $x['hull_prio'], -((float) $x['p']->isk_lost)])
-        ->values();
-@endphp
-<div class="km-card" style="margin-bottom: 1.5rem;">
-    <h3 style="display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
-        Pilots <span class="muted">· {{ $allPilots->count() }}</span>
-        <span style="margin-left:auto;display:inline-flex;gap:0.5rem;font-family:'JetBrains Mono',monospace;font-size:0.62rem;">
-            @foreach ($sideList as $s)
-                @php $count = $allPilots->where('side_key', $s['key'])->count(); @endphp
-                <span style="display:inline-flex;align-items:center;gap:4px;color:{{ $s['color'] }};">
-                    <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:{{ $s['color'] }};"></span>
-                    {{ $sideLabelByKey[$s['key']] }} · {{ $count }}
-                </span>
-            @endforeach
-        </span>
-    </h3>
-    @if ($allPilots->isEmpty())
-        <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No pilots.</div>
-    @else
-        @foreach ($allPilots as $row)
-            @php
-                $p = $row['p'];
-                $cid = (int) $p->character_id;
-                $cName = $names[$cid] ?? 'Character #'.$cid;
-                $aName = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : null;
-                $allShips = $allShipsOf($cid);
-                $isFB = $p->final_blows > 0;
-                $lossKm = $lossKmByChar[$cid] ?? null;
-                $sideColor = $sideColorByKey[$row['side_key']] ?? '#7a7a82';
-                $sideLbl = $sideLabelByKey[$row['side_key']] ?? '';
-            @endphp
-            @if ($lossKm)
-            <a href="{{ $killmailUrl($lossKm) }}" class="bt-pilot-link">
-            @endif
-            <div class="km-attacker {{ $isFB ? 'km-final-blow' : '' }} {{ $lossKm ? 'bt-pilot-clickable' : '' }}"
-                 style="border-left: 3px solid {{ $sideColor }}; padding-left: 0.6rem;">
-                <span title="{{ $sideLbl }}" style="display:inline-block;width:6px;height:32px;background:{{ $sideColor }};border-radius:2px;margin-right:6px;flex-shrink:0;"></span>
-                <img src="https://images.evetech.net/characters/{{ $cid }}/portrait?size=64"
-                     referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
-                <div class="km-attacker-info">
-                    <div class="km-attacker-name">
-                        {{ $cName }}
-                        {!! $roleBadge((int) $cid) !!}
-                        @if ($isFB) <span class="km-badge km-badge-red" style="margin-left: 4px;">FB × {{ $p->final_blows }}</span> @endif
-                    </div>
-                    <div class="km-attacker-corp">
-                        <span style="color:{{ $sideColor }};font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;margin-right:6px;">{{ $sideLbl }}</span>
-                        {{ $aName ?? '—' }}
-                    </div>
-                    @if ($allShips !== [])
-                        <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
-                            @foreach ($allShips as $s)
-                                <span style="display:inline-flex;align-items:center;gap:3px;" title="appeared on {{ $s['count'] }} killmails flying {{ $s['name'] }}">
-                                    <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
-                                         referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                    {{ $s['name'] }}@if ($s['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $s['count'] }} km</span>@endif
-                                </span>
-                            @endforeach
+{{-- Per-side columns (user preference). Monitor/capital sort kept
+     inside each side so FCs stay on top. --}}
+<div class="side-columns">
+    @foreach ($sideList as $s)
+        @php
+            $sideKey = $s['key'];
+            $sidePilots = $participants
+                ->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $sideKey)
+                ->sortBy(fn ($p) => [$pilotHullPriority((int) $p->character_id), -((float) $p->isk_lost)])
+                ->values();
+            $sideColor = $sideColorByKey[$sideKey] ?? '#7a7a82';
+            $sideLbl = $sideLabelByKey[$sideKey] ?? '';
+        @endphp
+        <div class="side-card" style="--side-color: {{ $sideColor }};">
+            <h3>
+                Pilots — {{ $sideLbl }}
+                <span class="muted">· {{ $sidePilots->count() }}</span>
+                @if ($s['headline']) <span class="headline">{{ $s['headline'] }}</span> @endif
+            </h3>
+            @if ($sidePilots->isEmpty())
+                <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No pilots.</div>
+            @else
+                @foreach ($sidePilots as $p)
+                    @php
+                        $cid = (int) $p->character_id;
+                        $cName = $names[$cid] ?? 'Character #'.$cid;
+                        $aName = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : null;
+                        $allShips = $allShipsOf($cid);
+                        $isFB = $p->final_blows > 0;
+                        $lossKm = $lossKmByChar[$cid] ?? null;
+                    @endphp
+                    @if ($lossKm)
+                    <a href="{{ $killmailUrl($lossKm) }}" class="bt-pilot-link">
+                    @endif
+                    <div class="km-attacker {{ $isFB ? 'km-final-blow' : '' }} {{ $lossKm ? 'bt-pilot-clickable' : '' }}">
+                        <img src="https://images.evetech.net/characters/{{ $cid }}/portrait?size=64"
+                             referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
+                        <div class="km-attacker-info">
+                            <div class="km-attacker-name">
+                                {{ $cName }}
+                                {!! $roleBadge((int) $cid) !!}
+                                @if ($isFB) <span class="km-badge km-badge-red" style="margin-left: 4px;">FB × {{ $p->final_blows }}</span> @endif
+                            </div>
+                            <div class="km-attacker-corp">{{ $aName ?? '—' }}</div>
+                            @if ($allShips !== [])
+                                <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+                                    @foreach ($allShips as $sh)
+                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="appeared on {{ $sh['count'] }} killmails flying {{ $sh['name'] }}">
+                                            <img src="https://images.evetech.net/types/{{ $sh['type_id'] }}/icon?size=32"
+                                                 referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
+                                            {{ $sh['name'] }}@if ($sh['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $sh['count'] }} km</span>@endif
+                                        </span>
+                                    @endforeach
+                                </div>
+                            @endif
                         </div>
+                        <div class="km-attacker-damage" style="font-variant-numeric:tabular-nums;">
+                            @if ($p->damage_done > 0)
+                                <div>{{ number_format($p->damage_done) }} <span style="font-size:0.6rem;color:#7a7a82;">dmg</span></div>
+                            @endif
+                            @if ($p->kills > 0)
+                                <div style="color:#4ade80;">{{ $p->kills }} <span style="font-size:0.6rem;color:#7a7a82;">kills</span></div>
+                            @endif
+                            @if ($p->deaths > 0)
+                                <div style="color:#ff3838;">{{ $formatIsk((float) $p->isk_lost) }}</div>
+                            @endif
+                        </div>
+                    </div>
+                    @if ($lossKm)
+                    </a>
                     @endif
-                </div>
-                <div class="km-attacker-damage" style="font-variant-numeric:tabular-nums;">
-                    @if ($p->damage_done > 0)
-                        <div>{{ number_format($p->damage_done) }} <span style="font-size:0.6rem;color:#7a7a82;">dmg</span></div>
-                    @endif
-                    @if ($p->kills > 0)
-                        <div style="color:#4ade80;">{{ $p->kills }} <span style="font-size:0.6rem;color:#7a7a82;">kills</span></div>
-                    @endif
-                    @if ($p->deaths > 0)
-                        <div style="color:#ff3838;">{{ $formatIsk((float) $p->isk_lost) }}</div>
-                    @endif
-                </div>
-            </div>
-            @if ($lossKm)
-            </a>
+                @endforeach
             @endif
-        @endforeach
-    @endif
+        </div>
+    @endforeach
 </div>
 
 {{-- ================================================================
