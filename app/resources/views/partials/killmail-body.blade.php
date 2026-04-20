@@ -268,9 +268,81 @@
 
 {{-- Victim header --}}
 <div class="km-victim-header">
-    <img src="https://images.evetech.net/types/{{ $km->victim_ship_type_id }}/render?size=128"
-         alt="{{ $km->victim_ship_type_name }}" referrerpolicy="no-referrer"
-         class="km-ship-render" width="96" height="96">
+    @if ($wheelHasAny)
+        {{-- Wheel replaces the legacy 96px hull-render portrait. Ship
+             sits in the middle of the wheel anyway, so a separate
+             thumbnail would just duplicate it. --}}
+        @php
+            $wheelCx = 200.0; $wheelCy = 200.0;
+            $wheelOuterR = 165.0; $wheelInnerR = 86.0;
+        @endphp
+        <div class="km-fit-wheel" aria-hidden="true">
+            <svg width="400" height="400">
+                <circle cx="{{ $wheelCx }}" cy="{{ $wheelCy }}" r="{{ $wheelOuterR + 18 }}" fill="none" stroke="rgba(255,255,255,0.05)" />
+                <circle cx="{{ $wheelCx }}" cy="{{ $wheelCy }}" r="{{ $wheelInnerR + 18 }}" fill="none" stroke="rgba(255,255,255,0.04)" />
+                @foreach ($wheelLayout as $g)
+                    @php
+                        $r = $g['ring'] === 'outer' ? $wheelOuterR : $wheelInnerR;
+                        $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
+                        $color = $wheelGroupColor($g['key']);
+                    @endphp
+                    @foreach ($positions as $i => $p)
+                        @php $filled = isset($wheelModulesByGroup[$g['key']][$i]); @endphp
+                        <circle cx="{{ number_format($p['x'], 2, '.', '') }}" cy="{{ number_format($p['y'], 2, '.', '') }}"
+                                r="{{ $filled ? 18 : 16 }}"
+                                fill="{{ $filled ? 'rgba(17,17,19,0.55)' : 'rgba(255,255,255,0.015)' }}"
+                                stroke="{{ $color }}"
+                                stroke-opacity="{{ $filled ? 0.55 : 0.22 }}"
+                                stroke-width="{{ $filled ? 1.5 : 1 }}" />
+                    @endforeach
+                @endforeach
+            </svg>
+            <img class="km-fit-ship" referrerpolicy="no-referrer"
+                 src="https://images.evetech.net/types/{{ $wheelShipTypeId }}/render?size=256"
+                 alt="{{ $km->victim_ship_type_name ?? '' }}">
+            @foreach ($wheelLayout as $g)
+                @php
+                    $r = $g['ring'] === 'outer' ? $wheelOuterR : $wheelInnerR;
+                    $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
+                    $mods = $wheelModulesByGroup[$g['key']] ?? [];
+                @endphp
+                @foreach ($positions as $i => $p)
+                    @php $m = $mods[$i] ?? null; @endphp
+                    @if ($m)
+                        @php
+                            $dropped = ($m->quantity_dropped ?? 0) > 0;
+                            $destroyed = ($m->quantity_destroyed ?? 0) > 0;
+                            $stateClass = $dropped ? 'dropped' : ($destroyed ? 'destroyed' : '');
+                            $modName = $m->type_name ?? $typeNames[$m->type_id] ?? 'Type #'.$m->type_id;
+                            $charge = $wheelChargeByFlag[(int) $m->flag] ?? null;
+                            $chargeName = $charge ? ($charge->type_name ?? $typeNames[$charge->type_id] ?? 'Type #'.$charge->type_id) : null;
+                            $tip = $modName
+                                . ($charge ? ' ['.$chargeName.']' : '')
+                                . ($destroyed ? ' · destroyed' : '')
+                                . ($dropped ? ' · dropped' : '');
+                        @endphp
+                        <div class="km-fit-mod {{ $stateClass }}"
+                             style="left: {{ number_format($p['x'] - 16, 2, '.', '') }}px; top: {{ number_format($p['y'] - 16, 2, '.', '') }}px;"
+                             title="{{ $tip }}">
+                            <img src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=32"
+                                 referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:3px;display:block;" alt="">
+                            @if ($charge)
+                                <img class="km-fit-charge" referrerpolicy="no-referrer"
+                                     src="https://images.evetech.net/types/{{ $charge->type_id }}/icon?size=32" alt="">
+                            @endif
+                            @if ($stateClass)
+                                <span class="km-fit-mod-dot {{ $stateClass }}"></span>
+                            @endif
+                        </div>
+                    @endif
+                @endforeach
+            @endforeach
+        </div>
+    @else
+        <img src="https://images.evetech.net/types/{{ $km->victim_ship_type_id }}/render?size=128"
+             alt="{{ $km->victim_ship_type_name }}" referrerpolicy="no-referrer"
+             class="km-ship-render" width="96" height="96">
+    @endif
     <div style="flex:1;min-width:0;">
         <div class="km-victim-name">{{ $victim['name'] }}{!! $roleBadge($km->victim_character_id ? (int) $km->victim_character_id : null) !!}</div>
         <div class="km-victim-meta" style="margin-top: 0.25rem;">
@@ -322,92 +394,6 @@
         View on zKillboard ↗
     </a>
 </div>
-
-@if ($wheelHasAny)
-@php
-    $wheelCx = 200.0; $wheelCy = 200.0;
-    $wheelOuterR = 165.0; $wheelInnerR = 86.0;
-@endphp
-<div class="km-fit-wrap">
-    <div class="km-fit-wheel" aria-hidden="true">
-        <svg width="400" height="400">
-            <circle cx="{{ $wheelCx }}" cy="{{ $wheelCy }}" r="{{ $wheelOuterR + 18 }}" fill="none" stroke="rgba(255,255,255,0.05)" />
-            <circle cx="{{ $wheelCx }}" cy="{{ $wheelCy }}" r="{{ $wheelInnerR + 18 }}" fill="none" stroke="rgba(255,255,255,0.04)" />
-            @foreach ($wheelLayout as $g)
-                @php
-                    $r = $g['ring'] === 'outer' ? $wheelOuterR : $wheelInnerR;
-                    $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
-                    $color = $wheelGroupColor($g['key']);
-                @endphp
-                @foreach ($positions as $i => $p)
-                    @php $filled = isset($wheelModulesByGroup[$g['key']][$i]); @endphp
-                    <circle cx="{{ number_format($p['x'], 2, '.', '') }}" cy="{{ number_format($p['y'], 2, '.', '') }}"
-                            r="{{ $filled ? 18 : 16 }}"
-                            fill="{{ $filled ? 'rgba(17,17,19,0.55)' : 'rgba(255,255,255,0.015)' }}"
-                            stroke="{{ $color }}"
-                            stroke-opacity="{{ $filled ? 0.55 : 0.22 }}"
-                            stroke-width="{{ $filled ? 1.5 : 1 }}" />
-                @endforeach
-            @endforeach
-        </svg>
-
-        <img class="km-fit-ship" referrerpolicy="no-referrer"
-             src="https://images.evetech.net/types/{{ $wheelShipTypeId }}/render?size=256"
-             alt="{{ $km->victim_ship_type_name ?? '' }}">
-
-        @foreach ($wheelLayout as $g)
-            @php
-                $r = $g['ring'] === 'outer' ? $wheelOuterR : $wheelInnerR;
-                $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
-                $mods = $wheelModulesByGroup[$g['key']] ?? [];
-            @endphp
-            @foreach ($positions as $i => $p)
-                @php $m = $mods[$i] ?? null; @endphp
-                @if ($m)
-                    @php
-                        $dropped = ($m->quantity_dropped ?? 0) > 0;
-                        $destroyed = ($m->quantity_destroyed ?? 0) > 0;
-                        $stateClass = $dropped ? 'dropped' : ($destroyed ? 'destroyed' : '');
-                        $modName = $m->type_name ?? $typeNames[$m->type_id] ?? 'Type #'.$m->type_id;
-                        $charge = $wheelChargeByFlag[(int) $m->flag] ?? null;
-                        $chargeName = $charge ? ($charge->type_name ?? $typeNames[$charge->type_id] ?? 'Type #'.$charge->type_id) : null;
-                        $tip = $modName
-                            . ($charge ? ' ['.$chargeName.']' : '')
-                            . ($destroyed ? ' · destroyed' : '')
-                            . ($dropped ? ' · dropped' : '');
-                    @endphp
-                    <div class="km-fit-mod {{ $stateClass }}"
-                         style="left: {{ number_format($p['x'] - 16, 2, '.', '') }}px; top: {{ number_format($p['y'] - 16, 2, '.', '') }}px;"
-                         title="{{ $tip }}">
-                        <img src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=32"
-                             referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:3px;display:block;" alt="">
-                        @if ($charge)
-                            <img class="km-fit-charge" referrerpolicy="no-referrer"
-                                 src="https://images.evetech.net/types/{{ $charge->type_id }}/icon?size=32" alt="">
-                        @endif
-                        @if ($stateClass)
-                            <span class="km-fit-mod-dot {{ $stateClass }}"></span>
-                        @endif
-                    </div>
-                @endif
-            @endforeach
-        @endforeach
-    </div>
-
-    <div style="min-width: 180px;">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:0.7rem;color:#7a7a82;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:0.5rem;">Fitting</div>
-        <div class="km-fit-legend">
-            @foreach ($wheelLayout as $g)
-                <span style="--tone: {{ $wheelGroupColor($g['key']) }};">{{ ucfirst($g['key']) }} · {{ count($wheelModulesByGroup[$g['key']] ?? []) }}/{{ $g['count'] }}</span>
-            @endforeach
-        </div>
-        <div style="margin-top:0.9rem;font-size:0.65rem;color:#7a7a82;font-family:'JetBrains Mono',monospace;">
-            <span style="color:#4ade80;">■</span> dropped
-            <span style="color:#ff3838;margin-left:0.7rem;">■</span> destroyed
-        </div>
-    </div>
-</div>
-@endif
 
 <div class="km-grid">
     {{-- Left column: Value breakdown + Attackers --}}
