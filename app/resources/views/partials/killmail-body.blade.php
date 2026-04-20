@@ -104,27 +104,29 @@
         'subsystem' => $wheelCountFrom(1367, count($wheelModulesByGroup['subsystem'])),
         'service'   => $wheelCountFrom(2056, count($wheelModulesByGroup['service'])),
     ];
-    // zKill-style layout by sector center + fixed step. Each group
-    // anchors at a center angle (deg, 0 = right, -90 = top) and
-    // packs `count` slots symmetrically around it at `step` degrees
-    // per adjacent slot. Drop step from 12° → 10° when the outer
-    // ring is densely packed (> 20 slots) so an 8/8/8 Rokh still
-    // fits without overlap; the default 12° matches zKill.
+    // zKill-style outer ring: chain from a fixed anchor (-177°,
+    // left-horizontal, just above the inner-ring boundary) through
+    // mid → high → low. Intra-group spacing = STEP, inter-group
+    // gap = GAP. GAP ≈ 2.75 × STEP so the colour break between
+    // groups reads as "different group", not "next slot".
+    // Dense hulls (>= 18 outer slots) fall back to a tighter step
+    // so an 8/8/8 Rokh still fits inside the top 300° of the ring.
     $wheelTotalOuter = $wheelCounts['high'] + $wheelCounts['mid'] + $wheelCounts['low'];
-    $wheelStep = $wheelTotalOuter > 20 ? 10 : 12;
-    $wheelCenters = $wheelTotalOuter > 20
-        ? ['mid' => -140, 'high' => -45,  'low' => 50]   // denser
-        : ['mid' => -135, 'high' => -55,  'low' => 35];  // zKill-like
+    $wheelStep = $wheelTotalOuter >= 18 ? 10 : 12;
+    $wheelGap  = $wheelTotalOuter >= 18 ? 28 : 33;
+    $wheelAnchor = -177.0;
 
-    $arcFor = function (float $center, int $count, float $step): array {
-        $span = ($count - 1) * $step;
-        return [$center - $span / 2, $center + $span / 2];
-    };
+    $arcFromStart = fn (float $start, int $count, float $step): array =>
+        [$start, $start + ($count - 1) * $step];
 
+    $cursor = $wheelAnchor;
     $wheelLayout = [];
-    if ($wheelCounts['mid'] > 0)  $wheelLayout[] = ['key' => 'mid',  'count' => $wheelCounts['mid'],  'ring' => 'outer', 'arc' => $arcFor($wheelCenters['mid'],  $wheelCounts['mid'],  $wheelStep)];
-    if ($wheelCounts['high'] > 0) $wheelLayout[] = ['key' => 'high', 'count' => $wheelCounts['high'], 'ring' => 'outer', 'arc' => $arcFor($wheelCenters['high'], $wheelCounts['high'], $wheelStep)];
-    if ($wheelCounts['low'] > 0)  $wheelLayout[] = ['key' => 'low',  'count' => $wheelCounts['low'],  'ring' => 'outer', 'arc' => $arcFor($wheelCenters['low'],  $wheelCounts['low'],  $wheelStep)];
+    foreach (['mid', 'high', 'low'] as $g) {
+        $n = $wheelCounts[$g];
+        if ($n <= 0) continue;
+        $wheelLayout[] = ['key' => $g, 'count' => $n, 'ring' => 'outer', 'arc' => $arcFromStart($cursor, $n, $wheelStep)];
+        $cursor += ($n - 1) * $wheelStep + $wheelGap;
+    }
 
     // Inner ring: subsystems top half (center -90°), rigs bottom
     // half (center +90°), service slots only when the hull has any
@@ -132,13 +134,13 @@
     if ($wheelCounts['subsystem'] > 0) {
         // T3C cap: 4 slots. Step 25° keeps max-5 width under 100°.
         $n = min($wheelCounts['subsystem'], 4);
-        $wheelLayout[] = ['key' => 'subsystem', 'count' => $n, 'ring' => 'inner', 'arc' => $arcFor(-90, $n, 25)];
+        $wheelLayout[] = ['key' => 'subsystem', 'count' => $n, 'ring' => 'inner', 'arc' => $arcFromStart($n === 1 ? -90.0 : -90 - (($n - 1) * 25) / 2.0, $n, 25)];
     }
     if ($wheelCounts['rig'] > 0) {
-        $wheelLayout[] = ['key' => 'rig', 'count' => $wheelCounts['rig'], 'ring' => 'inner', 'arc' => $arcFor(90, $wheelCounts['rig'], 25)];
+        $wheelLayout[] = ['key' => 'rig', 'count' => $wheelCounts['rig'], 'ring' => 'inner', 'arc' => $arcFromStart($wheelCounts["rig"] === 1 ? 90.0 : 90 - (($wheelCounts["rig"] - 1) * 25) / 2.0, $wheelCounts["rig"], 25)];
     }
     if ($wheelCounts['service'] > 0 && $wheelCounts['subsystem'] === 0) {
-        $wheelLayout[] = ['key' => 'service', 'count' => $wheelCounts['service'], 'ring' => 'inner', 'arc' => $arcFor(-90, $wheelCounts['service'], 25)];
+        $wheelLayout[] = ['key' => 'service', 'count' => $wheelCounts['service'], 'ring' => 'inner', 'arc' => $arcFromStart($wheelCounts["service"] === 1 ? -90.0 : -90 - (($wheelCounts["service"] - 1) * 25) / 2.0, $wheelCounts["service"], 25)];
     }
 
     $wheelPositions = function (int $count, array $arc, float $radius, float $cx, float $cy): array {
