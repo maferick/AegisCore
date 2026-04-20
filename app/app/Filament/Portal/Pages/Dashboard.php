@@ -279,11 +279,36 @@ class Dashboard extends BaseDashboard
             ->all();
         $roleTotal = array_sum(array_column($roleBreakdown, 'n')) ?: 1;
 
-        // Battles participated.
-        $battlesParticipated = DB::table('battle_theater_participants')
-            ->where('character_id', $cid)
-            ->distinct()
-            ->count('theater_id');
+        // Fleet sessions. The theater-clustering worker is lossy — on
+        // a cold pipeline this count reads as 3 for an FC with
+        // hundreds of kills. Count session-based instead: pull every
+        // killmail the pilot appeared on (attacker or victim),
+        // sort chronologically, start a new session on any gap
+        // > 1 hour. Each session ≈ one fleet op.
+        // Indexed UNION path — each leg hits a covering index, no
+        // 7M-row LEFT JOIN scan.
+        $sessionRows = DB::select(<<<'SQL'
+            SELECT t FROM (
+              SELECT k.killed_at AS t
+                FROM killmail_attackers ka
+                JOIN killmails k ON k.killmail_id = ka.killmail_id
+               WHERE ka.character_id = ?
+              UNION
+              SELECT killed_at AS t
+                FROM killmails
+               WHERE victim_character_id = ?
+            ) u ORDER BY t
+        SQL, [$cid, $cid]);
+        $fleetSessions = 0;
+        $prevTs = null;
+        foreach ($sessionRows as $row) {
+            $ts = strtotime((string) $row->t);
+            if ($prevTs === null || ($ts - $prevTs) > 3600) {
+                $fleetSessions++;
+            }
+            $prevTs = $ts;
+        }
+        $battlesParticipated = $fleetSessions;
 
         // Activity map is lazy-loaded via /portal/characters/{cid}/activity-map
         // so the dashboard render doesn't wait on BFS + titan pair

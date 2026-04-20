@@ -283,11 +283,11 @@
                     @endif
                 </div>
                 <div style="background:rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.2); border-radius:6px; padding:0.6rem 0.8rem;">
-                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">Battles participated</div>
+                    <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;" title="Consecutive kill windows separated by 60+ min gaps — one session ≈ one fleet op.">Fleet sessions</div>
                     <div style="font-size:1.4rem; font-weight:700; color:#e5e5e7; margin-top:0.1rem;">
                         {{ number_format($c['battles_participated'] ?? 0) }}
                     </div>
-                    <div style="font-size:0.68rem; color:#7a7a82; margin-top:0.15rem;">distinct theaters in our data</div>
+                    <div style="font-size:0.68rem; color:#7a7a82; margin-top:0.15rem;">killmails grouped by 1h gaps</div>
                 </div>
             </div>
 
