@@ -159,29 +159,42 @@ final class FetchCharacterCorporationHistory implements ShouldBeUnique, ShouldQu
     /**
      * Find character IDs from killmails that don't have corp history cached.
      *
+     * Unions victim_character_id and killmail_attackers.character_id — the
+     * pipeline-health probe uses the same union as its denominator, so
+     * draining only the victim side leaves attacker-only pilots forever
+     * uncached (2026-04-20 stall at 95%: 9 uncached victims vs 28,376
+     * uncached attackers).
+     *
      * @return list<int>
      */
     private function findUncachedCharacters(): array
     {
-        // Get distinct character IDs from recent killmail victims that
-        // aren't in the history table yet. Shard filter (MOD = shardId)
-        // partitions the uncached set across parallel dispatches so
-        // shards don't refetch the same character.
-        $q = DB::table('killmails')
-            ->select('victim_character_id')
-            ->whereNotNull('victim_character_id')
-            ->whereNotExists(function ($q) {
-                $q->select(DB::raw(1))
-                    ->from('character_corporation_history')
-                    ->whereColumn('character_corporation_history.character_id', 'killmails.victim_character_id');
-            })
-            ->groupBy('victim_character_id');
+        $shardFilter = '';
+        $shardBind = [];
         if ($this->shardCount > 1) {
-            $q->whereRaw('victim_character_id % ? = ?', [$this->shardCount, $this->shardId]);
+            $shardFilter = ' AND cid % ? = ?';
+            $shardBind = [$this->shardCount, $this->shardId];
         }
-        return $q->limit(self::BATCH_SIZE)
-            ->pluck('victim_character_id')
-            ->all();
+
+        $sql = <<<SQL
+            SELECT cid FROM (
+                SELECT DISTINCT victim_character_id AS cid
+                  FROM killmails
+                 WHERE victim_character_id IS NOT NULL
+                UNION
+                SELECT DISTINCT character_id AS cid
+                  FROM killmail_attackers
+                 WHERE character_id IS NOT NULL
+            ) u
+            WHERE NOT EXISTS (
+                SELECT 1 FROM character_corporation_history h
+                 WHERE h.character_id = u.cid
+            ){$shardFilter}
+            LIMIT ?
+        SQL;
+
+        $rows = DB::select($sql, array_merge($shardBind, [self::BATCH_SIZE]));
+        return array_map(fn ($r) => (int) $r->cid, $rows);
     }
 
     /**
