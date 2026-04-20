@@ -178,14 +178,21 @@
     // A side is "present" iff it has any pilot on it. Extra guard on
     // Side B: if the resolver never found a flagship alliance (no
     // $flagB, headline falls back to the "No opposing side" sentinel)
-    // then anything still tagged B is structural leftover — collapse
-    // it into C so the grid renders "Side A + Third parties" cleanly
-    // instead of an empty-labelled middle column.
+    // then anything still tagged B is structural leftover.
     $sideIsPresent = fn (array $t): bool =>
         (int) ($t['pilots'] ?? 0) > 0
         || (float) ($t['isk_killed'] ?? 0) > 0
         || (float) ($t['isk_lost'] ?? 0) > 0;
     $sideBValid = $sideBHeadline !== 'No opposing side' && $sideIsPresent($tB);
+
+    // When the viewer-aware resolver kills Side B (neither faction in
+    // the fight belongs to the viewer's bloc, so everybody on the
+    // non-A side gets bucketed into third parties), promote the C
+    // cluster into the B slot. The battle was two-sided in reality
+    // (Fraternity vs TIME CRIT style), and rendering it as "Side A +
+    // third parties" buries the fact that C was the actual antagonist.
+    $promoteCtoB = ! $sideBValid && $sideIsPresent($tC);
+
     $sideList = [];
     if ($sideIsPresent($tA)) {
         $sideList[] = [
@@ -200,8 +207,21 @@
             'headline' => $sideBHeadline, 'sub' => $blocB, 'logo' => $flagB,
             'totals' => $tB, 'eff' => $effB, 'bar' => $barB,
         ];
+    } elseif ($promoteCtoB) {
+        // C promoted: keep SIDE_C as the internal key (so per-side
+        // lookups into $roster_by_side / $most_valuable_kills /
+        // $composition / $top_damage still resolve against the C
+        // bucket where the data actually lives), but paint it with
+        // the B tone/colour and label "Side B" so the layout reads
+        // as a proper two-sided fight.
+        $sideList[] = [
+            'key' => S::SIDE_C, 'tone' => 'b', 'color' => '#ff3838',
+            'headline' => $sideCHeadline, 'sub' => null, 'logo' => $flagC,
+            'totals' => $tC, 'eff' => $effC, 'bar' => $barC,
+            'label_override' => 'Side B',
+        ];
     }
-    if ($hasSideC || $sideIsPresent($tC)) {
+    if (! $promoteCtoB && ($hasSideC || $sideIsPresent($tC))) {
         $sideList[] = [
             'key' => S::SIDE_C, 'tone' => 'c', 'color' => '#fbbf24',
             'headline' => $sideCHeadline, 'sub' => null, 'logo' => $flagC,
@@ -525,7 +545,7 @@
     <div class="share-legend">
         @foreach ($sideList as $s)
             <span style="--side-color: {{ $s['color'] }};">
-                {{ $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'] }}
+                {{ $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']) }}
                 · {{ $s['eff'] !== null ? $s['eff'].'% eff' : '—' }}
                 · {{ $s['bar'] }}% of destroyed
             </span>
@@ -554,7 +574,7 @@
             $t = $s['totals'];
             $traded = (float) ($t['isk_killed'] + $t['isk_lost']);
             $eff = $traded > 0 ? round($t['isk_killed'] / $traded * 100, 1) : null;
-            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+            $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
             <h3>
@@ -585,7 +605,7 @@
     @foreach ($sideList as $s)
         @php
             $rows = $most_valuable_kills[$s['key']] ?? [];
-            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+            $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
             <h3>Top kills — {{ $sideLabel }} <span class="muted">· by {{ $s['headline'] }}</span></h3>
@@ -625,7 +645,7 @@
         @php
             $rows = $composition[$s['key']] ?? [];
             $max = 0; foreach ($rows as $r) { if ($r['count'] > $max) $max = $r['count']; }
-            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+            $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
             <h3>Composition — {{ $sideLabel }} <span class="muted">· {{ $s['headline'] }}</span></h3>
@@ -656,7 +676,7 @@
     @foreach ($sideList as $s)
         @php
             $rows = $top_damage[$s['key']] ?? [];
-            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+            $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
             <h3>Top damage — {{ $sideLabel }}</h3>
@@ -722,7 +742,7 @@
     @foreach ($sideList as $s)
         @php
             $rows = $roster_by_side[$s['key']] ?? collect();
-            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+            $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
             <h3>Roster — {{ $sideLabel }} <span class="muted">· {{ $rows->count() }}</span></h3>
@@ -892,7 +912,7 @@
     @foreach ($sideList as $s)
         @php
             $sidePilots = $participants->filter(fn ($p) => ($sides->sideByCharacterId[(int) $p->character_id] ?? 'C') === $s['key'])->values();
-            $sideLabel = $s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key'];
+            $sideLabel = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
         @endphp
         <div class="side-card" style="--side-color: {{ $s['color'] }};">
             <h3>Pilots — {{ $sideLabel }} <span class="muted">· {{ $sidePilots->count() }}</span></h3>
