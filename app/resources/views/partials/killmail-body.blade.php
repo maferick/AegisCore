@@ -104,24 +104,23 @@
         'subsystem' => $wheelCountFrom(1367, count($wheelModulesByGroup['subsystem'])),
         'service'   => $wheelCountFrom(2056, count($wheelModulesByGroup['service'])),
     ];
-    // Layout: outer ring = high / mid / low split across top / right
-    // / bottom; rigs get their own non-overlapping sector on the
-    // left-bottom. Inner ring = subsystems (T3C) placed at fixed
-    // diagonals + service (capitals/industrials).
+    // Layout: outer ring = high (top) + mid (right) + low (bottom);
+    // rigs in their own non-overlapping sector on the left-bottom.
+    // Inner ring = service slots (capitals / industrials) and T3C
+    // subsystems at fixed diagonals.
     // Arcs are degrees, 0 = right, -90 = top.
     $wheelLayout = [];
-    if ($wheelCounts['high'] > 0)    $wheelLayout[] = ['key' => 'high',    'count' => $wheelCounts['high'],    'ring' => 'outer', 'arc' => [-155, -30]];
-    if ($wheelCounts['mid'] > 0)     $wheelLayout[] = ['key' => 'mid',     'count' => $wheelCounts['mid'],     'ring' => 'outer', 'arc' => [-15,   15]];
-    if ($wheelCounts['low'] > 0)     $wheelLayout[] = ['key' => 'low',     'count' => $wheelCounts['low'],     'ring' => 'outer', 'arc' => [ 30,  155]];
-    if ($wheelCounts['rig'] > 0)     $wheelLayout[] = ['key' => 'rig',     'count' => $wheelCounts['rig'],     'ring' => 'outer', 'arc' => [175,  220]];
+    if ($wheelCounts['high'] > 0)    $wheelLayout[] = ['key' => 'high',    'count' => $wheelCounts['high'],    'ring' => 'outer', 'arc' => [-150, -30]];
+    if ($wheelCounts['mid'] > 0)     $wheelLayout[] = ['key' => 'mid',     'count' => $wheelCounts['mid'],     'ring' => 'outer', 'arc' => [-20,   20]];
+    if ($wheelCounts['low'] > 0)     $wheelLayout[] = ['key' => 'low',     'count' => $wheelCounts['low'],     'ring' => 'outer', 'arc' => [ 30,  150]];
+    if ($wheelCounts['rig'] > 0)     $wheelLayout[] = ['key' => 'rig',     'count' => $wheelCounts['rig'],     'ring' => 'outer', 'arc' => [180,  220]];
     if ($wheelCounts['service'] > 0) $wheelLayout[] = ['key' => 'service', 'count' => $wheelCounts['service'], 'ring' => 'inner', 'arc' => [-180, 180]];
     if ($wheelCounts['subsystem'] > 0) {
-        // T3C subsystems live at the four diagonals of the inner
-        // ring so each category always sits in the same corner.
-        // Five subsystems (pre-Hyperion legacy) fans evenly instead.
-        $n = $wheelCounts['subsystem'];
-        $arc = $n <= 4 ? [-135, 135] : [-160, 160];
-        $wheelLayout[] = ['key' => 'subsystem', 'count' => $n, 'ring' => 'inner', 'arc' => $arc];
+        // T3Cs have exactly 4 subsystem slots (maxSubSystems dogma
+        // sometimes reports 5 counting a retired slot — cap hard at
+        // 4 so the inner ring forms a tidy X at the diagonals).
+        $n = min($wheelCounts['subsystem'], 4);
+        $wheelLayout[] = ['key' => 'subsystem', 'count' => $n, 'ring' => 'inner', 'arc' => [-135, 135], 'fixed' => true];
     }
 
     $wheelPositions = function (int $count, array $arc, float $radius, float $cx, float $cy): array {
@@ -209,9 +208,9 @@
     .km-fit-wheel > svg { position: absolute; inset: 0; pointer-events: none; }
     .km-fit-wheel > .km-fit-ship {
         position: absolute; left: 72px; top: 72px;
-        width: 256px; height: 256px; border-radius: 50%;
-        mask-image: radial-gradient(circle, black 60%, transparent 72%);
-        -webkit-mask-image: radial-gradient(circle, black 60%, transparent 72%);
+        width: 256px; height: 256px;
+        mask-image: radial-gradient(circle, black 50%, transparent 70%);
+        -webkit-mask-image: radial-gradient(circle, black 50%, transparent 70%);
     }
     .km-fit-mod {
         position: absolute; width: 32px; height: 32px; border-radius: 3px;
@@ -219,8 +218,8 @@
         transition: transform 0.1s ease, box-shadow 0.1s ease;
     }
     .km-fit-mod:hover { transform: scale(1.2); z-index: 5; }
-    .km-fit-mod.dropped   { box-shadow: 0 0 8px rgba(74,222,128,0.55), 0 0 0 1px rgba(74,222,128,0.45); }
-    .km-fit-mod.destroyed { box-shadow: 0 0 8px rgba(255,56,56,0.45),  0 0 0 1px rgba(255,56,56,0.35); filter: saturate(0.75); }
+    .km-fit-mod.dropped   { box-shadow: 0 0 6px rgba(74,222,128,0.45); }
+    .km-fit-mod.destroyed { box-shadow: 0 0 6px rgba(255,56,56,0.35); filter: saturate(0.8); }
     .km-fit-mod-dot {
         position: absolute; width: 7px; height: 7px; border-radius: 50%;
         bottom: -1px; right: -1px; pointer-events: none;
