@@ -242,8 +242,8 @@
     .km-fit-mod.destroyed { box-shadow: 0 0 6px rgba(255,56,56,0.35); filter: saturate(0.8); }
     .km-fit-mod-dot {
         position: absolute; width: 7px; height: 7px; border-radius: 50%;
-        bottom: -1px; right: -1px; pointer-events: none;
-        border: 1px solid rgba(17,17,19,0.9);
+        bottom: -5px; right: -5px; pointer-events: none;
+        box-shadow: 0 0 0 1.5px rgba(17,17,19,0.95);
     }
     .km-fit-mod-dot.dropped   { background: #4ade80; }
     .km-fit-mod-dot.destroyed { background: #ff3838; }
