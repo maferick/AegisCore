@@ -43,6 +43,8 @@ def run_once(cfg: Config) -> None:
             proximity_seconds=cfg.proximity_seconds,
             min_participants=cfg.min_participants,
             quiet_split_seconds=cfg.quiet_split_seconds,
+            cooldown_seconds=cfg.cooldown_seconds,
+            continuity_floor=cfg.continuity_floor,
         )
 
         kms_by_id = {km.killmail_id: km for km in killmails}

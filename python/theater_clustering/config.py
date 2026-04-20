@@ -21,7 +21,9 @@ class Config:
     # cadence). Overrideable via env for operator tuning without a
     # deploy.
     proximity_seconds: int          # default 2700 (45 min)
-    quiet_split_seconds: int        # default 1200 (20 min) — split cluster when killmail tempo drops
+    quiet_split_seconds: int        # default 1200 (20 min) — TiDi-scaled hard cap on silence gap
+    cooldown_seconds: int           # default 600 (10 min) — enter decline eval after this much silence
+    continuity_floor: float         # default 0.2 — alliance+corp jaccard below this = crew swap → split
     min_participants: int           # default 10
     lock_after_hours: int           # default 48
     window_hours: int               # default 48 — candidate window per pass
@@ -45,6 +47,8 @@ class Config:
             db_password=env("DB_PASSWORD", required=True),
             proximity_seconds=int(env("THEATER_PROXIMITY_SECONDS", "2700") or "2700"),
             quiet_split_seconds=int(env("THEATER_QUIET_SPLIT_SECONDS", "1200") or "1200"),
+            cooldown_seconds=int(env("THEATER_COOLDOWN_SECONDS", "600") or "600"),
+            continuity_floor=float(env("THEATER_CONTINUITY_FLOOR", "0.2") or "0.2"),
             min_participants=int(env("THEATER_MIN_PARTICIPANTS", "10") or "10"),
             lock_after_hours=int(env("THEATER_LOCK_AFTER_HOURS", "48") or "48"),
             window_hours=int(env("THEATER_WINDOW_HOURS", "48") or "48"),

@@ -88,6 +88,8 @@ def cluster_killmails(
     proximity_seconds: int,
     min_participants: int,
     quiet_split_seconds: int = 1200,
+    cooldown_seconds: int = 600,
+    continuity_floor: float = 0.2,
 ) -> list[Cluster]:
     """Return the set of clusters meeting the min-participants threshold.
 
@@ -160,8 +162,13 @@ def cluster_killmails(
                     all_participants.add(a.character_id)
         threshold = _tidi_scaled_split(quiet_split_seconds, len(all_participants))
 
-        sub_clusters = _split_on_tempo(
-            member_ids, kms_by_id, attackers_by_killmail, threshold
+        sub_clusters = _split_on_rate_and_continuity(
+            member_ids,
+            kms_by_id,
+            attackers_by_killmail,
+            hard_cap_seconds=threshold,
+            cooldown_seconds=cooldown_seconds,
+            continuity_floor=continuity_floor,
         )
         for cluster in sub_clusters:
             if len(cluster.participant_character_ids) >= min_participants:
@@ -188,27 +195,63 @@ def _tidi_scaled_split(base_seconds: int, participant_count: int) -> int:
     return base_seconds
 
 
-def _split_on_tempo(
+def _split_on_rate_and_continuity(
     member_ids: list[int],
     kms_by_id: dict[int, Killmail],
     attackers_by_killmail: dict[int, list[Attacker]],
-    quiet_split_seconds: int,
+    hard_cap_seconds: int,
+    cooldown_seconds: int,
+    continuity_floor: float,
 ) -> list[Cluster]:
-    """Walk member killmails chronologically. Start a new cluster whenever
-    the gap between consecutive killmails exceeds quiet_split_seconds.
-    Keeps participant set accurate within each sub-cluster."""
+    """Walk members chronologically. Split on either:
+
+      * a hard-cap silence (gap > hard_cap_seconds) — TiDi-scaled upper
+        bound, matches legacy behaviour for edge cases like Keepstar
+        fights.
+      * an early-exit "fight died" signal: cooldown ≥ cooldown_seconds
+        AND attacker-alliance+corp jaccard between the last 15-min-of-
+        activity window and the most recent 15-min window < floor.
+
+    Attacker-side jaccard only: victim-side churn is dominated by
+    whoever died and is noisy. Crew continuity = attacker
+    alliances + corps, alliance-weighted 2:1 over corps.
+    """
     if not member_ids:
         return []
     ordered = sorted(member_ids, key=lambda kid: kms_by_id[kid].killed_at)
     clusters: list[Cluster] = []
     current = Cluster()
     last_ts = None
+    last_active_ts = None
     for kid in ordered:
         km = kms_by_id[kid]
-        if last_ts is not None and (km.killed_at - last_ts).total_seconds() > quiet_split_seconds:
+        should_split = False
+        if last_ts is not None:
+            gap = (km.killed_at - last_ts).total_seconds()
+            if gap > hard_cap_seconds:
+                should_split = True
+            elif gap > cooldown_seconds and last_active_ts is not None:
+                # Decline zone — check continuity. Freeze prev-window at
+                # last_active_ts: [last_active_ts - 15m, last_active_ts].
+                # "now" window = [km.killed_at - 15m, km.killed_at].
+                prev_alli, prev_corp = _attackers_in_window(
+                    current.killmail_ids, kms_by_id, attackers_by_killmail,
+                    lo_ts=last_active_ts.timestamp() - 900,
+                    hi_ts=last_active_ts.timestamp(),
+                )
+                now_alli, now_corp = _attackers_in_window(
+                    current.killmail_ids | {kid}, kms_by_id, attackers_by_killmail,
+                    lo_ts=km.killed_at.timestamp() - 900,
+                    hi_ts=km.killed_at.timestamp(),
+                )
+                jac = _jaccard_weighted(prev_alli, now_alli, prev_corp, now_corp)
+                if jac < continuity_floor:
+                    should_split = True
+        if should_split:
             if current.killmail_ids:
                 clusters.append(current)
             current = Cluster()
+            last_active_ts = None
         current.killmail_ids.add(kid)
         if km.victim_character_id:
             current.participant_character_ids.add(km.victim_character_id)
@@ -216,6 +259,44 @@ def _split_on_tempo(
             if a.character_id:
                 current.participant_character_ids.add(a.character_id)
         last_ts = km.killed_at
+        last_active_ts = km.killed_at
     if current.killmail_ids:
         clusters.append(current)
     return clusters
+
+
+def _attackers_in_window(
+    killmail_ids: set[int] | frozenset[int],
+    kms_by_id: dict[int, Killmail],
+    attackers_by_killmail: dict[int, list[Attacker]],
+    lo_ts: float,
+    hi_ts: float,
+) -> tuple[set[int], set[int]]:
+    alli: set[int] = set()
+    corp: set[int] = set()
+    for kid in killmail_ids:
+        km = kms_by_id.get(kid)
+        if km is None:
+            continue
+        ts = km.killed_at.timestamp()
+        if ts < lo_ts or ts > hi_ts:
+            continue
+        for a in attackers_by_killmail.get(kid, ()):
+            if a.alliance_id:
+                alli.add(a.alliance_id)
+            if a.corporation_id:
+                corp.add(a.corporation_id)
+    return alli, corp
+
+
+def _jaccard_weighted(
+    prev_alli: set[int], now_alli: set[int],
+    prev_corp: set[int], now_corp: set[int],
+) -> float:
+    inter_a = len(prev_alli & now_alli)
+    union_a = len(prev_alli | now_alli)
+    inter_c = len(prev_corp & now_corp)
+    union_c = len(prev_corp | now_corp)
+    num = 2 * inter_a + inter_c
+    den = 2 * max(union_a, 1) + max(union_c, 1)
+    return num / den if den > 0 else 0.0
