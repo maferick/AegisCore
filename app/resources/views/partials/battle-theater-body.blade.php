@@ -429,6 +429,32 @@
     /* N-segment share-of-destruction bar (generalised from 3-way
        teal/red/muted to any N using --side-color from the inline
        style on each segment). */
+    .bt-sticky-legend {
+        position: sticky; top: 0; z-index: 50;
+        display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
+        margin: 0 -0.25rem 1rem; padding: 0.5rem 0.75rem;
+        background: rgba(12,12,14,0.92);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        border: 1px solid #26262b; border-radius: 6px;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+    }
+    .bt-sticky-legend .chip {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 2px 8px; border-radius: 3px;
+        background: rgba(17,17,19,0.5); border: 1px solid rgba(255,255,255,0.06);
+        color: var(--side-color, #e5e5e7);
+    }
+    .bt-sticky-legend .chip::before {
+        content: ''; width: 8px; height: 8px; border-radius: 2px;
+        background: var(--side-color, #7a7a82);
+    }
+    .bt-sticky-legend .chip .pilots {
+        color: #e5e5e7; font-weight: 600; font-variant-numeric: tabular-nums;
+    }
+    .bt-sticky-legend .chip .label {
+        color: rgba(229,229,231,0.85);
+    }
+    .bt-sticky-legend .meta { color: #7a7a82; margin-left: auto; font-size: 0.62rem; }
     .share-bar { height: 8px; border-radius: 4px; overflow: hidden; display: flex; background: #1a1a1e; margin-top: 1rem; }
     .share-bar > span { display: block; height: 100%; background: var(--side-color, #7a7a82); }
     .share-legend { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.35rem; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; }
@@ -580,6 +606,30 @@
             for viewer-relative sides.
         </div>
     @endif
+</div>
+
+{{-- ================================================================
+     STICKY SIDES LEGEND — stays pinned while scrolling long
+     pilot / kill-feed lists so the reader always knows which
+     colour means which team.
+     ================================================================ --}}
+<div class="bt-sticky-legend">
+    @foreach ($sideList as $s)
+        @php
+            $_t = $s['totals'];
+            $_lbl = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
+        @endphp
+        <span class="chip" style="--side-color: {{ $s['color'] }};" title="{{ $s['headline'] }}">
+            <span class="label">{{ $_lbl }}</span>
+            <span style="color:rgba(229,229,231,0.55);">·</span>
+            <span class="pilots">{{ number_format($_t['pilots']) }}p</span>
+            <span style="color:rgba(229,229,231,0.55);">·</span>
+            <span style="color:#4ade80;">{{ number_format($_t['kills']) }}k</span>
+            /
+            <span style="color:#ff3838;">{{ number_format($_t['deaths']) }}L</span>
+        </span>
+    @endforeach
+    <span class="meta">{{ $theater->primarySystem?->name ?? '—' }} · {{ $durFmt }}</span>
 </div>
 
 {{-- ================================================================
