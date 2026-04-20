@@ -47,7 +47,23 @@
                         @if ($anomaly && $anomaly['review_priority_score'] !== null)
                             <span style="color:#9ca3af; font-size:0.85rem;">score {{ number_format((float) $anomaly['review_priority_score'], 2) }}</span>
                         @endif
+                        @auth
+                            @php $onWatch = ! empty($watchlist_entry); @endphp
+                            <button type="button" wire:click="toggleWatch"
+                                    style="margin-left:auto; padding:3px 10px; border-radius:4px; font-size:0.72rem; font-weight:600;
+                                           background:{{ $onWatch ? 'rgba(239,68,68,0.2)' : 'rgba(79,208,208,0.12)' }};
+                                           color:{{ $onWatch ? '#fca5a5' : '#4fd0d0' }};
+                                           border:1px solid {{ $onWatch ? 'rgba(239,68,68,0.4)' : 'rgba(79,208,208,0.3)' }};
+                                           cursor:pointer;">
+                                {{ $onWatch ? '✓ Watching — click to remove' : '☆ Add to watchlist' }}
+                            </button>
+                        @endauth
                     </div>
+                    @if (! empty($watchlist_entry) && ! empty($watchlist_entry->note))
+                        <div style="margin-top:0.4rem; font-size:0.75rem; color:#9ca3af; font-style:italic;">
+                            Note: {{ $watchlist_entry->note }}
+                        </div>
+                    @endif
                     @if (! empty($dossier['affiliation']['current']))
                         <div style="font-size:0.85rem; color:#9ca3af; margin-top:0.3rem;">
                             {{ $dossier['affiliation']['current']['corp_name'] }}

@@ -51,24 +51,41 @@
             @if (empty($rows))
                 <p style="font-size:0.8rem; color:#7a7a82; font-style:italic;">No characters match the current filter.</p>
             @else
-                <table style="width:100%; font-size:0.8rem; border-collapse:collapse;">
+                @php
+                    // Pick the single strongest driver for a 1-line reason.
+                    // Threshold-pick so directors can scan "why" without
+                    // re-reading four percentiles per row.
+                    $reasonFor = function (array $r): array {
+                        $ranks = [];
+                        if (($r['affiliation_anomaly_pct'] ?? 0) >= 0.85) $ranks[] = [$r['affiliation_anomaly_pct'], 'hostile history'];
+                        if (($r['hostile_overlap_pct'] ?? 0) >= 0.85) $ranks[] = [$r['hostile_overlap_pct'], 'co-flies with hostiles'];
+                        if (($r['bridge_anomaly_pct'] ?? 0) >= 0.95) $ranks[] = [$r['bridge_anomaly_pct'], 'cross-cluster bridge'];
+                        if (! empty($r['recent_hostile_join'])) $ranks[] = [0.95, 'recent hostile join'];
+                        if (! $ranks) return [null, '—'];
+                        usort($ranks, fn ($a, $b) => $b[0] <=> $a[0]);
+                        return [$ranks[0][0], $ranks[0][1]];
+                    };
+                @endphp
+                <table style="width:100%; font-size:0.8rem; border-collapse:collapse; font-variant-numeric: tabular-nums;">
                     <thead>
                         <tr style="text-align:left; color:#7a7a82; text-transform:uppercase; font-size:0.62rem; letter-spacing:0.08em;">
                             <th style="padding:0.35rem 0.5rem;">Character</th>
+                            <th style="padding:0.35rem 0.5rem;">Reason</th>
                             <th style="padding:0.35rem 0.5rem;">Role</th>
-                            <th style="padding:0.35rem 0.5rem; text-align:right;">Act.</th>
-                            <th style="padding:0.35rem 0.5rem; text-align:right;">Affil. anom.</th>
-                            <th style="padding:0.35rem 0.5rem; text-align:right;">Hostile overlap</th>
+                            <th style="padding:0.35rem 0.5rem; text-align:right;">Affil</th>
+                            <th style="padding:0.35rem 0.5rem; text-align:right;">Hostile</th>
                             <th style="padding:0.35rem 0.5rem; text-align:right;">Bridge</th>
-                            <th style="padding:0.35rem 0.5rem; text-align:center;">Recent join</th>
                             <th style="padding:0.35rem 0.5rem; text-align:center;">Conf.</th>
-                            <th style="padding:0.35rem 0.5rem; text-align:right;">Priority</th>
+                            <th style="padding:0.35rem 0.5rem; text-align:right;">Score</th>
                             <th style="padding:0.35rem 0.5rem;">Band</th>
                         </tr>
                     </thead>
                     <tbody>
                         @foreach ($rows as $r)
-                            @php $style = $bandStyle[$r['review_priority_band']] ?? $bandStyle['below_threshold']; @endphp
+                            @php
+                                $style = $bandStyle[$r['review_priority_band']] ?? $bandStyle['below_threshold'];
+                                [, $reason] = $reasonFor($r);
+                            @endphp
                             <tr style="border-top:1px solid rgba(255,255,255,0.05); cursor:pointer;"
                                 onclick="window.location='/admin/counter-intel/{{ $r['character_id'] }}'">
                                 <td style="padding:0.4rem 0.5rem; color:#e5e5e7;">
@@ -79,18 +96,11 @@
                                         {{ $r['character_name'] ?? "Pilot #{$r['character_id']}" }}
                                     </span>
                                 </td>
+                                <td style="padding:0.4rem 0.5rem; color:#fca5a5; font-size:0.72rem;">{{ $reason }}</td>
                                 <td style="padding:0.4rem 0.5rem; color:#9ca3af;">{{ $r['dominant_role'] ?? '—' }}</td>
-                                <td style="padding:0.4rem 0.5rem; text-align:right; color:#cbd5e1;">d{{ $r['activity_decile'] ?? '—' }}</td>
                                 <td style="padding:0.4rem 0.5rem; text-align:right; color:#fca5a5;">{{ $fmtPct($r['affiliation_anomaly_pct']) }}</td>
                                 <td style="padding:0.4rem 0.5rem; text-align:right; color:#fca5a5;">{{ $fmtPct($r['hostile_overlap_pct']) }}</td>
                                 <td style="padding:0.4rem 0.5rem; text-align:right; color:#a5b4fc;">{{ $fmtPct($r['bridge_anomaly_pct']) }}</td>
-                                <td style="padding:0.4rem 0.5rem; text-align:center;">
-                                    @if ($r['recent_hostile_join'])
-                                        <span style="color:#f87171; font-weight:600;">Y</span>
-                                    @else
-                                        <span style="color:#475569;">—</span>
-                                    @endif
-                                </td>
                                 <td style="padding:0.4rem 0.5rem; text-align:center; color:#9ca3af; font-size:0.7rem;">{{ $r['cohort_confidence'] }}</td>
                                 <td style="padding:0.4rem 0.5rem; text-align:right; color:#e5e5e7; font-weight:600;">{{ number_format((float) $r['review_priority_score'], 2) }}</td>
                                 <td style="padding:0.4rem 0.5rem;">

@@ -51,12 +51,56 @@ class CounterIntelDossier extends Page
         $svc = app(CounterIntelDossierService::class);
         $dossier = $svc->dossier($this->characterIdParam, $viewerBlocId);
         $blocName = DB::table('coalition_blocs')->where('id', $viewerBlocId)->value('display_name') ?? "Bloc #{$viewerBlocId}";
+        $userId = Auth::id();
+        $watch = null;
+        if ($userId !== null) {
+            $watch = DB::table('ci_review_watchlist')
+                ->where('user_id', $userId)
+                ->where('character_id', $this->characterIdParam)
+                ->first(['note', 'added_at']);
+        }
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $viewerBlocId,
             'viewer_bloc_name' => $blocName,
             'dossier' => $dossier,
+            'watchlist_entry' => $watch,
         ];
+    }
+
+    /** Livewire action wired from the blade: toggle this character on the viewer's watchlist. */
+    public function toggleWatch(): void
+    {
+        $userId = Auth::id();
+        if ($userId === null) return;
+        $existing = DB::table('ci_review_watchlist')
+            ->where('user_id', $userId)
+            ->where('character_id', $this->characterIdParam)
+            ->first();
+        if ($existing) {
+            DB::table('ci_review_watchlist')
+                ->where('user_id', $userId)
+                ->where('character_id', $this->characterIdParam)
+                ->delete();
+        } else {
+            DB::table('ci_review_watchlist')->insert([
+                'user_id' => $userId,
+                'character_id' => $this->characterIdParam,
+                'note' => null,
+                'added_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    }
+
+    public function saveWatchNote(string $note): void
+    {
+        $userId = Auth::id();
+        if ($userId === null) return;
+        DB::table('ci_review_watchlist')
+            ->where('user_id', $userId)
+            ->where('character_id', $this->characterIdParam)
+            ->update(['note' => $note === '' ? null : $note, 'updated_at' => now()]);
     }
 
     public function getTitle(): string
