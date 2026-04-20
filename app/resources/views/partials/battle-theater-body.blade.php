@@ -208,7 +208,9 @@
             'totals' => $tC, 'eff' => $effC, 'bar' => $barC,
         ];
     }
-    usort($sideList, fn ($x, $y) => (float) $y['totals']['isk_killed'] <=> (float) $x['totals']['isk_killed']);
+    // Keep A / B / C in declared order — viewers expect the label
+    // "Side A" to always mean the same column, not shift around
+    // based on who destroyed more ISK this fight.
 @endphp
 
 <style>
