@@ -429,6 +429,57 @@
     /* N-segment share-of-destruction bar (generalised from 3-way
        teal/red/muted to any N using --side-color from the inline
        style on each segment). */
+    /* N-side VS banner chip row. Auto-fit so 2-side fights go big,
+       3-side fights fit nicely, 4+ will wrap. */
+    .bt-vs-chipbar {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 0.75rem; align-items: stretch;
+    }
+    .bt-vs-chip {
+        display: flex; gap: 0.9rem; align-items: center;
+        padding: 0.75rem 1rem;
+        background: rgba(17,17,19,0.55);
+        border: 1px solid #26262b;
+        border-left: 3px solid var(--side-color, #7a7a82);
+        border-radius: 8px;
+    }
+    .bt-vs-logo {
+        width: 72px; height: 72px; border-radius: 8px; flex-shrink: 0;
+        border: 2px solid var(--side-color, #7a7a82);
+        background: rgba(0,0,0,0.25);
+    }
+    .bt-vs-logo.placeholder {
+        display: flex; align-items: center; justify-content: center;
+        color: var(--side-color, #e5e5e7);
+        font-weight: 900; font-size: 1.8rem;
+        background: color-mix(in srgb, var(--side-color, #7a7a82) 8%, transparent);
+    }
+    .bt-vs-info { min-width: 0; flex: 1; }
+    .bt-vs-info .bt-vs-label {
+        font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase;
+        color: var(--side-color, #7a7a82); font-family: 'JetBrains Mono', monospace;
+    }
+    .bt-vs-info .bt-vs-name {
+        font-size: 1.05rem; font-weight: 700; color: #e5e5e7; line-height: 1.2;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bt-vs-info .bt-vs-sub { font-size: 0.68rem; color: #7a7a82; }
+    .bt-vs-info .bt-vs-stats {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
+        color: #7a7a82; margin-top: 0.2rem; font-variant-numeric: tabular-nums;
+    }
+    .bt-vs-info .bt-vs-eff {
+        font-family: 'JetBrains Mono', monospace; font-weight: 700;
+        font-size: 1.05rem; margin-top: 0.1rem; font-variant-numeric: tabular-nums;
+    }
+    .bt-vs-sep {
+        align-self: center; font-family: 'JetBrains Mono', monospace;
+        font-size: 0.8rem; font-weight: 900; letter-spacing: 0.3em;
+        color: #3a3a42; padding: 0 0.5rem;
+    }
+    @media (max-width: 700px) { .bt-vs-sep { display: none; } }
+
     .bt-sticky-legend {
         position: sticky; top: 0; z-index: 50;
         display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
@@ -522,57 +573,43 @@
 </div>
 
 {{-- ================================================================
-     VS BANNER — big alliance logos, efficiency split
+     VS BANNER — N-side horizontal chip row, ordered by the
+     canonical SIDE_A/B/C slot so labels stay stable across battles.
+     Efficiency ladder below the chip row gives per-side ISK-eff at
+     a glance.
      ================================================================ --}}
 <div class="km-card" style="margin-bottom: 1.5rem;">
-    <div class="bt-vs-row">
-        <div class="bt-side-head">
-            @if ($flagA)
-                <img src="https://images.evetech.net/alliances/{{ $flagA['alliance_id'] }}/logo?size=128"
-                     referrerpolicy="no-referrer" class="bt-side-logo" alt="">
-            @else
-                <div class="bt-side-logo" style="display:flex;align-items:center;justify-content:center;background:rgba(79,208,208,0.08);color:#4fd0d0;font-weight:900;font-size:1.8rem;">A</div>
+    <div class="bt-vs-chipbar">
+        @foreach ($sideList as $idx => $s)
+            @php
+                $_lbl = $s['label_override'] ?? ($s['key'] === S::SIDE_C ? 'Third parties' : 'Side '.$s['key']);
+                $_logo = $s['logo'];
+            @endphp
+            @if ($idx > 0)
+                <div class="bt-vs-sep" aria-hidden="true">vs</div>
             @endif
-            <div style="min-width:0;">
-                <div class="bt-side-label bt-side-a">Side A</div>
-                <div class="bt-side-name bt-side-a">{{ $sideAHeadline }}</div>
-                @if ($blocA && $blocA !== $sideAHeadline)
-                    <div class="bt-side-sub">{{ $blocA }} bloc</div>
+            <div class="bt-vs-chip" style="--side-color: {{ $s['color'] }};">
+                @if ($_logo)
+                    <img src="https://images.evetech.net/alliances/{{ $_logo['alliance_id'] }}/logo?size=128"
+                         referrerpolicy="no-referrer" class="bt-vs-logo" alt="">
+                @else
+                    <div class="bt-vs-logo placeholder">{{ $s['key'] }}</div>
                 @endif
-                <div class="bt-side-sub" style="font-family:'JetBrains Mono',monospace;margin-top:0.15rem;">
-                    {{ $tA['pilots'] }} pilots · {{ $tA['kills'] }} kills · {{ $formatIsk($tA['isk_lost']) }} lost
+                <div class="bt-vs-info">
+                    <div class="bt-vs-label">{{ $_lbl }}</div>
+                    <div class="bt-vs-name" title="{{ $s['headline'] }}">{{ $s['headline'] }}</div>
+                    @if ($s['sub'] && $s['sub'] !== $s['headline'])
+                        <div class="bt-vs-sub">{{ $s['sub'] }} bloc</div>
+                    @endif
+                    <div class="bt-vs-stats">
+                        {{ number_format($s['totals']['pilots']) }}p · {{ number_format($s['totals']['kills']) }}k · {{ $formatIsk((float) $s['totals']['isk_lost']) }} lost
+                    </div>
+                    <div class="bt-vs-eff" style="color: {{ $s['color'] }};">
+                        {{ $s['eff'] !== null ? $s['eff'].'% eff' : '—' }}
+                    </div>
                 </div>
             </div>
-        </div>
-
-        <div class="bt-vs-center">
-            <div class="bt-vs-label">VS</div>
-            <div class="bt-side-label" style="margin-top:0.4rem;">ISK efficiency</div>
-            <div class="bt-eff-row">
-                <span class="bt-eff-val bt-side-a">{{ $effA }}%</span>
-                <span class="bt-eff-sep">—</span>
-                <span class="bt-eff-val bt-side-b">{{ $effB }}%</span>
-            </div>
-        </div>
-
-        <div class="bt-side-head flip">
-            @if ($flagB)
-                <img src="https://images.evetech.net/alliances/{{ $flagB['alliance_id'] }}/logo?size=128"
-                     referrerpolicy="no-referrer" class="bt-side-logo right" alt="">
-            @else
-                <div class="bt-side-logo right" style="display:flex;align-items:center;justify-content:center;background:rgba(255,56,56,0.08);color:#ff3838;font-weight:900;font-size:1.8rem;">B</div>
-            @endif
-            <div style="min-width:0;">
-                <div class="bt-side-label bt-side-b">Side B</div>
-                <div class="bt-side-name bt-side-b">{{ $sideBHeadline }}</div>
-                @if ($blocB && $blocB !== $sideBHeadline)
-                    <div class="bt-side-sub">{{ $blocB }} bloc</div>
-                @endif
-                <div class="bt-side-sub" style="font-family:'JetBrains Mono',monospace;margin-top:0.15rem;">
-                    {{ $tB['pilots'] }} pilots · {{ $tB['kills'] }} kills · {{ $formatIsk($tB['isk_lost']) }} lost
-                </div>
-            </div>
-        </div>
+        @endforeach
     </div>
 
     {{-- 3-side share-of-ISK-destroyed bar. Width per side =
