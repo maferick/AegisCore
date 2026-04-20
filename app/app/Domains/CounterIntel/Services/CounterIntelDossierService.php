@@ -81,6 +81,12 @@ final class CounterIntelDossierService
         $explanation = $this->buildExplanation($feature, $anomaly, $hostileAlliancesInHistory);
         $whyNotHigher = $this->buildWhyNotHigher($feature, $anomaly);
 
+        $ringMembers = $anomaly && $anomaly->ring_id !== null
+            ? $this->ringMembers((int) $anomaly->ring_id, $characterId, $viewerBlocId)
+            : [];
+        $cohortBaseline = $anomaly ? $this->cohortBaseline($viewerBlocId) : null;
+        $similarPilots = $this->similarPilots($characterId);
+
         return [
             'not_found' => false,
             'character_id' => $characterId,
@@ -92,7 +98,114 @@ final class CounterIntelDossierService
             'explanation' => $explanation,
             'why_not_higher' => $whyNotHigher,
             'viewer_bloc_id' => $viewerBlocId,
+            'ring_members' => $ringMembers,
+            'cohort_baseline' => $cohortBaseline,
+            'similar_pilots' => $similarPilots,
         ];
+    }
+
+    /**
+     * Other pilots in the same Leiden ring (viewer-bloc scoped), with
+     * their bands + scores + names. Limits to 20 rows max so the UI
+     * can render a compact "recurring ring" panel.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function ringMembers(int $ringId, int $excludeCid, int $viewerBlocId): array
+    {
+        $rows = DB::select(<<<'SQL'
+            SELECT a.character_id, a.review_priority_band, a.review_priority_score,
+                   en.name AS character_name
+              FROM ci_character_anomalies_rolling a
+              JOIN (
+                SELECT character_id, MAX(window_end_date) AS mx
+                  FROM ci_character_anomalies_rolling
+                 WHERE viewer_bloc_id = ?
+                   AND ring_id = ?
+                 GROUP BY character_id
+              ) m ON m.character_id = a.character_id AND m.mx = a.window_end_date
+              LEFT JOIN esi_entity_names en ON en.entity_id = a.character_id AND en.category = 'character'
+             WHERE a.viewer_bloc_id = ?
+               AND a.character_id <> ?
+             ORDER BY a.review_priority_score DESC
+             LIMIT 20
+        SQL, [$viewerBlocId, $ringId, $viewerBlocId, $excludeCid]);
+        return array_map(fn ($r) => (array) $r, $rows);
+    }
+
+    /**
+     * Cohort baseline percentiles for key signals within the viewer
+     * bloc — lets the UI draw a ruler (p5/p50/p95) against which the
+     * pilot's own values render. Computed over all scored characters
+     * in the viewer bloc (latest window), so the same baseline applies
+     * to every dossier inside that bloc.
+     *
+     * @return array<string, array{p5:?float, p50:?float, p95:?float}>
+     */
+    private function cohortBaseline(int $viewerBlocId): array
+    {
+        $cols = ['affiliation_anomaly_pct', 'hostile_overlap_pct', 'bridge_anomaly_pct'];
+        $out = [];
+        foreach ($cols as $col) {
+            $rows = DB::select(sprintf(
+                'SELECT %s AS v FROM ci_character_anomalies_rolling
+                  WHERE viewer_bloc_id = ? AND %s IS NOT NULL',
+                $col, $col,
+            ), [$viewerBlocId]);
+            if (! $rows) {
+                $out[$col] = ['p5' => null, 'p50' => null, 'p95' => null];
+                continue;
+            }
+            $vals = array_map(fn ($r) => (float) $r->v, $rows);
+            sort($vals);
+            $n = count($vals);
+            $pick = fn (float $q): float => $vals[(int) floor($q * ($n - 1))];
+            $out[$col] = ['p5' => $pick(0.05), 'p50' => $pick(0.5), 'p95' => $pick(0.95)];
+        }
+        return $out;
+    }
+
+    /**
+     * Top 5 structural-similarity neighbours from Neo4j's SIMILAR_TO_V2
+     * edges. Returns [] if Neo4j is unreachable — this surface is
+     * supplementary, not load-bearing.
+     *
+     * @return list<array{character_id:int,name:?string,band:?string,score:?float,sim:float}>
+     */
+    private function similarPilots(int $characterId): array
+    {
+        $pw = (string) env('NEO4J_PASSWORD', '');
+        if ($pw === '') return [];
+        try {
+            $client = \Laudis\Neo4j\ClientBuilder::create()
+                ->withDriver('n', (string) env('NEO4J_BOLT_URI', 'bolt://neo4j:7687'),
+                    \Laudis\Neo4j\Authentication\Authenticate::basic((string) env('NEO4J_USER', 'neo4j'), $pw))
+                ->withDefaultDriver('n')
+                ->build();
+            $rows = $client->run(
+                'MATCH (p:CICharacter {character_id: $cid})-[r:SIMILAR_TO_V2]-(q:CICharacter)
+                 RETURN q.character_id AS cid, q.band AS band, q.score AS score, r.score AS sim
+                 ORDER BY r.score DESC LIMIT 5',
+                ['cid' => $characterId],
+            );
+            $out = [];
+            foreach ($rows as $row) {
+                $cid = (int) $row->get('cid');
+                $name = DB::table('esi_entity_names')
+                    ->where('entity_id', $cid)->where('category', 'character')
+                    ->value('name');
+                $out[] = [
+                    'character_id' => $cid,
+                    'name' => $name ? (string) $name : null,
+                    'band' => $row->get('band') ? (string) $row->get('band') : null,
+                    'score' => $row->get('score') !== null ? (float) $row->get('score') : null,
+                    'sim' => (float) $row->get('sim'),
+                ];
+            }
+            return $out;
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 
     /**

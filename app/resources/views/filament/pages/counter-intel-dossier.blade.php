@@ -193,6 +193,96 @@
             </div>
         </div>
 
+        {{-- Cohort baseline ruler — E5 --}}
+        @if (! empty($dossier['cohort_baseline']) && $anomaly)
+            <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-top:1rem;">
+                <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin-bottom:0.6rem;">Cohort baseline</h3>
+                @php
+                    $barFor = function (?float $v, array $base): string {
+                        if ($v === null) return '—';
+                        $p5 = $base['p5'] ?? 0;
+                        $p95 = $base['p95'] ?? 1;
+                        $p50 = $base['p50'] ?? 0.5;
+                        $marker = max(0, min(100, round(($v - $p5) / max(0.0001, $p95 - $p5) * 100)));
+                        $median = max(0, min(100, round(($p50 - $p5) / max(0.0001, $p95 - $p5) * 100)));
+                        return '<div style="position:relative; height:14px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden;">'
+                            . '<div style="position:absolute; top:0; bottom:0; left:'.$median.'%; width:1px; background:rgba(255,255,255,0.2);"></div>'
+                            . '<div style="position:absolute; top:0; bottom:0; left:calc('.$marker.'% - 2px); width:4px; background:#fca5a5; border-radius:2px;"></div>'
+                            . '</div>';
+                    };
+                @endphp
+                <div style="display:grid; grid-template-columns: 160px 1fr 80px; gap:0.6rem 0.8rem; font-size:0.75rem; align-items:center;">
+                    @foreach (['affiliation_anomaly_pct' => 'Hostile history', 'hostile_overlap_pct' => 'Hostile co-flight', 'bridge_anomaly_pct' => 'Cross-cluster bridge'] as $col => $label)
+                        @php $base = $dossier['cohort_baseline'][$col] ?? ['p5' => 0, 'p50' => 0, 'p95' => 1]; @endphp
+                        <div style="color:#9ca3af;">{{ $label }}</div>
+                        <div>{!! $barFor($anomaly[$col] ?? null, $base) !!}</div>
+                        <div style="text-align:right; color:#e5e5e7; font-family:'JetBrains Mono',monospace; font-size:0.72rem;">
+                            {{ $fmtPct($anomaly[$col] ?? null) }} <span style="color:#7a7a82;">· p50 {{ $fmtPct($base['p50']) }}</span>
+                        </div>
+                    @endforeach
+                </div>
+                <div style="margin-top:0.5rem; font-size:0.64rem; color:#7a7a82; font-style:italic;">
+                    Red mark = this pilot's value · white line = cohort median · bar span = p5 → p95.
+                </div>
+            </div>
+        @endif
+
+        {{-- Ring neighbours — E6 --}}
+        @if (! empty($dossier['ring_members']))
+            <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-top:1rem;">
+                <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin-bottom:0.6rem;">
+                    Recurring co-flight ring
+                    <span style="font-size:0.6rem; color:#7a7a82; font-weight:400; letter-spacing:0; text-transform:none;">({{ count($dossier['ring_members']) }} other members, ranked by score)</span>
+                </h3>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.4rem;">
+                    @foreach ($dossier['ring_members'] as $m)
+                        @php $s = $bandStyle[$m['review_priority_band']] ?? $bandStyle['below_threshold']; @endphp
+                        <a href="/admin/counter-intel/{{ $m['character_id'] }}"
+                           style="display:flex; gap:0.5rem; align-items:center; text-decoration:none;
+                                  background:rgba(255,255,255,0.02); border:1px solid {{ $s['border'] }};
+                                  border-radius:5px; padding:0.35rem 0.5rem; color:#e5e5e7;">
+                            <img src="https://images.evetech.net/characters/{{ $m['character_id'] }}/portrait?size=32"
+                                 referrerpolicy="no-referrer" style="width:24px;height:24px;border-radius:50%;" alt="">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:0.78rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $m['character_name'] ?? "Pilot #{$m['character_id']}" }}</div>
+                                <div style="font-size:0.6rem; color:{{ $s['fg'] }};">{{ str_replace('_', ' ', $m['review_priority_band'] ?? '—') }} · {{ $m['review_priority_score'] !== null ? number_format((float) $m['review_priority_score'], 2) : '—' }}</div>
+                            </div>
+                        </a>
+                    @endforeach
+                </div>
+            </div>
+        @endif
+
+        {{-- Structural neighbours from Neo4j embeddings — E8 --}}
+        @if (! empty($dossier['similar_pilots']))
+            <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-top:1rem;">
+                <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin-bottom:0.6rem;">
+                    Structural nearest neighbours <span style="font-size:0.6rem; font-weight:400; color:#7a7a82; letter-spacing:0; text-transform:none;">(FastRP cosine via Neo4j SIMILAR_TO_V2)</span>
+                </h3>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:0.4rem;">
+                    @foreach ($dossier['similar_pilots'] as $n)
+                        @php
+                            $s = $bandStyle[$n['band']] ?? $bandStyle['below_threshold'];
+                        @endphp
+                        <a href="/admin/counter-intel/{{ $n['character_id'] }}"
+                           style="display:flex; gap:0.5rem; align-items:center; text-decoration:none;
+                                  background:rgba(255,255,255,0.02); border:1px solid {{ $s['border'] }};
+                                  border-radius:5px; padding:0.35rem 0.5rem; color:#e5e5e7;">
+                            <img src="https://images.evetech.net/characters/{{ $n['character_id'] }}/portrait?size=32"
+                                 referrerpolicy="no-referrer" style="width:24px;height:24px;border-radius:50%;" alt="">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-size:0.78rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $n['name'] ?? "Pilot #{$n['character_id']}" }}</div>
+                                <div style="font-size:0.6rem; color:{{ $s['fg'] }};">
+                                    cosine {{ number_format($n['sim'], 3) }}
+                                    @if ($n['band']) · {{ str_replace('_', ' ', $n['band']) }} @endif
+                                </div>
+                            </div>
+                        </a>
+                    @endforeach
+                </div>
+            </div>
+        @endif
+
         <div style="margin-top:1rem;">
             <a href="/admin/counter-intel" style="font-size:0.85rem; color:#4fd0d0; text-decoration:none;">← back to review queue</a>
         </div>
