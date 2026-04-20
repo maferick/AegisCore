@@ -111,7 +111,7 @@
                                 <div style="flex:1; min-width:0;">
                                     <div style="font-size:0.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $p['name'] }}</div>
                                     <div style="font-size:0.6rem; color:#7a7a82;">
-                                        {{ round($p['role_pct'] * 100) }}% role · {{ number_format($p['battles']) }} battles · {{ number_format($p['killmails_attacker']) }} kms
+                                        {{ round($p['role_pct'] * 100) }}% role · {{ number_format($p['killmails_attacker']) }} kms
                                     </div>
                                 </div>
                             </a>
@@ -178,7 +178,7 @@
                                      referrerpolicy="no-referrer" style="width:40px;height:40px;border-radius:50%;border:2px solid rgba(250,204,21,0.4);" alt="">
                                 <div>
                                     <div style="font-size:0.9rem; font-weight:600;">{{ $fc['name'] }}</div>
-                                    <div style="font-size:0.6rem; color:#fde047;">FC · {{ round($fc['role_pct'] * 100) }}% role in {{ number_format($fc['battles']) }} battles</div>
+                                    <div style="font-size:0.6rem; color:#fde047;">FC · {{ round($fc['role_pct'] * 100) }}% role · {{ number_format($fc['killmails_attacker']) }} kms</div>
                                 </div>
                             </a>
                             @if (! empty($crew))
