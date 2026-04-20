@@ -443,11 +443,13 @@
     <div class="bt-bar-legend">
         <span class="a">Side A · {{ $effA }}% eff · {{ $barA }}% of destroyed</span>
         <span class="b">Side B · {{ $effB }}% eff · {{ $barB }}% of destroyed</span>
-        <span class="c">
-            Third parties
-            · {{ $effC !== null ? $effC.'% eff' : '—' }}
-            · {{ $barC }}% of destroyed
-        </span>
+        @if ($hasSideC)
+            <span class="c">
+                Third parties
+                · {{ $effC !== null ? $effC.'% eff' : '—' }}
+                · {{ $barC }}% of destroyed
+            </span>
+        @endif
     </div>
 
     {{-- Public surface suppresses the "Set your coalition" nag —
@@ -464,14 +466,19 @@
 </div>
 
 {{-- ================================================================
-     SIDE SUMMARY — three cards, one per side
+     SIDE SUMMARY — two or three cards, one per side
      ================================================================ --}}
-<div class="km-grid-3" style="margin-bottom: 1.5rem;">
-    @foreach ([
+@php
+    $summarySides = [
         S::SIDE_A => [$sideAHeadline, $blocA, 'a', $tA],
         S::SIDE_B => [$sideBHeadline, $blocB, 'b', $tB],
-        S::SIDE_C => ['Other / third parties', null, 'c', $tC],
-    ] as $sideKey => $meta)
+    ];
+    if ($hasSideC) {
+        $summarySides[S::SIDE_C] = ['Other / third parties', null, 'c', $tC];
+    }
+@endphp
+<div class="{{ count($summarySides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
+    @foreach ($summarySides as $sideKey => $meta)
         @php
             [$label, $sub, $toneClass, $t] = $meta;
             $traded = (float) ($t['isk_killed'] + $t['isk_lost']);
@@ -686,12 +693,17 @@
 {{-- ================================================================
      ALLIANCE ROSTER per side
      ================================================================ --}}
-<div class="km-grid-3" style="margin-bottom: 1.5rem;">
-    @foreach ([
+@php
+    $rosterSides = [
         S::SIDE_A => ['Roster — Side A', 'a'],
         S::SIDE_B => ['Roster — Side B', 'b'],
-        S::SIDE_C => ['Third parties', 'c'],
-    ] as $sideKey => $meta)
+    ];
+    if ($hasSideC) {
+        $rosterSides[S::SIDE_C] = ['Third parties', 'c'];
+    }
+@endphp
+<div class="{{ count($rosterSides) === 3 ? 'km-grid-3' : 'km-grid' }}" style="margin-bottom: 1.5rem;">
+    @foreach ($rosterSides as $sideKey => $meta)
         @php [$title, $toneClass] = $meta; $rows = $roster_by_side[$sideKey] ?? collect(); @endphp
         <div class="km-card">
             <h3>{{ $title }} <span class="muted">· {{ $rows->count() }}</span></h3>
