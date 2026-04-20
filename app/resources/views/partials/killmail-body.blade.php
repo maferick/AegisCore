@@ -104,23 +104,35 @@
         'subsystem' => $wheelCountFrom(1367, count($wheelModulesByGroup['subsystem'])),
         'service'   => $wheelCountFrom(2056, count($wheelModulesByGroup['service'])),
     ];
-    // Layout: outer ring = high (top) + mid (right) + low (bottom);
-    // rigs in their own non-overlapping sector on the left-bottom.
-    // Inner ring = service slots (capitals / industrials) and T3C
-    // subsystems at fixed diagonals.
-    // Arcs are degrees, 0 = right, -90 = top.
+    // Layout mirrors zKill: outer ring sweeps clockwise from mid →
+    // high → low across the left / top / right, leaving the bottom-
+    // left open. Rigs live on the inner ring's bottom half;
+    // subsystems (T3C) or service slots (capitals) take the inner
+    // top half. Exact arcs were pulled off zKill's Legion page and
+    // generalised for other hulls.
+    // Arcs: degrees, 0 = right, -90 = top.
+    $hasSubsystem = $wheelCounts['subsystem'] > 0;
+    $hasService = $wheelCounts['service'] > 0;
+
     $wheelLayout = [];
-    if ($wheelCounts['high'] > 0)    $wheelLayout[] = ['key' => 'high',    'count' => $wheelCounts['high'],    'ring' => 'outer', 'arc' => [-150, -30]];
-    if ($wheelCounts['mid'] > 0)     $wheelLayout[] = ['key' => 'mid',     'count' => $wheelCounts['mid'],     'ring' => 'outer', 'arc' => [-20,   20]];
-    if ($wheelCounts['low'] > 0)     $wheelLayout[] = ['key' => 'low',     'count' => $wheelCounts['low'],     'ring' => 'outer', 'arc' => [ 30,  150]];
-    if ($wheelCounts['rig'] > 0)     $wheelLayout[] = ['key' => 'rig',     'count' => $wheelCounts['rig'],     'ring' => 'outer', 'arc' => [180,  220]];
-    if ($wheelCounts['service'] > 0) $wheelLayout[] = ['key' => 'service', 'count' => $wheelCounts['service'], 'ring' => 'inner', 'arc' => [-180, 180]];
-    if ($wheelCounts['subsystem'] > 0) {
-        // T3Cs have exactly 4 subsystem slots (maxSubSystems dogma
-        // sometimes reports 5 counting a retired slot — cap hard at
-        // 4 so the inner ring forms a tidy X at the diagonals).
-        $n = min($wheelCounts['subsystem'], 4);
-        $wheelLayout[] = ['key' => 'subsystem', 'count' => $n, 'ring' => 'inner', 'arc' => [-135, 135], 'fixed' => true];
+    if ($hasSubsystem) {
+        // T3C layout (Legion, Tengu, Proteus, Loki): tight outer
+        // sweep, inner ring split top (subsystems) + bottom (rigs).
+        if ($wheelCounts['mid'] > 0)  $wheelLayout[] = ['key' => 'mid',  'count' => $wheelCounts['mid'],  'ring' => 'outer', 'arc' => [-177, -150]];
+        if ($wheelCounts['high'] > 0) $wheelLayout[] = ['key' => 'high', 'count' => $wheelCounts['high'], 'ring' => 'outer', 'arc' => [-135,  -45]];
+        if ($wheelCounts['low'] > 0)  $wheelLayout[] = ['key' => 'low',  'count' => $wheelCounts['low'],  'ring' => 'outer', 'arc' => [ -15,   60]];
+        // Subsystems: cap at 4 (T3C always fits 4 even when the
+        // maxSubSystems dogma attr reports 5 for legacy reasons).
+        $wheelLayout[] = ['key' => 'subsystem', 'count' => min($wheelCounts['subsystem'], 4), 'ring' => 'inner', 'arc' => [-142, -63]];
+        if ($wheelCounts['rig'] > 0)  $wheelLayout[] = ['key' => 'rig',  'count' => $wheelCounts['rig'],  'ring' => 'inner', 'arc' => [  63,  115]];
+    } else {
+        // Standard hull: outer sweep for high / mid / low, rigs
+        // distributed across the inner-ring bottom half.
+        if ($wheelCounts['high'] > 0) $wheelLayout[] = ['key' => 'high', 'count' => $wheelCounts['high'], 'ring' => 'outer', 'arc' => [-150,  -30]];
+        if ($wheelCounts['mid'] > 0)  $wheelLayout[] = ['key' => 'mid',  'count' => $wheelCounts['mid'],  'ring' => 'outer', 'arc' => [ -20,   20]];
+        if ($wheelCounts['low'] > 0)  $wheelLayout[] = ['key' => 'low',  'count' => $wheelCounts['low'],  'ring' => 'outer', 'arc' => [  30,  150]];
+        if ($wheelCounts['rig'] > 0)  $wheelLayout[] = ['key' => 'rig',  'count' => $wheelCounts['rig'],  'ring' => 'inner', 'arc' => [  45,  135]];
+        if ($hasService)              $wheelLayout[] = ['key' => 'service', 'count' => $wheelCounts['service'], 'ring' => 'inner', 'arc' => [-135,  -45]];
     }
 
     $wheelPositions = function (int $count, array $arc, float $radius, float $cx, float $cy): array {
