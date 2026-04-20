@@ -74,6 +74,14 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
     # and for the character's own hostile_alliance_count_history).
     hostile_counts = _hostile_count_per_character(conn, hostile_aids)
 
+    # Leadership-exempt set. Founders + current members of an
+    # alliance's executor corp have a "external heavy ties + recent
+    # join" pattern that is structurally expected for leadership —
+    # don't flag them as insider risks. Limited to the viewer's
+    # friendly bloc because those are the only pilots we score.
+    leadership_cids = _leadership_character_ids(conn, friendly_aids)
+    log.info("leadership exempt set resolved", {"n": len(leadership_cids)})
+
     # Scored characters from Neo4j with pagerank + betweenness.
     with neo_session(driver, cfg) as sess:
         scored = _load_scored_characters(sess)
@@ -113,6 +121,7 @@ def compute(conn: pymysql.connections.Connection, driver: Driver, cfg: Config,
                 viewer_bloc_id=viewer_bloc_id,
                 window_end=window_end,
                 window_days=cfg.window_days,
+                leadership_cids=leadership_cids,
             )
             rows_out.append(row)
             if (i + 1) % 500 == 0:
@@ -287,6 +296,55 @@ def _hostile_count_per_character(conn, hostile_aids: set[int]) -> dict[int, int]
     return out
 
 
+def _leadership_character_ids(conn, friendly_aids: set[int]) -> set[int]:
+    """Characters who are either the founder of a friendly alliance OR
+    currently sit in that alliance's executor corporation. Populated
+    from alliance_leadership (ESI-synced) + character_corporation_history
+    (current tenure, end_date IS NULL).
+
+    Restricted to `friendly_aids` because only internal pilots get
+    scored — leadership of out-of-bloc alliances would never reach
+    the review queue anyway.
+    """
+    if not friendly_aids:
+        return set()
+    aph = ",".join(["%s"] * len(friendly_aids))
+    out: set[int] = set()
+    with conn.cursor() as cur:
+        # Founders.
+        cur.execute(
+            f"""
+            SELECT creator_character_id AS cid
+              FROM alliance_leadership
+             WHERE alliance_id IN ({aph})
+               AND creator_character_id IS NOT NULL
+            """,
+            list(friendly_aids),
+        )
+        for r in cur.fetchall():
+            if r["cid"] is not None:
+                out.add(int(r["cid"]))
+
+        # Current members of the executor corp for each friendly alliance.
+        cur.execute(
+            f"""
+            SELECT DISTINCT cch.character_id AS cid
+              FROM alliance_leadership al
+              JOIN character_corporation_history cch
+                ON cch.corporation_id = al.executor_corporation_id
+             WHERE al.alliance_id IN ({aph})
+               AND al.executor_corporation_id IS NOT NULL
+               AND cch.is_deleted = 0
+               AND cch.end_date IS NULL
+            """,
+            list(friendly_aids),
+        )
+        for r in cur.fetchall():
+            if r["cid"] is not None:
+                out.add(int(r["cid"]))
+    return out
+
+
 def _load_scored_characters(sess) -> list[dict]:
     """Pull sufficient-history characters + their graph scores from
     Neo4j."""
@@ -322,7 +380,8 @@ def _load_cohort(sess, cid: int) -> list[dict]:
 def _score_one(conn, sess, character: dict, peers: list[dict], clean_cids: set[int],
                hostile_counts: dict[int, int], hostile_aids: set[int],
                graph_feat: dict | None,
-               viewer_bloc_id: int, window_end: date, window_days: int) -> dict:
+               viewer_bloc_id: int, window_end: date, window_days: int,
+               leadership_cids: set[int] | None = None) -> dict:
     """Produce one ci_character_anomalies_rolling row."""
     cid = int(character["character_id"])
     gf = graph_feat or {}
@@ -459,6 +518,16 @@ def _score_one(conn, sess, character: dict, peers: list[dict], clean_cids: set[i
     else:
         band = "below_threshold"
     row["review_priority_band"] = band
+
+    # Leadership override. Founders + executor-corp members carry the
+    # same "external heavy ties + recent join" fingerprint as spies by
+    # construction, so mask them from the review queue explicitly
+    # rather than letting them age into critical bands. Stats are
+    # preserved so the UI can still show "why" — only the band + score
+    # are neutralised.
+    if leadership_cids and cid in leadership_cids:
+        row["review_priority_band"] = "leadership_exempt"
+        row["review_priority_score"] = 0.0
     return row
 
 
