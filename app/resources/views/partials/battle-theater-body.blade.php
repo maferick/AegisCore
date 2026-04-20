@@ -695,10 +695,10 @@
                             @if (! empty($r['ships_flown']))
                                 <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
                                     @foreach ($r['ships_flown'] as $s)
-                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }} · {{ number_format($s['damage']) }} dmg">
+                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }} killmails flying {{ $s['name'] }} · {{ number_format($s['damage']) }} dmg">
                                             <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
                                                  referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                            {{ $s['name'] }}@if ($s['count'] > 1)<span style="color:#7a7a82;font-size:0.7em;"> ×{{ $s['count'] }} kills</span>@endif@if ($s['damage'] > 0)<span style="color:#9ca0a8;font-size:0.7em;"> ({{ number_format($s['damage']) }})</span>@endif
+                                            {{ $s['name'] }}@if ($s['count'] > 1)<span style="color:#7a7a82;font-size:0.7em;"> ×{{ $s['count'] }} km</span>@endif@if ($s['damage'] > 0)<span style="color:#9ca0a8;font-size:0.7em;"> ({{ number_format($s['damage']) }} dmg)</span>@endif
                                         </span>
                                     @endforeach
                                 </div>
@@ -710,11 +710,11 @@
                                 </div>
                             @endif
                         </div>
-                        <div class="km-attacker-damage">
+                        <div class="km-attacker-damage" style="font-variant-numeric:tabular-nums;">
                             {{ number_format($r['damage_done']) }}
                             <div style="font-size:0.6rem;color:#7a7a82;">
-                                dmg · {{ $r['kills'] }}k
-                                @if ($r['final_blows'] > 0) / {{ $r['final_blows'] }}fb @endif
+                                dmg · {{ $r['kills'] }} km@if ($r['kills'] !== 1)s@endif
+                                @if ($r['final_blows'] > 0) · {{ $r['final_blows'] }} fb@endif
                             </div>
                             @if (! empty($r['damage_taken']) || ! empty($r['isk_lost']))
                                 <div style="font-size:0.6rem;color:#9ca0a8;margin-top:3px;">
@@ -948,10 +948,10 @@
                             @if ($allShips !== [])
                                 <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
                                     @foreach ($allShips as $s)
-                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }}× {{ $s['name'] }} kills">
+                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="appeared on {{ $s['count'] }} killmails flying {{ $s['name'] }}">
                                             <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
                                                  referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                            {{ $s['name'] }}@if ($s['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $s['count'] }} kills</span>@endif
+                                            {{ $s['name'] }}@if ($s['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $s['count'] }} km</span>@endif
                                         </span>
                                     @endforeach
                                 </div>
@@ -962,7 +962,7 @@
                                 <div>{{ number_format($p->damage_done) }} <span style="font-size:0.6rem;color:#7a7a82;">dmg</span></div>
                             @endif
                             @if ($p->kills > 0)
-                                <div style="color:#4ade80;">{{ $p->kills }}k</div>
+                                <div style="color:#4ade80;">{{ $p->kills }} <span style="font-size:0.6rem;color:#7a7a82;">kills</span></div>
                             @endif
                             @if ($p->deaths > 0)
                                 <div style="color:#ff3838;">{{ $formatIsk((float) $p->isk_lost) }}</div>
