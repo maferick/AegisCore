@@ -216,7 +216,10 @@ class MyDoctrines extends Page
                 'buyall' => $this->toBuyall($modules),
             ];
         }
-        return $this->classifyBuckets($out);
+        // Drop tail entirely: the viewer's scope doesn't fly them, so
+        // they're not available to the character. classifyBuckets
+        // already marks them 'tail'; filter here.
+        return array_values(array_filter($this->classifyBuckets($out), fn ($d) => ($d['bucket'] ?? 'tail') === 'primary'));
     }
 
     /**
