@@ -175,19 +175,33 @@
     // gains amber so third-party reads as a team not as grey filler.
     // Ordered by isk_killed desc so the biggest contributor lands
     // left-most on wide screens.
-    $sideList = [
-        [
+    // A side is "present" iff it has any pilot on it. Extra guard on
+    // Side B: if the resolver never found a flagship alliance (no
+    // $flagB, headline falls back to the "No opposing side" sentinel)
+    // then anything still tagged B is structural leftover — collapse
+    // it into C so the grid renders "Side A + Third parties" cleanly
+    // instead of an empty-labelled middle column.
+    $sideIsPresent = fn (array $t): bool =>
+        (int) ($t['pilots'] ?? 0) > 0
+        || (float) ($t['isk_killed'] ?? 0) > 0
+        || (float) ($t['isk_lost'] ?? 0) > 0;
+    $sideBValid = $sideBHeadline !== 'No opposing side' && $sideIsPresent($tB);
+    $sideList = [];
+    if ($sideIsPresent($tA)) {
+        $sideList[] = [
             'key' => S::SIDE_A, 'tone' => 'a', 'color' => '#4fd0d0',
             'headline' => $sideAHeadline, 'sub' => $blocA, 'logo' => $flagA,
             'totals' => $tA, 'eff' => $effA, 'bar' => $barA,
-        ],
-        [
+        ];
+    }
+    if ($sideBValid) {
+        $sideList[] = [
             'key' => S::SIDE_B, 'tone' => 'b', 'color' => '#ff3838',
             'headline' => $sideBHeadline, 'sub' => $blocB, 'logo' => $flagB,
             'totals' => $tB, 'eff' => $effB, 'bar' => $barB,
-        ],
-    ];
-    if ($hasSideC) {
+        ];
+    }
+    if ($hasSideC || $sideIsPresent($tC)) {
         $sideList[] = [
             'key' => S::SIDE_C, 'tone' => 'c', 'color' => '#fbbf24',
             'headline' => $sideCHeadline, 'sub' => null, 'logo' => $flagC,
