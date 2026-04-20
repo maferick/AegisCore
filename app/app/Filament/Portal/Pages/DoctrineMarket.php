@@ -68,8 +68,12 @@ class DoctrineMarket extends Page
     {
         $user = Auth::user();
         if ($user === null) return;
+        // hub=0 (or "all") → aggregate across every hub the viewer
+        // can see. Any positive integer → single hub.
         $q = (string) request()->query('hub', '');
-        if ($q !== '' && ctype_digit($q)) {
+        if ($q === 'all' || $q === '0') {
+            $this->hubId = 0;
+        } elseif ($q !== '' && ctype_digit($q)) {
             $this->hubId = (int) $q;
         } else {
             $this->hubId = $user->default_private_market_hub_id
@@ -116,11 +120,21 @@ class DoctrineMarket extends Page
             ];
         }
 
-        $hubId = $this->hubId && $visibleHubs->pluck('id')->contains($this->hubId)
-            ? $this->hubId
-            : (int) $visibleHubs->first()->id;
-        $hub = $visibleHubs->firstWhere('id', $hubId);
-        $locationId = (int) $hub->location_id;
+        // Aggregate mode (hub=0 / "all") scans every visible hub and
+        // sums stock / picks the cheapest price point across them.
+        // Single-hub mode (hub=<id>) keeps the old one-location query.
+        if ($this->hubId === 0) {
+            $locationIds = $visibleHubs->pluck('location_id')->map(fn ($v) => (int) $v)->all();
+            $hubId = 0;
+            $hubName = 'All hubs (' . count($locationIds) . ')';
+        } else {
+            $hubId = $this->hubId && $visibleHubs->pluck('id')->contains($this->hubId)
+                ? $this->hubId
+                : (int) $visibleHubs->first()->id;
+            $hub = $visibleHubs->firstWhere('id', $hubId);
+            $locationIds = [(int) $hub->location_id];
+            $hubName = (string) $hub->structure_name;
+        }
 
         // 1. Pull primary doctrines across all three scope tiers.
         //    Collapse to unique doctrine_id so a fit adopted by both
@@ -132,12 +146,13 @@ class DoctrineMarket extends Page
         //    variants collapse to the same canonical stock bucket.
         [$moduleBurn, $hullBurn] = $this->computeBurn($doctrines);
 
-        // 3. Stock from market_orders @ hub.
+        // 3. Stock from market_orders across the selected hub(s).
         $typeIds = array_unique(array_merge(array_keys($moduleBurn), array_keys($hullBurn)));
-        $stockByType = $this->stockAtHub($typeIds, $locationId);
+        $stockByType = $this->stockAtHubs($typeIds, $locationIds);
 
-        // 4. Price (median of lowest 5 sell orders per type) for buyall estimate.
-        $priceByType = $this->priceAtHub($typeIds, $locationId);
+        // 4. Price (median of lowest 5 sell orders per type) aggregated
+        //    across locations — cheapest across all hubs wins.
+        $priceByType = $this->priceAtHubs($typeIds, $locationIds);
 
         // 5. Build rows.
         $rows = [];
@@ -158,7 +173,7 @@ class DoctrineMarket extends Page
 
         return [
             'corp_id' => $corpId ?: null, 'alliance_id' => $allianceId ?: null, 'bloc_id' => $blocId,
-            'hubs' => $visibleHubs, 'hub_id' => $hubId, 'hub_name' => $hub->structure_name,
+            'hubs' => $visibleHubs, 'hub_id' => $hubId, 'hub_name' => $hubName,
             'target_days' => $targetDays, 'window_days' => self::WINDOW_DAYS,
             'rows' => $rows, 'totals' => $totals, 'doctrine_count' => count($doctrines),
             'no_hub' => false,
@@ -307,16 +322,17 @@ class DoctrineMarket extends Page
 
     /**
      * @param list<int> $typeIds
+     * @param list<int> $locationIds
      * @return array<int, array{stock:int}>
      */
-    private function stockAtHub(array $typeIds, int $locationId): array
+    private function stockAtHubs(array $typeIds, array $locationIds): array
     {
-        if ($typeIds === []) return [];
-        // Only most-recent observation per (location, order) is in
-        // scope. market_orders keeps a running snapshot; the cheap
-        // read is sum(volume_remain) at observed_at >= (now - 1h).
+        if ($typeIds === [] || $locationIds === []) return [];
+        // Sum recent sell-side volume_remain across all selected
+        // locations. Per-location stock double-counts nothing because
+        // hubs are disjoint structure ids.
         $rows = DB::table('market_orders')
-            ->where('location_id', $locationId)
+            ->whereIn('location_id', $locationIds)
             ->where('is_buy', 0)
             ->whereIn('type_id', $typeIds)
             ->where('observed_at', '>=', now()->subHours(2))
@@ -331,29 +347,35 @@ class DoctrineMarket extends Page
     }
 
     /**
-     * Median of the 5 cheapest sell-order prices per type — cheap
-     * proxy for "the floor you'd buy from today".
+     * Median of the 5 cheapest sell-order prices per type, aggregated
+     * across all selected hubs. Single-hub mode collapses to the old
+     * per-hub query behaviour; multi-hub mode takes the cheapest 5
+     * globally across locations — good proxy for "the floor you'd pay
+     * to fill the deficit anywhere".
      *
      * @param list<int> $typeIds
+     * @param list<int> $locationIds
      * @return array<int, float>
      */
-    private function priceAtHub(array $typeIds, int $locationId): array
+    private function priceAtHubs(array $typeIds, array $locationIds): array
     {
-        if ($typeIds === []) return [];
-        $rows = DB::select('
+        if ($typeIds === [] || $locationIds === []) return [];
+        $typePh = implode(',', array_fill(0, count($typeIds), '?'));
+        $locPh = implode(',', array_fill(0, count($locationIds), '?'));
+        $rows = DB::select("
             SELECT t.type_id, t.price
               FROM (
                 SELECT type_id, price,
                        ROW_NUMBER() OVER (PARTITION BY type_id ORDER BY price ASC) AS rn
                   FROM market_orders
-                 WHERE location_id = ?
+                 WHERE location_id IN ({$locPh})
                    AND is_buy = 0
-                   AND type_id IN ('.implode(',', array_fill(0, count($typeIds), '?')).')
+                   AND type_id IN ({$typePh})
                    AND observed_at >= ?
                    AND volume_remain > 0
               ) t
              WHERE t.rn <= 5
-        ', array_merge([$locationId], $typeIds, [now()->subHours(2)]));
+        ", array_merge($locationIds, $typeIds, [now()->subHours(2)]));
         $byType = [];
         foreach ($rows as $r) $byType[(int) $r->type_id][] = (float) $r->price;
         $out = [];

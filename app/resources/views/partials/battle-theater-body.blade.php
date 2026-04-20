@@ -895,9 +895,20 @@
                                         onchange="this.form.submit()"
                                         style="background:#0c0c0e;color:#e5e5e7;border:1px solid #26262b;border-radius:3px;padding:0.15rem 0.3rem;font-size:0.7rem;font-family:'JetBrains Mono',monospace;">
                                     <option value="" disabled {{ $currentOverride ? '' : 'selected' }}>— auto —</option>
-                                    <option value="A" {{ $currentOverride === 'A' ? 'selected' : '' }}>Side A</option>
-                                    <option value="B" {{ $currentOverride === 'B' ? 'selected' : '' }}>Side B</option>
-                                    <option value="C" {{ $currentOverride === 'C' ? 'selected' : '' }}>Third party</option>
+                                    @foreach ($sideList as $_opt)
+                                        @php
+                                            $_val = $_opt['key'];
+                                            $_lbl = $_opt['label_override']
+                                                ?? ($_opt['key'] === S::SIDE_C ? 'Third party' : 'Side '.$_opt['key']);
+                                        @endphp
+                                        <option value="{{ $_val }}" {{ $currentOverride === $_val ? 'selected' : '' }}>{{ $_lbl }}</option>
+                                    @endforeach
+                                    @if (! collect($sideList)->pluck('key')->contains(S::SIDE_C))
+                                        {{-- Third party slot always selectable even if
+                                             the current cluster has no Side C, so
+                                             operators can push an alliance into it. --}}
+                                        <option value="C" {{ $currentOverride === 'C' ? 'selected' : '' }}>Third party</option>
+                                    @endif
                                     <option value="exclude" {{ $currentOverride === 'exclude' ? 'selected' : '' }}>Exclude</option>
                                 </select>
                             </form>

@@ -46,6 +46,7 @@
             <form method="GET" class="dm-head">
                 <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">Hub</label>
                 <select name="hub" onchange="this.form.submit()">
+                    <option value="all" @selected($hub_id === 0)>All hubs ({{ $hubs->count() }}) · aggregate</option>
                     @foreach ($hubs as $h)
                         <option value="{{ $h->id }}" @selected($h->id === $hub_id)>
                             {{ $h->structure_name }} @if ($h->is_public_reference) · public @endif
