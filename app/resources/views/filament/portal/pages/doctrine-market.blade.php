@@ -53,7 +53,7 @@
                     @endforeach
                 </select>
                 <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">Target days</label>
-                <input type="number" name="days" min="3" max="60" value="{{ $target_days }}" style="width:70px;">
+                <input type="number" name="days" min="3" max="120" value="{{ $target_days }}" style="width:70px;">
                 <button type="submit" style="background:rgba(79,208,208,0.1);border:1px solid rgba(79,208,208,0.3);color:#4fd0d0;padding:0.25rem 0.7rem;border-radius:3px;font-size:0.72rem;font-family:'JetBrains Mono',monospace;cursor:pointer;">Apply</button>
                 <span style="color:#3a3a42;margin-left:auto;font-size:0.7rem;">Burn window: {{ $window_days }}d losses · {{ $doctrine_count }} doctrine{{ $doctrine_count === 1 ? '' : 's' }}</span>
             </form>

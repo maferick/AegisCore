@@ -53,7 +53,7 @@ class DoctrineMarket extends Page
 
     private const WINDOW_DAYS = 30;
 
-    private const TARGET_COVERAGE_DAYS = 14;
+    private const TARGET_COVERAGE_DAYS = 60;
 
     public ?int $hubId = null;
 
@@ -77,7 +77,7 @@ class DoctrineMarket extends Page
             $this->hubId = $this->hubId ? (int) $this->hubId : null;
         }
         $t = (int) request()->query('days', self::TARGET_COVERAGE_DAYS);
-        $this->targetDays = max(3, min($t, 60));
+        $this->targetDays = max(3, min($t, 120));
     }
 
     /** @return array<string,mixed> */
