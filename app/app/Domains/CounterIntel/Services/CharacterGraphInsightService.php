@@ -200,30 +200,14 @@ final class CharacterGraphInsightService
      */
     public function archEnemies(int $cid, int $limit = 8): array
     {
-        return $this->safeCache("ci.insight.ae.{$cid}.{$limit}", function () use ($cid, $limit): array {
-            // Primary source: Neo4j CI_FOUGHT_AGAINST edges (2+ sessions,
-            // 0.5+ weight). Blob warfare rarely repeats a pair twice, so
-            // the graph edge set is often empty for line pilots. Fall
-            // back to raw killmail-level top victims when that's the
-            // case so the card doesn't read "no data" for someone
-            // actively fighting.
-            $c = $this->client();
-            if ($c !== null) {
-                $res = $c->run(
-                    'MATCH (me:CICharacter {character_id: $cid})-[r:CI_FOUGHT_AGAINST]-(peer:CICharacter)
-                     RETURN peer.character_id AS cid, peer.name AS name, peer.current_alliance_id AS aid,
-                            r.total_weight AS tw, r.distinct_interactions AS di, r.last_seen_at AS last
-                     ORDER BY r.distinct_interactions DESC, r.total_weight DESC
-                     LIMIT $lim',
-                    ['cid' => $cid, 'lim' => $limit],
-                );
-                $graphRows = $this->hydrate($res);
-                if ($graphRows !== []) return $this->tagRelationship($cid, $graphRows);
-            }
-
-            // MariaDB fallback: top individual VICTIMS across killmails
-            // this pilot contributed to (opposite side). Limited to the
-            // last 90 days to match the bloc-intel window.
+        return $this->safeCache("ci.insight.ae.{$cid}.v3.{$limit}", function () use ($cid, $limit): array {
+            // Killmail-level top victims is the primary signal here —
+            // more consistent than Neo4j CI_FOUGHT_AGAINST, which only
+            // fires when the same pair repeats across 2+ sessions at
+            // ≥0.5 weight. Blob warfare + FC-vs-FC dynamics routinely
+            // produce zero qualifying pairs for real fleet commanders,
+            // leaving the panel with 1 result despite hundreds of
+            // enemy alliance kills.
             $rows = \Illuminate\Support\Facades\DB::select(<<<'SQL'
                 SELECT k.victim_character_id AS cid,
                        en.name AS name,
