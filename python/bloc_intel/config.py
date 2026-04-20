@@ -18,6 +18,14 @@ class Config:
     db_username: str
     db_password: str
 
+    # Neo4j — only the project-neo4j subcommand uses these; extract
+    # path ignores them so MariaDB-only operators don't need to set
+    # Neo4j env.
+    neo4j_uri: str
+    neo4j_user: str
+    neo4j_password: str
+    neo4j_database: str
+
     window_days: int
     decay_half_life_days: float
 
@@ -48,6 +56,10 @@ class Config:
             db_database=env("DB_DATABASE", required=True),
             db_username=env("DB_USERNAME", required=True),
             db_password=env("DB_PASSWORD", required=True),
+            neo4j_uri=env("NEO4J_URI", "bolt://neo4j:7687") or "bolt://neo4j:7687",
+            neo4j_user=env("NEO4J_USER", "neo4j") or "neo4j",
+            neo4j_password=env("NEO4J_PASSWORD", "") or "",
+            neo4j_database=env("NEO4J_DATABASE", "neo4j") or "neo4j",
             window_days=int(env("BI_WINDOW_DAYS", "90") or "90"),
             decay_half_life_days=float(env("BI_DECAY_HALF_LIFE_DAYS", "30") or "30"),
             min_pilots_per_observation=int(env("BI_MIN_PILOTS_PER_OBS", "5") or "5"),

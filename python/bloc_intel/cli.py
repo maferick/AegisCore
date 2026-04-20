@@ -14,6 +14,7 @@ from bloc_intel.config import Config
 from bloc_intel.db import connection
 from bloc_intel.extractor import compute
 from bloc_intel.log import get
+from bloc_intel.projection import project as project_neo4j
 
 log = get("bloc_intel.cli")
 
@@ -26,6 +27,12 @@ def main() -> int:
     e.add_argument("--window-end", type=str, default=None,
                    help="YYYY-MM-DD (default: today UTC)")
 
+    p = sub.add_parser("project-neo4j",
+        help="Project alliance_pair_behavior_rolling into Neo4j as "
+             "Alliance + ALLIANCE_RELATES_TO edges.")
+    p.add_argument("--window-end", type=str, default=None,
+                   help="YYYY-MM-DD (default: today UTC)")
+
     args = parser.parse_args()
     if args.cmd == "extract":
         cfg = Config.from_env()
@@ -33,6 +40,13 @@ def main() -> int:
         with connection(cfg) as conn:
             stats = compute(conn, cfg, window_end=window_end)
         log.info("extract pass complete", stats)
+        return 0
+    if args.cmd == "project-neo4j":
+        cfg = Config.from_env()
+        window_end = date.fromisoformat(args.window_end) if args.window_end else None
+        with connection(cfg) as conn:
+            stats = project_neo4j(conn, cfg, window_end=window_end)
+        log.info("project-neo4j pass complete", stats)
         return 0
     parser.print_help()
     return 2
