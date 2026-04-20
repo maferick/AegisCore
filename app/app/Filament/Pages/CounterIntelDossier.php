@@ -59,12 +59,18 @@ class CounterIntelDossier extends Page
                 ->where('character_id', $this->characterIdParam)
                 ->first(['note', 'added_at']);
         }
+        $groundTruth = DB::table('ci_character_ground_truth')
+            ->where('viewer_bloc_id', $viewerBlocId)
+            ->where('character_id', $this->characterIdParam)
+            ->first(['label', 'labelled_at']);
+
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $viewerBlocId,
             'viewer_bloc_name' => $blocName,
             'dossier' => $dossier,
             'watchlist_entry' => $watch,
+            'ground_truth' => $groundTruth,
         ];
     }
 
@@ -101,6 +107,20 @@ class CounterIntelDossier extends Page
             ->where('user_id', $userId)
             ->where('character_id', $this->characterIdParam)
             ->update(['note' => $note === '' ? null : $note, 'updated_at' => now()]);
+    }
+
+    /** Livewire action — set the viewer-bloc-scoped ground-truth label. */
+    public function setGroundTruth(string $label): void
+    {
+        $allowed = ['confirmed_spy', 'confirmed_clean', 'undecided'];
+        if (! in_array($label, $allowed, true)) return;
+        $userId = Auth::id();
+        $viewerBlocId = $this->resolveViewerBloc();
+        if ($viewerBlocId === null) return;
+        DB::table('ci_character_ground_truth')->updateOrInsert(
+            ['viewer_bloc_id' => $viewerBlocId, 'character_id' => $this->characterIdParam],
+            ['label' => $label, 'labelled_by_user_id' => $userId, 'labelled_at' => now(), 'updated_at' => now()],
+        );
     }
 
     public function getTitle(): string

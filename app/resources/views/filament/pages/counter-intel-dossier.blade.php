@@ -64,6 +64,30 @@
                             Note: {{ $watchlist_entry->note }}
                         </div>
                     @endif
+                    @auth
+                        @php $gtLabel = $ground_truth->label ?? null; @endphp
+                        <div style="margin-top:0.5rem; display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">
+                            <span style="font-size:0.62rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Label for training:</span>
+                            @foreach (['confirmed_spy' => ['Confirmed spy', '#fca5a5', 'rgba(239,68,68,0.2)', 'rgba(239,68,68,0.45)'],
+                                       'confirmed_clean' => ['Confirmed clean', '#6ee7b7', 'rgba(16,185,129,0.18)', 'rgba(16,185,129,0.4)'],
+                                       'undecided' => ['Undecided', '#cbd5e1', 'rgba(148,163,184,0.15)', 'rgba(148,163,184,0.35)']] as $lbl => $meta)
+                                @php [$txt, $fg, $bg, $border] = $meta; $active = ($gtLabel === $lbl); @endphp
+                                <button type="button" wire:click="setGroundTruth('{{ $lbl }}')"
+                                        style="padding:3px 10px; border-radius:4px; font-size:0.68rem; font-weight:600;
+                                               background:{{ $bg }}; color:{{ $fg }};
+                                               border:1px solid {{ $border }};
+                                               outline:{{ $active ? '2px solid '.$fg : 'none' }};
+                                               outline-offset:1px; cursor:pointer;">
+                                    {{ $txt }}
+                                </button>
+                            @endforeach
+                            @if ($gtLabel)
+                                <span style="font-size:0.64rem; color:#7a7a82;">
+                                    Set {{ \Carbon\Carbon::parse($ground_truth->labelled_at)->diffForHumans() }}
+                                </span>
+                            @endif
+                        </div>
+                    @endauth
                     @if (! empty($dossier['affiliation']['current']))
                         <div style="font-size:0.85rem; color:#9ca3af; margin-top:0.3rem;">
                             {{ $dossier['affiliation']['current']['corp_name'] }}
