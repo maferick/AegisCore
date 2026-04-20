@@ -713,8 +713,8 @@
                         <div class="km-attacker-damage" style="font-variant-numeric:tabular-nums;">
                             {{ number_format($r['damage_done']) }}
                             <div style="font-size:0.6rem;color:#7a7a82;">
-                                dmg · {{ $r['kills'] }} km@if ($r['kills'] !== 1)s@endif
-                                @if ($r['final_blows'] > 0) · {{ $r['final_blows'] }} fb@endif
+                                dmg · {{ $r['kills'] }} {{ $r['kills'] === 1 ? 'km' : 'kms' }}
+                                @if ($r['final_blows'] > 0) · {{ $r['final_blows'] }} fb @endif
                             </div>
                             @if (! empty($r['damage_taken']) || ! empty($r['isk_lost']))
                                 <div style="font-size:0.6rem;color:#9ca0a8;margin-top:3px;">
