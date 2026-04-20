@@ -35,14 +35,21 @@ final class CharacterGraphInsightService
      */
     public function flightCrew(int $cid, int $limit = 8): array
     {
-        return $this->safeCache("ci.insight.fc.{$cid}.v2.{$limit}", function () use ($cid, $limit): array {
+        return $this->safeCache("ci.insight.fc.{$cid}.v3.{$limit}", function () use ($cid, $limit): array {
             $c = $this->client();
             if ($c === null) return [];
+            // Sort by distinct_interactions (number of separate flight
+            // sessions) before total_weight. Session count is a more
+            // honest "fleet buddy" signal than raw weight — big blob
+            // fights have their per-event weight dampened to near zero
+            // via 1/sqrt(attacker_count) × 0.15 theater floor, which
+            // buries genuinely frequent co-fliers behind a few small-
+            // gang companions.
             $res = $c->run(
                 'MATCH (me:CICharacter {character_id: $cid})-[r:CI_CO_OCCURS_WITH]-(peer:CICharacter)
                  RETURN peer.character_id AS cid, peer.name AS name, peer.current_alliance_id AS aid,
                         r.total_weight AS tw, r.distinct_interactions AS di, r.last_seen_at AS last
-                 ORDER BY r.total_weight DESC
+                 ORDER BY r.distinct_interactions DESC, r.total_weight DESC
                  LIMIT $lim',
                 ['cid' => $cid, 'lim' => $limit],
             );
@@ -184,7 +191,7 @@ final class CharacterGraphInsightService
                     'MATCH (me:CICharacter {character_id: $cid})-[r:CI_FOUGHT_AGAINST]-(peer:CICharacter)
                      RETURN peer.character_id AS cid, peer.name AS name, peer.current_alliance_id AS aid,
                             r.total_weight AS tw, r.distinct_interactions AS di, r.last_seen_at AS last
-                     ORDER BY r.total_weight DESC
+                     ORDER BY r.distinct_interactions DESC, r.total_weight DESC
                      LIMIT $lim',
                     ['cid' => $cid, 'lim' => $limit],
                 );

@@ -328,8 +328,8 @@ class Dashboard extends BaseDashboard
 
         // Neo4j insights — best-effort, null-safe if Neo4j is down.
         $insights = app(CharacterGraphInsightService::class);
-        $flightCrew = $insights->flightCrew($cid, 8) ?? [];
-        $archEnemies = $insights->archEnemies($cid, 8) ?? [];
+        $flightCrew = $insights->flightCrew($cid, 12) ?? [];
+        $archEnemies = $insights->archEnemies($cid, 12) ?? [];
         $structRank = $insights->structuralRank($cid);
 
         // Collate alliance ids from every source that needs name lookup.
