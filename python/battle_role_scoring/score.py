@@ -61,6 +61,15 @@ GUARANTEED_FC_SHIP_TYPE_IDS: set[int] = {
     45534,  # Monitor
 }
 
+# Multi-Monitor tie-breaker thresholds. When a sub-fleet fields more
+# than one Monitor, the top-scoring one keeps FC only if its FC-weight
+# score clears FLOOR and beats the runner-up by GAP. Otherwise every
+# Monitor collapses to COMMAND (leadership-ish badge without pinning
+# a single pilot). Tuned to be conservative — false-positive FC on
+# a fleet with multiple command pilots is worse than a missed FC.
+MONITOR_FC_FLOOR = 0.55
+MONITOR_FC_GAP = 0.10
+
 # Hull-category → guaranteed role. These categories are seeded from the
 # SDE ship group in ship_class_category_mapping and capture tactical
 # function the scorer cannot infer from per-kill behavior alone:
@@ -436,19 +445,63 @@ def score_battle(
         forced_score = final_by_char[f.character_id].get(forced, 0.0)
         winners[f.character_id] = (forced, forced_score, 0.0)
 
-    # Monitor override: drives off killmail truth (monitor_pilots) rather
-    # than the mode-aggregated features.ship_type_id, so pilots who
-    # reshipped (Monitor → Claymore) still get FC — the killmail is
-    # authoritative. Falls back to features.ship_type_id for safety when
-    # monitor_pilots wasn't supplied.
+    # Monitor override — per sub-fleet, not per-pilot.
+    #
+    # Problem: a single Monitor in a fleet is almost certainly the FC
+    # (the hull applies zero damage, gives no reps — its only purpose
+    # is to sit on grid invulnerable + issue orders). But when a fleet
+    # fields *multiple* Monitors (deep command roster, fake FCs to
+    # confuse grid-watchers, or reshipped command pilots) tagging every
+    # Monitor as FC is wrong — at most one of them is the actual boss.
+    #
+    # Resolution rule:
+    #   1. Group Monitor pilots by sub_fleet_id.
+    #   2. N == 1  → that pilot is FC (classic behaviour).
+    #   3. N >= 2  → score all Monitor pilots on FC-weight scoring.
+    #      If the top FC-scoring Monitor exceeds the rest by
+    #      MONITOR_FC_GAP AND clears MONITOR_FC_FLOOR, it keeps FC.
+    #      Every other Monitor in the sub-fleet is flipped to COMMAND
+    #      (they were already "command-hull" so the demotion is a
+    #      natural fallback).
+    #      If no Monitor clears the gap/floor, *nobody* gets FC — all
+    #      Monitors in that sub-fleet become COMMAND. The UI will
+    #      still mark them with a leadership-ish badge without
+    #      picking a specific fleet boss.
+    monitor_by_sf: dict[int, list[FeatureRow]] = {}
     for f in features:
         is_monitor = (
             f.character_id in monitor_pilots
             or f.ship_type_id in GUARANTEED_FC_SHIP_TYPE_IDS
         )
         if is_monitor:
+            monitor_by_sf.setdefault(f.sub_fleet_id, []).append(f)
+
+    for sf_id, monitors in monitor_by_sf.items():
+        if len(monitors) == 1:
+            f = monitors[0]
             fc_score = final_by_char[f.character_id][ROLE_FC]
             winners[f.character_id] = (ROLE_FC, fc_score, 0.0)
+            continue
+
+        # Multiple Monitors: pick at most one as FC, rest get COMMAND.
+        scored = sorted(
+            ((f, final_by_char[f.character_id][ROLE_FC]) for f in monitors),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        top_f, top_score = scored[0]
+        second_score = scored[1][1] if len(scored) > 1 else 0.0
+        gap = top_score - second_score
+        if top_score >= MONITOR_FC_FLOOR and gap >= MONITOR_FC_GAP:
+            winners[top_f.character_id] = (ROLE_FC, top_score, second_score)
+            for f, _ in scored[1:]:
+                cmd_score = final_by_char[f.character_id].get(ROLE_COMMAND, 0.0)
+                winners[f.character_id] = (ROLE_COMMAND, cmd_score, 0.0)
+        else:
+            # No clear leader — everyone stays Cmd.
+            for f, _ in scored:
+                cmd_score = final_by_char[f.character_id].get(ROLE_COMMAND, 0.0)
+                winners[f.character_id] = (ROLE_COMMAND, cmd_score, 0.0)
 
     # Materialize inference rows.
     inferences: list[InferenceRow] = []

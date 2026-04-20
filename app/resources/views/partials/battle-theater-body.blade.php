@@ -58,44 +58,10 @@
     // assignments fire; every other pilot gets no badge (silent
     // per Spec 5 epistemic stance).
     $roleByChar = $role_by_character ?? [];
-
-    // Crowded-Monitor guard. When a side fields several Monitors
-    // (45534, FC-seat command ship), the role pipeline picks one of
-    // them as "the FC" but the signal is noisy — any of those five
-    // pilots could be the actual fleet boss, and flagging one looks
-    // presumptuous. Demote FC → Cmd on that side when there are 3+
-    // Monitors, so we still show a leadership-ish badge without
-    // committing to a specific pilot.
-    $_monitorTypeIdForRoles = 45534;
-    $_monitorSidesFlooded = [];
-    if (isset($sides, $participants, $ships_by_character)) {
-        $countsBySide = [];
-        foreach ($participants as $_p) {
-            $_cid = (int) $_p->character_id;
-            $_ships = $ships_by_character[$_cid] ?? [];
-            if (! isset($_ships[$_monitorTypeIdForRoles])) continue;
-            $_side = $sides->sideByCharacterId[$_cid] ?? 'C';
-            $countsBySide[$_side] = ($countsBySide[$_side] ?? 0) + 1;
-        }
-        foreach ($countsBySide as $_side => $_n) {
-            if ($_n >= 3) $_monitorSidesFlooded[$_side] = true;
-        }
-    }
-    // Rewrite any 'fc' in a flooded side down to 'command'.
-    if ($_monitorSidesFlooded !== []) {
-        $_rewritten = [];
-        foreach ($roleByChar as $_cid => $_role) {
-            if ($_role === 'fc') {
-                $_side = $sides->sideByCharacterId[(int) $_cid] ?? 'C';
-                if (isset($_monitorSidesFlooded[$_side])) {
-                    $_rewritten[$_cid] = 'command';
-                    continue;
-                }
-            }
-            $_rewritten[$_cid] = $_role;
-        }
-        $roleByChar = $_rewritten;
-    }
+    // Per-sub-fleet Monitor tie-breaker now lives in the Python
+    // scoring worker (battle_role_scoring.score.MONITOR_FC_FLOOR /
+    // MONITOR_FC_GAP). The view layer no longer demotes FC → Cmd
+    // based on side-wide Monitor counts; it trusts the inference.
     $roleByKmChar = $role_by_killmail_character ?? [];
     $roleLabel = fn (string $r): string => match ($r) {
         'fc' => 'FC',
