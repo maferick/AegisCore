@@ -74,13 +74,19 @@
         }
     }
     // Group → fitted modules (charges excluded, ordered by flag).
+    // Charges live at the same `flag` as their host module → index
+    // them so each module icon can overlay its charge in the corner.
     $wheelSlotKeys = ['high', 'mid', 'low', 'rig', 'subsystem', 'service'];
     $wheelModulesByGroup = [];
+    $wheelChargeByFlag = [];
     foreach ($wheelSlotKeys as $k) {
         $items = $itemsBySlot[$k] ?? collect();
         $mods = $items->reject(fn ($i) => $chargeTypeIds->has($i->type_id))
             ->sortBy('flag')->values();
         $wheelModulesByGroup[$k] = $mods->all();
+        foreach ($items->filter(fn ($i) => $chargeTypeIds->has($i->type_id)) as $c) {
+            $wheelChargeByFlag[(int) $c->flag] = $c;
+        }
     }
     // Slot-count per group. Dogma attrs report the hull's base slot
     // layout but T3Cs publish 0 for hi/mid/low because their totals
@@ -98,17 +104,25 @@
         'subsystem' => $wheelCountFrom(1367, count($wheelModulesByGroup['subsystem'])),
         'service'   => $wheelCountFrom(2056, count($wheelModulesByGroup['service'])),
     ];
-    // Layout: outer ring = high/mid/low/rig, inner ring = subsystem/
-    // service. Arcs are degrees, 0 = right, -90 = top. Starts from
-    // zKill's known-good ranges and stretches/shrinks automatically
-    // for n slots.
+    // Layout: outer ring = high / mid / low split across top / right
+    // / bottom; rigs get their own non-overlapping sector on the
+    // left-bottom. Inner ring = subsystems (T3C) placed at fixed
+    // diagonals + service (capitals/industrials).
+    // Arcs are degrees, 0 = right, -90 = top.
     $wheelLayout = [];
-    if ($wheelCounts['high'] > 0)      $wheelLayout[] = ['key' => 'high',      'count' => $wheelCounts['high'],      'ring' => 'outer', 'arc' => [-140, -40]];
-    if ($wheelCounts['mid'] > 0)       $wheelLayout[] = ['key' => 'mid',       'count' => $wheelCounts['mid'],       'ring' => 'outer', 'arc' => [-30,   40]];
-    if ($wheelCounts['low'] > 0)       $wheelLayout[] = ['key' => 'low',       'count' => $wheelCounts['low'],       'ring' => 'outer', 'arc' => [ 50,  150]];
-    if ($wheelCounts['rig'] > 0)       $wheelLayout[] = ['key' => 'rig',       'count' => $wheelCounts['rig'],       'ring' => 'outer', 'arc' => [160,  210]];
-    if ($wheelCounts['subsystem'] > 0) $wheelLayout[] = ['key' => 'subsystem', 'count' => $wheelCounts['subsystem'], 'ring' => 'inner', 'arc' => [-135,   135]];
-    if ($wheelCounts['service'] > 0)   $wheelLayout[] = ['key' => 'service',   'count' => $wheelCounts['service'],   'ring' => 'inner', 'arc' => [-180,  180]];
+    if ($wheelCounts['high'] > 0)    $wheelLayout[] = ['key' => 'high',    'count' => $wheelCounts['high'],    'ring' => 'outer', 'arc' => [-155, -30]];
+    if ($wheelCounts['mid'] > 0)     $wheelLayout[] = ['key' => 'mid',     'count' => $wheelCounts['mid'],     'ring' => 'outer', 'arc' => [-15,   15]];
+    if ($wheelCounts['low'] > 0)     $wheelLayout[] = ['key' => 'low',     'count' => $wheelCounts['low'],     'ring' => 'outer', 'arc' => [ 30,  155]];
+    if ($wheelCounts['rig'] > 0)     $wheelLayout[] = ['key' => 'rig',     'count' => $wheelCounts['rig'],     'ring' => 'outer', 'arc' => [175,  220]];
+    if ($wheelCounts['service'] > 0) $wheelLayout[] = ['key' => 'service', 'count' => $wheelCounts['service'], 'ring' => 'inner', 'arc' => [-180, 180]];
+    if ($wheelCounts['subsystem'] > 0) {
+        // T3C subsystems live at the four diagonals of the inner
+        // ring so each category always sits in the same corner.
+        // Five subsystems (pre-Hyperion legacy) fans evenly instead.
+        $n = $wheelCounts['subsystem'];
+        $arc = $n <= 4 ? [-135, 135] : [-160, 160];
+        $wheelLayout[] = ['key' => 'subsystem', 'count' => $n, 'ring' => 'inner', 'arc' => $arc];
+    }
 
     $wheelPositions = function (int $count, array $arc, float $radius, float $cx, float $cy): array {
         [$start, $end] = $arc;
@@ -204,12 +218,22 @@
         background: rgba(17,17,19,0.7);
         transition: transform 0.1s ease, box-shadow 0.1s ease;
     }
-    .km-fit-mod:hover { transform: scale(1.18); z-index: 5; }
-    .km-fit-mod.dropped { box-shadow: 0 0 0 1.5px rgba(74,222,128,0.75); }
-    .km-fit-mod.destroyed { box-shadow: 0 0 0 1.5px rgba(255,56,56,0.6); filter: grayscale(0.3); }
+    .km-fit-mod:hover { transform: scale(1.2); z-index: 5; }
+    .km-fit-mod.dropped   { box-shadow: 0 0 8px rgba(74,222,128,0.55), 0 0 0 1px rgba(74,222,128,0.45); }
+    .km-fit-mod.destroyed { box-shadow: 0 0 8px rgba(255,56,56,0.45),  0 0 0 1px rgba(255,56,56,0.35); filter: saturate(0.75); }
+    .km-fit-mod-dot {
+        position: absolute; width: 7px; height: 7px; border-radius: 50%;
+        bottom: -1px; right: -1px; pointer-events: none;
+        border: 1px solid rgba(17,17,19,0.9);
+    }
+    .km-fit-mod-dot.dropped   { background: #4ade80; }
+    .km-fit-mod-dot.destroyed { background: #ff3838; }
     .km-fit-charge {
         position: absolute; width: 16px; height: 16px;
-        border-radius: 2px; pointer-events: none;
+        border-radius: 2px; right: -4px; bottom: -4px;
+        background: rgba(12,12,14,0.9);
+        border: 1px solid rgba(229,169,0,0.5);
+        pointer-events: none;
     }
     .km-fit-legend {
         display: flex; gap: 0.75rem; flex-wrap: wrap;
@@ -296,9 +320,14 @@
                     $positions = $wheelPositions($g['count'], $g['arc'], $r, $wheelCx, $wheelCy);
                     $color = $wheelGroupColor($g['key']);
                 @endphp
-                @foreach ($positions as $p)
-                    <circle cx="{{ number_format($p['x'], 2, '.', '') }}" cy="{{ number_format($p['y'], 2, '.', '') }}" r="18"
-                            fill="rgba(17,17,19,0.5)" stroke="{{ $color }}" stroke-opacity="0.5" stroke-width="1.5" />
+                @foreach ($positions as $i => $p)
+                    @php $filled = isset($wheelModulesByGroup[$g['key']][$i]); @endphp
+                    <circle cx="{{ number_format($p['x'], 2, '.', '') }}" cy="{{ number_format($p['y'], 2, '.', '') }}"
+                            r="{{ $filled ? 18 : 16 }}"
+                            fill="{{ $filled ? 'rgba(17,17,19,0.55)' : 'rgba(255,255,255,0.015)' }}"
+                            stroke="{{ $color }}"
+                            stroke-opacity="{{ $filled ? 0.55 : 0.22 }}"
+                            stroke-width="{{ $filled ? 1.5 : 1 }}" />
                 @endforeach
             @endforeach
         </svg>
@@ -321,13 +350,26 @@
                         $destroyed = ($m->quantity_destroyed ?? 0) > 0;
                         $stateClass = $dropped ? 'dropped' : ($destroyed ? 'destroyed' : '');
                         $modName = $m->type_name ?? $typeNames[$m->type_id] ?? 'Type #'.$m->type_id;
+                        $charge = $wheelChargeByFlag[(int) $m->flag] ?? null;
+                        $chargeName = $charge ? ($charge->type_name ?? $typeNames[$charge->type_id] ?? 'Type #'.$charge->type_id) : null;
+                        $tip = $modName
+                            . ($charge ? ' ['.$chargeName.']' : '')
+                            . ($destroyed ? ' · destroyed' : '')
+                            . ($dropped ? ' · dropped' : '');
                     @endphp
-                    <img class="km-fit-mod {{ $stateClass }}"
-                         referrerpolicy="no-referrer"
+                    <div class="km-fit-mod {{ $stateClass }}"
                          style="left: {{ number_format($p['x'] - 16, 2, '.', '') }}px; top: {{ number_format($p['y'] - 16, 2, '.', '') }}px;"
-                         src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=32"
-                         title="{{ $modName }}{{ $destroyed ? ' · destroyed' : '' }}{{ $dropped ? ' · dropped' : '' }}"
-                         alt="">
+                         title="{{ $tip }}">
+                        <img src="https://images.evetech.net/types/{{ $m->type_id }}/icon?size=32"
+                             referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:3px;display:block;" alt="">
+                        @if ($charge)
+                            <img class="km-fit-charge" referrerpolicy="no-referrer"
+                                 src="https://images.evetech.net/types/{{ $charge->type_id }}/icon?size=32" alt="">
+                        @endif
+                        @if ($stateClass)
+                            <span class="km-fit-mod-dot {{ $stateClass }}"></span>
+                        @endif
+                    </div>
                 @endif
             @endforeach
         @endforeach
