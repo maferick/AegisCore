@@ -72,9 +72,31 @@ final class CharacterGraphInsightService
     private function tagRelationship(int $viewerCid, array $rows): array
     {
         if ($rows === []) return $rows;
+        // Resolve viewer's current alliance. Try the linked-characters
+        // table first (fast path for operators' own chars), then fall
+        // back to character_corporation_history → corporation_alliance_
+        // history so lookup pages work for any cid in our ingest.
         $viewerAlliance = \Illuminate\Support\Facades\DB::table('characters')
             ->where('character_id', $viewerCid)
             ->value('alliance_id');
+        if (! $viewerAlliance) {
+            $corpRow = \Illuminate\Support\Facades\DB::table('character_corporation_history')
+                ->where('character_id', $viewerCid)
+                ->where('is_deleted', 0)
+                ->whereNull('end_date')
+                ->orderByDesc('start_date')
+                ->first();
+            if ($corpRow !== null) {
+                $allyRow = \Illuminate\Support\Facades\DB::table('corporation_alliance_history')
+                    ->where('corporation_id', $corpRow->corporation_id)
+                    ->whereNull('end_date')
+                    ->orderByDesc('start_date')
+                    ->first();
+                if ($allyRow?->alliance_id) {
+                    $viewerAlliance = (int) $allyRow->alliance_id;
+                }
+            }
+        }
         $viewerBlocId = null;
         if ($viewerAlliance) {
             $viewerBlocId = \Illuminate\Support\Facades\DB::table('coalition_entity_labels')
