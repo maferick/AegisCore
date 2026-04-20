@@ -216,6 +216,15 @@ Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCorporationAlli
     ->onOneServer()
     ->name('fetch-corp-alliance-history');
 
+// Factional-warfare enlistment snapshot. ESI /corporations/{id}/fw/stats/
+// is a public endpoint with 1-hour CCP caching; 7-day TTL on our side
+// keeps pressure minimal. Fires hourly on :07 so it doesn't land on the
+// same tick as the two history jobs above.
+Schedule::job(new \App\Domains\KillmailsBattleTheaters\Jobs\FetchCorporationFwEnlistment)
+    ->cron('7 * * * *')
+    ->onOneServer()
+    ->name('fetch-corp-fw-enlistment');
+
 // Allegiance graph backfill — project the last 24h of locked battle
 // theaters into the Neo4j allegiance graph so the resolver's
 // historical-allegiance tiebreaker accumulates signal on its own
