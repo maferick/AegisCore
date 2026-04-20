@@ -220,16 +220,23 @@ class MyDoctrines extends Page
     }
 
     /**
-     * Per role, mark each doctrine as 'primary' or 'tail'.
+     * Per role + per hull, mark each doctrine as 'primary' or 'tail'.
      *
-     * Primary requires:
-     *   scope_n >= floor   (floor = max(10, role_leader_scope * 0.10))
-     *   AND (share >= 0.50  OR  (top-3 for its hull AND share >= 0.15))
+     * Only the top 1-2 variants per hull ever hit 'primary'. Rule:
+     *   rank 0 → primary iff scope_n >= floor
+     *   rank 1 → primary iff scope_n >= floor AND share >= 0.20 AND
+     *            scope_n >= 0.40 × rank-0 scope_n  (avoid surfacing
+     *            a weak runner-up)
+     *   rank 2+ → tail
      *
-     * The role-wide scope floor prevents 9/18 = 50% share tying for
-     * primary rank alongside real doctrines with hundreds of scope
-     * observations. Tiny scopes still get a 10× floor rather than
-     * 0 so they don't surface one-off fits as doctrine.
+     * Floor is still max(10, role-leader * 0.10) so one-off fits
+     * don't surface.
+     *
+     * Scope-specific by design: the adopter table join in
+     * loadDoctrines() already filters to the viewer's corp /
+     * alliance / bloc, so this classifier is always operating on
+     * kills attributable to the scope the viewer lives in — WC
+     * viewers see WC variants, Goons viewers see Goons variants.
      *
      * @param array<int,array<string,mixed>> $docs
      * @return array<int,array<string,mixed>>
@@ -254,15 +261,21 @@ class MyDoctrines extends Page
         }
         foreach ($hullGroups as $idxs) {
             usort($idxs, fn ($a, $b) => $docs[$b]['scope_n'] <=> $docs[$a]['scope_n']);
-            $rank = 0;
-            foreach ($idxs as $i) {
+            $topScope = $docs[$idxs[0]]['scope_n'] ?? 0;
+            foreach ($idxs as $rank => $i) {
                 $d = $docs[$i];
                 $floor = $floorByRole[$d['role']] ?? 10;
                 $meetsFloor = $d['scope_n'] >= $floor;
-                $isSignature = $d['share'] >= 0.50;
-                $isTopAdopted = $rank < 3 && $d['share'] >= 0.15;
-                $docs[$i]['bucket'] = ($meetsFloor && ($isSignature || $isTopAdopted)) ? 'primary' : 'tail';
-                $rank++;
+                if ($rank === 0) {
+                    $isPrimary = $meetsFloor;
+                } elseif ($rank === 1) {
+                    $isPrimary = $meetsFloor
+                        && $d['share'] >= 0.20
+                        && $topScope > 0 && $d['scope_n'] >= 0.40 * $topScope;
+                } else {
+                    $isPrimary = false;
+                }
+                $docs[$i]['bucket'] = $isPrimary ? 'primary' : 'tail';
             }
         }
         return $docs;
