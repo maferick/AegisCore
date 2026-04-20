@@ -175,10 +175,19 @@ class AllianceLookup extends Page
     private function roleLayers(int $aid, array $pilotIds): array
     {
         if ($pilotIds === []) return [];
-        $roleKeys = ['fc', 'command', 'logi', 'tackle', 'bomber', 'mainline_dps'];
-        $out = array_fill_keys($roleKeys, []);
-        foreach ($roleKeys as $role) {
-            $col = "role_{$role}_pct";
+        // Map role UI key → column suffix. The feature table stores
+        // `role_dps_pct` (not `role_mainline_dps_pct`) — the label vs
+        // column split matches Spec 5's wire shape.
+        $roleColMap = [
+            'fc' => 'role_fc_pct',
+            'command' => 'role_command_pct',
+            'logi' => 'role_logi_pct',
+            'tackle' => 'role_tackle_pct',
+            'bomber' => 'role_bomber_pct',
+            'mainline_dps' => 'role_dps_pct',
+        ];
+        $out = array_fill_keys(array_keys($roleColMap), []);
+        foreach ($roleColMap as $role => $col) {
             $rows = DB::table('ci_character_features_rolling AS f')
                 ->leftJoin('esi_entity_names AS en', function ($j): void {
                     $j->on('en.entity_id', '=', 'f.character_id')->where('en.category', 'character');
