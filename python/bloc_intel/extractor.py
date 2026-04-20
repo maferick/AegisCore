@@ -52,12 +52,14 @@ def compute(conn: pymysql.connections.Connection, cfg: Config,
         "min_pilots_per_observation": cfg.min_pilots_per_observation,
     })
 
-    pair_stats, cond_stats = _extract_pair_stats(conn, cfg, ws, we)
+    pair_stats, cond_stats, coloc = _extract_pair_stats(conn, cfg, ws, we)
     log.info("pair aggregation complete", {
         "pairs_pre_threshold": len(pair_stats),
         "conditional_triples_pre_threshold": len(cond_stats),
+        "coloc_alliances": len(coloc["alliance_cells"]),
     })
 
+    _compute_coloc_signals(pair_stats, coloc)
     kept = _finalize_pair_rows(pair_stats, cfg, window_end)
     log.info("pair rows ready", {"kept": len(kept)})
 
@@ -73,9 +75,16 @@ def compute(conn: pymysql.connections.Connection, cfg: Config,
 # ----- extraction ------------------------------------------------------
 
 
-def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[dict, dict]:
+def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[dict, dict, dict]:
     """Single streamed pass. Returns
-    (pair_stats[(a,b)], conditional_stats[(a,b,t)]).
+    (pair_stats[(a,b)], conditional_stats[(a,b,t)], coloc).
+
+    `coloc` carries the raw co-location state used by avoidance and
+    parallel-ops signal compute:
+      alliance_cells[alliance_id]            -> set((region_id, hour))
+      alliance_cell_systems[(aid, cell)]     -> set(solar_system_id)
+      pair_engaged_cells[(a,b)]              -> set((region_id, hour))
+          (cells where pair directly engaged — same or opposite side)
 
     Conditional stats are kept for every (pair, trigger) where all three
     are eligible attackers on the same killmail. Pruned by absolute
@@ -88,6 +97,9 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
 
     pair_stats: dict[tuple[int, int], dict] = {}
     cond_stats: dict[tuple[int, int, int], dict] = {}
+    alliance_cells: dict[int, set[tuple[int, int]]] = defaultdict(set)
+    alliance_cell_systems: dict[tuple[int, tuple[int, int]], set[int]] = defaultdict(set)
+    pair_engaged_cells: dict[tuple[int, int], set[tuple[int, int]]] = defaultdict(set)
 
     # Factional-Warfare taint = only counts when FW pilots are on BOTH
     # sides of the kill. Attacker-side FW ratio alone mis-fires on
@@ -108,7 +120,8 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
             """
             SELECT k.killmail_id, k.killed_at, k.attacker_count,
                    k.victim_alliance_id, k.victim_faction_id,
-                   COALESCE(SUM(CASE WHEN ka.faction_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS n_fw_attackers
+                   COALESCE(SUM(CASE WHEN ka.faction_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS n_fw_attackers,
+                   k.region_id, k.solar_system_id
               FROM killmails k
               LEFT JOIN killmail_attackers ka ON ka.killmail_id = k.killmail_id
              WHERE k.killed_at BETWEEN %s AND %s
@@ -121,7 +134,9 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
         km_rows = [(int(r[0]), r[1], int(r[2] or 1),
                     int(r[3]) if r[3] else None,
                     int(r[4]) if r[4] else None,
-                    int(r[5] or 0))
+                    int(r[5] or 0),
+                    int(r[6]) if r[6] else None,
+                    int(r[7]) if r[7] else None)
                    for r in cur]
     finally:
         cur.close()
@@ -141,7 +156,8 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
 
         for kid, attacker_allies in attackers_by_km.items():
             (_, killed_at, attacker_count, victim_alliance_id,
-             victim_faction_id, n_fw_attackers) = km_meta[kid]
+             victim_faction_id, n_fw_attackers,
+             region_id, system_id) = km_meta[kid]
             if not attacker_allies:
                 continue
             fw_ratio = min(1.0, n_fw_attackers / max(1, attacker_count))
@@ -162,6 +178,32 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
             if len(eligible) > 30:
                 eligible.sort(key=lambda aid: -attacker_allies[aid])
                 eligible = eligible[:30]
+
+            # Co-location bookkeeping. Anchor a (region, hour) cell for
+            # every alliance touching this killmail (eligible attackers
+            # + victim alliance). Plus the system id so parallel-ops
+            # can separate "shared region+hour, different systems".
+            if region_id is not None:
+                cell = (region_id, _hour_bucket(killed_at))
+                touched_alliances: list[int] = []
+                for aid in eligible:
+                    alliance_cells[aid].add(cell)
+                    if system_id is not None:
+                        alliance_cell_systems[(aid, cell)].add(system_id)
+                    touched_alliances.append(aid)
+                if victim_alliance_id:
+                    alliance_cells[victim_alliance_id].add(cell)
+                    if system_id is not None:
+                        alliance_cell_systems[(victim_alliance_id, cell)].add(system_id)
+                    touched_alliances.append(victim_alliance_id)
+                # Direct engagement cells: every pair that shares this
+                # killmail counts as engaged for this cell.
+                unique_ta = set(touched_alliances)
+                ta_list = list(unique_ta)
+                for ia in range(len(ta_list)):
+                    for ib in range(ia + 1, len(ta_list)):
+                        a, b = sorted((ta_list[ia], ta_list[ib]))
+                        pair_engaged_cells[(a, b)].add(cell)
 
             # SAME-side pairs. Track per-pair state + per-(pair, trigger)
             # conditional state where trigger is any *other* eligible
@@ -203,7 +245,59 @@ def _extract_pair_stats(conn, cfg: Config, ws: datetime, we: datetime) -> tuple[
                 "triples": len(cond_stats),
             })
 
-    return pair_stats, cond_stats
+    coloc = {
+        "alliance_cells": alliance_cells,
+        "alliance_cell_systems": alliance_cell_systems,
+        "pair_engaged_cells": pair_engaged_cells,
+    }
+    return pair_stats, cond_stats, coloc
+
+
+def _hour_bucket(ts: datetime) -> int:
+    """Integer hour bucket since epoch (UTC). Region + hour = the
+    co-location cell key used by avoidance / parallel-ops."""
+    return int(ts.replace(tzinfo=timezone.utc).timestamp() // 3600)
+
+
+def _compute_coloc_signals(pair_stats: dict, coloc: dict) -> None:
+    """Populate avoidance + parallel-ops counters on each pair_stats
+    row. Mutates pair_stats in place.
+
+    avoidance: count of (region, hour) cells where both alliances are
+      active but no pair-member killmail directly ties them (same or
+      opposed). Divided by total shared cells → ratio in [0, 1].
+
+    parallel_ops: subset of avoidance cells where the two alliances
+      operated in *different* systems within the same region+hour —
+      i.e. not just silently coexisting but running concurrent fleets.
+      Divided by shared cells → strength in [0, 1].
+    """
+    alliance_cells = coloc["alliance_cells"]
+    alliance_cell_systems = coloc["alliance_cell_systems"]
+    pair_engaged_cells = coloc["pair_engaged_cells"]
+    for (a, b), st in pair_stats.items():
+        cells_a = alliance_cells.get(a) or set()
+        cells_b = alliance_cells.get(b) or set()
+        shared = cells_a & cells_b
+        if not shared:
+            st["avoidance_windows"] = 0
+            st["avoidance_ratio"] = None
+            st["parallel_ops_events"] = 0
+            st["parallel_ops_strength"] = None
+            continue
+        engaged = pair_engaged_cells.get((a, b)) or set()
+        avoidance_cells = shared - engaged
+        parallel_events = 0
+        for cell in avoidance_cells:
+            sys_a = alliance_cell_systems.get((a, cell)) or set()
+            sys_b = alliance_cell_systems.get((b, cell)) or set()
+            if sys_a and sys_b and sys_a.isdisjoint(sys_b):
+                parallel_events += 1
+        shared_n = len(shared)
+        st["avoidance_windows"] = len(avoidance_cells)
+        st["avoidance_ratio"] = round(len(avoidance_cells) / shared_n, 4) if shared_n else None
+        st["parallel_ops_events"] = parallel_events
+        st["parallel_ops_strength"] = round(parallel_events / shared_n, 4) if shared_n else None
 
 
 def _fetch_attacker_alliances(conn, km_ids: list[int]) -> dict[int, dict[int, int]]:
@@ -282,6 +376,10 @@ def _finalize_pair_rows(pair_stats: dict, cfg: Config, window_end: date) -> list
             "weighted_opposed": round(wo, 4),
             "affinity_score": affinity,
             "hostility_score": hostility,
+            "avoidance_windows": int(st.get("avoidance_windows") or 0),
+            "avoidance_ratio": st.get("avoidance_ratio"),
+            "parallel_ops_events": int(st.get("parallel_ops_events") or 0),
+            "parallel_ops_strength": st.get("parallel_ops_strength"),
             "confidence": conf,
             "first_seen_at": st["first_t"],
             "last_seen_at": st["last_t"],
@@ -421,9 +519,12 @@ def _persist_pair_rows(conn, rows: list[dict], window_end: date, window_days: in
                   (alliance_a_id, alliance_b_id, window_end_date, window_days,
                    n_obs, n_same_side, n_opposed,
                    weighted_n_obs, weighted_same_side, weighted_opposed,
-                   affinity_score, hostility_score, confidence,
+                   affinity_score, hostility_score,
+                   avoidance_windows, avoidance_ratio,
+                   parallel_ops_events, parallel_ops_strength,
+                   confidence,
                    first_seen_at, last_seen_at, computed_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                 """,
                 [
                     (
@@ -431,7 +532,10 @@ def _persist_pair_rows(conn, rows: list[dict], window_end: date, window_days: in
                         window_end, window_days,
                         r["n_obs"], r["n_same_side"], r["n_opposed"],
                         r["weighted_n_obs"], r["weighted_same_side"], r["weighted_opposed"],
-                        r["affinity_score"], r["hostility_score"], r["confidence"],
+                        r["affinity_score"], r["hostility_score"],
+                        r["avoidance_windows"], r["avoidance_ratio"],
+                        r["parallel_ops_events"], r["parallel_ops_strength"],
+                        r["confidence"],
                         r["first_seen_at"], r["last_seen_at"],
                     )
                     for r in chunk
