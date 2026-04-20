@@ -121,16 +121,39 @@
                     <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $roleColor[$roleKey] ?? '#9ca3af' }}; margin-bottom:0.5rem;">{{ $label }}</h3>
                     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:0.5rem;">
                         @foreach ($pilots as $p)
-                            @php $isFounder = ! empty($a['creator_character_id']) && (int) $a['creator_character_id'] === (int) $p['character_id']; @endphp
-                            <a href="/portal/characters/lookup?cid={{ $p['character_id'] }}"
+                            @php
+                                $isFounder = ! empty($a['creator_character_id']) && (int) $a['creator_character_id'] === (int) $p['character_id'];
+                                $band = $p['anomaly_band'] ?? null;
+                                $badgeClass = null;
+                                $badgeColor = null;
+                                $badgeBg = null;
+                                if ($band === 'critical') {
+                                    $badgeClass = 'CRIT'; $badgeColor = '#fca5a5'; $badgeBg = 'rgba(239,68,68,0.25)';
+                                } elseif ($band === 'high') {
+                                    $badgeClass = 'HIGH'; $badgeColor = '#fdba74'; $badgeBg = 'rgba(251,146,60,0.2)';
+                                } elseif ($band === 'elevated') {
+                                    $badgeClass = 'ELEV'; $badgeColor = '#fcd34d'; $badgeBg = 'rgba(251,191,36,0.15)';
+                                }
+                                // border picks the strongest signal: critical > founder > none.
+                                $borderColor = $badgeClass === 'CRIT' ? 'rgba(239,68,68,0.5)'
+                                    : ($badgeClass === 'HIGH' ? 'rgba(251,146,60,0.4)'
+                                    : ($isFounder ? 'rgba(250,204,21,0.35)' : 'rgba(255,255,255,0.08)'));
+                            @endphp
+                            <a href="/admin/counter-intel/{{ $p['character_id'] }}"
                                style="display:flex; gap:0.5rem; align-items:center; text-decoration:none;
-                                      background:rgba(255,255,255,0.02); border:1px solid {{ $isFounder ? 'rgba(250,204,21,0.35)' : 'rgba(255,255,255,0.08)' }};
+                                      background:rgba(255,255,255,0.02); border:1px solid {{ $borderColor }};
                                       border-radius:5px; padding:0.4rem 0.6rem; color:#e5e5e7;">
                                 <img src="https://images.evetech.net/characters/{{ $p['character_id'] }}/portrait?size=32"
                                      referrerpolicy="no-referrer" style="width:28px;height:28px;border-radius:50%;" alt="">
                                 <div style="flex:1; min-width:0;">
-                                    <div style="font-size:0.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                                        {{ $p['name'] }}
+                                    <div style="font-size:0.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:0.3rem;">
+                                        <span style="flex:1; overflow:hidden; text-overflow:ellipsis;">{{ $p['name'] }}</span>
+                                        @if ($badgeClass)
+                                            <span title="Counter-intel band {{ $band }} · score {{ $p['anomaly_score'] !== null ? number_format($p['anomaly_score'], 2) : '—' }}"
+                                                  style="display:inline-block; padding:0 5px; border-radius:8px; font-size:0.55rem; font-weight:700; letter-spacing:0.06em; background:{{ $badgeBg }}; color:{{ $badgeColor }};">
+                                                {{ $badgeClass }}
+                                            </span>
+                                        @endif
                                         @if ($isFounder)
                                             <span title="Alliance founder — anomaly signals on this pilot are structurally expected" style="color:#fde047; font-size:0.62rem;">⭐</span>
                                         @endif

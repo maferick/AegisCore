@@ -200,6 +200,34 @@ class AllianceLookup extends Page
             'bomber' => 'role_bomber_pct',
             'mainline_dps' => 'role_dps_pct',
         ];
+        // Pull latest anomaly band + score for any pilot in the set
+        // so role rows can flag elevated+ insiders inline.
+        $bandsByCid = [];
+        if ($pilotIds) {
+            $chunks = array_chunk($pilotIds, 2000);
+            foreach ($chunks as $chunk) {
+                $ph = implode(',', array_fill(0, count($chunk), '?'));
+                $rows = DB::select(
+                    "SELECT a.character_id, a.review_priority_band, a.review_priority_score
+                       FROM ci_character_anomalies_rolling a
+                       JOIN (
+                         SELECT character_id, MAX(window_end_date) AS mx
+                           FROM ci_character_anomalies_rolling
+                          WHERE character_id IN ($ph)
+                          GROUP BY character_id
+                       ) m ON m.character_id = a.character_id AND m.mx = a.window_end_date
+                      WHERE a.character_id IN ($ph)",
+                    array_merge($chunk, $chunk),
+                );
+                foreach ($rows as $r) {
+                    $bandsByCid[(int) $r->character_id] = [
+                        'band' => (string) $r->review_priority_band,
+                        'score' => $r->review_priority_score !== null ? (float) $r->review_priority_score : null,
+                    ];
+                }
+            }
+        }
+
         $out = array_fill_keys(array_keys($roleColMap), []);
         foreach ($roleColMap as $role => $col) {
             $rows = DB::table('ci_character_features_rolling AS f')
@@ -216,14 +244,20 @@ class AllianceLookup extends Page
                     'f.battles', 'f.killmails_attacker', 'f.avg_damage_share',
                 )
                 ->get();
-            $out[$role] = $rows->map(fn ($r) => [
-                'character_id' => (int) $r->character_id,
-                'name' => $r->name ? (string) $r->name : "Pilot #{$r->character_id}",
-                'role_pct' => (float) $r->role_pct,
-                'battles' => (int) $r->battles,
-                'killmails_attacker' => (int) $r->killmails_attacker,
-                'avg_damage_share' => (float) $r->avg_damage_share,
-            ])->all();
+            $out[$role] = $rows->map(function ($r) use ($bandsByCid) {
+                $cid = (int) $r->character_id;
+                $band = $bandsByCid[$cid] ?? null;
+                return [
+                    'character_id' => $cid,
+                    'name' => $r->name ? (string) $r->name : "Pilot #{$cid}",
+                    'role_pct' => (float) $r->role_pct,
+                    'battles' => (int) $r->battles,
+                    'killmails_attacker' => (int) $r->killmails_attacker,
+                    'avg_damage_share' => (float) $r->avg_damage_share,
+                    'anomaly_band' => $band['band'] ?? null,
+                    'anomaly_score' => $band['score'] ?? null,
+                ];
+            })->all();
         }
         return $out;
     }
