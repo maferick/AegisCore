@@ -172,17 +172,31 @@ class DoctrineMarket extends Page
         $priceHubId = $price['id'];
         $priceHubName = $price['name'];
 
+        // Voronoi catchment: when a specific stock hub is selected,
+        // filter burn to killmails in systems the hub services. "All
+        // hubs" mode skips the filter and counts every loss.
+        $catchmentSystemIds = null;
+        if ($hubId > 0) {
+            $catchmentSystemIds = DB::table('market_hub_catchments')
+                ->where('hub_id', $hubId)
+                ->pluck('solar_system_id')
+                ->map(fn ($v) => (int) $v)
+                ->all();
+            if ($catchmentSystemIds === []) $catchmentSystemIds = [0]; // empty → match nothing
+        }
+
         // 1. Pull primary doctrines across all three scope tiers.
         //    Collapse to unique doctrine_id so a fit adopted by both
         //    corp and alliance doesn't double-count loss rate.
         $doctrines = $this->primaryDoctrines($corpId, $allianceId, $blocId);
 
         // 2. Per-module weekly burn.
-        //    canonical_type_id + flag_category is the burn key; meta
-        //    variants collapse to the same canonical stock bucket.
+        //    Variant type_id is the burn key post-split; stock + price
+        //    join directly on the variant pilots actually fit.
         [$moduleBurn, $hullBurn] = $this->computeBurn(
             $doctrines,
             ['corp' => $corpId ?: null, 'alliance' => $allianceId ?: null, 'bloc' => $blocId],
+            $catchmentSystemIds,
         );
 
         // 3. Stock from market_orders across the selected stock hub(s).
@@ -327,10 +341,18 @@ class DoctrineMarket extends Page
      * on the primary doctrines only — otherwise the shopping list
      * picks up tail-variant charges that bury the signal.
      *
+     * When $catchmentSystemIds is set, hull burn is restricted to
+     * killmails in systems the selected stock hub services (Voronoi
+     * by jumps). Module burn scales per-hull by the catchment share
+     * of that hull's total losses — a fleet that loses 40% of its
+     * hulls in hub X's catchment delivers 40% of its module burn to
+     * hub X's shopping list.
+     *
      * @param list<array<string,mixed>> $doctrines  Primary variants only.
      * @param array{corp:?int,alliance:?int,bloc:?int} $scopeIds
+     * @param list<int>|null $catchmentSystemIds  null = no hub filter (global burn).
      */
-    private function computeBurn(array $doctrines, array $scopeIds): array
+    private function computeBurn(array $doctrines, array $scopeIds, ?array $catchmentSystemIds = null): array
     {
         if ($doctrines === []) return [[], []];
         $ids = array_column($doctrines, 'id');
@@ -345,13 +367,30 @@ class DoctrineMarket extends Page
         $hullBurn = [];
         $windowDays = self::WINDOW_DAYS;
 
+        // Pre-compute hull catchment share before running the per-doctrine
+        // burn loop. Share = kills_in_hub_catchment / kills_global for
+        // each hull. When no hub filter, share = 1.0 for every hull.
+        $hullIdsAll = array_unique(array_map(fn ($d) => (int) $d['hull_type_id'], $doctrines));
+        $hullTotals = $this->allDoctrineHullTotals($hullIdsAll, $scopeIds, $catchmentSystemIds);
+        $hullShare = [];
+        if ($catchmentSystemIds !== null) {
+            $globalTotals = $this->allDoctrineHullTotals($hullIdsAll, $scopeIds, null);
+            foreach ($hullIdsAll as $hid) {
+                $total = (int) ($globalTotals[$hid] ?? 0);
+                $in = (int) ($hullTotals[$hid] ?? 0);
+                $hullShare[$hid] = $total > 0 ? min(1.0, $in / $total) : 0.0;
+            }
+        } else {
+            foreach ($hullIdsAll as $hid) $hullShare[$hid] = 1.0;
+        }
+
         // Per-hull primary weekly burn (used for module burn — we only
         // want the primary variant's modules on the shopping list).
         $primaryHullWeeklyBurn = [];
         foreach ($doctrines as $d) {
             $losses = (int) $d['scope_n'];
-            $weeklyHulls = $losses * 7.0 / $windowDays;
             $hid = (int) $d['hull_type_id'];
+            $weeklyHulls = $losses * 7.0 / $windowDays * ($hullShare[$hid] ?? 1.0);
             $primaryHullWeeklyBurn[$hid] = ($primaryHullWeeklyBurn[$hid] ?? 0.0) + $weeklyHulls;
 
             $mods = $modulesByDoctrine->get($d['id']) ?? collect();
@@ -403,8 +442,9 @@ class DoctrineMarket extends Page
         // Hull burn — widen to ALL active doctrines for the viewer's
         // scope (corp → alliance → bloc precedence, matches the
         // adopter table the primary doctrines were pulled from).
+        // $hullTotals already computed above (catchment-scoped when a
+        // hub is selected, global otherwise).
         $hullIds = array_keys($primaryHullWeeklyBurn);
-        $hullTotals = $this->allDoctrineHullTotals($hullIds, $scopeIds);
 
         foreach ($hullIds as $hid) {
             $primaryWeekly = (float) ($primaryHullWeeklyBurn[$hid] ?? 0);
@@ -451,11 +491,16 @@ class DoctrineMarket extends Page
      * double-counting (one kill can match multiple doctrine variants,
      * inflating adopter sums 2× or more).
      *
+     * When $catchmentSystemIds is non-null, the query restricts to
+     * kills in those systems — i.e. the Voronoi catchment of the
+     * selected stock hub.
+     *
      * @param list<int> $hullIds
      * @param array{corp:?int,alliance:?int,bloc:?int} $scopeIds
+     * @param list<int>|null $catchmentSystemIds
      * @return array<int,int>
      */
-    private function allDoctrineHullTotals(array $hullIds, array $scopeIds): array
+    private function allDoctrineHullTotals(array $hullIds, array $scopeIds, ?array $catchmentSystemIds = null): array
     {
         if ($hullIds === []) return [];
         $out = [];
@@ -463,6 +508,13 @@ class DoctrineMarket extends Page
 
         $since = now()->subDays(self::WINDOW_DAYS);
         $ph = implode(',', array_fill(0, count($hullIds), '?'));
+        $systemPh = '';
+        $systemParams = [];
+        if ($catchmentSystemIds !== null) {
+            if ($catchmentSystemIds === []) return $out;
+            $systemPh = ' AND k.solar_system_id IN (' . implode(',', array_fill(0, count($catchmentSystemIds), '?')) . ')';
+            $systemParams = $catchmentSystemIds;
+        }
 
         // Widest-available scope wins: bloc → alliance → corp. Use
         // raw killmail counts scoped to the viewer's membership.
@@ -477,28 +529,31 @@ class DoctrineMarket extends Page
                  WHERE cel.bloc_id = ?
                    AND k.victim_ship_type_id IN ($ph)
                    AND k.killed_at >= ?
+                   $systemPh
                  GROUP BY k.victim_ship_type_id
-            SQL, array_merge([$scopeIds['bloc']], $hullIds, [$since]));
+            SQL, array_merge([$scopeIds['bloc']], $hullIds, [$since], $systemParams));
             foreach ($rows as $r) $out[(int) $r->hid] = (int) $r->n;
         } elseif (($scopeIds['alliance'] ?? null) !== null) {
             $rows = DB::select(<<<SQL
-                SELECT victim_ship_type_id AS hid, COUNT(*) AS n
-                  FROM killmails
-                 WHERE victim_alliance_id = ?
-                   AND victim_ship_type_id IN ($ph)
-                   AND killed_at >= ?
-                 GROUP BY victim_ship_type_id
-            SQL, array_merge([$scopeIds['alliance']], $hullIds, [$since]));
+                SELECT k.victim_ship_type_id AS hid, COUNT(*) AS n
+                  FROM killmails k
+                 WHERE k.victim_alliance_id = ?
+                   AND k.victim_ship_type_id IN ($ph)
+                   AND k.killed_at >= ?
+                   $systemPh
+                 GROUP BY k.victim_ship_type_id
+            SQL, array_merge([$scopeIds['alliance']], $hullIds, [$since], $systemParams));
             foreach ($rows as $r) $out[(int) $r->hid] = (int) $r->n;
         } elseif (($scopeIds['corp'] ?? null) !== null) {
-            $rows = DB::select(<<<SQL
-                SELECT victim_ship_type_id AS hid, COUNT(*) AS n
-                  FROM killmails
-                 WHERE victim_corporation_id = ?
-                   AND victim_ship_type_id IN ($ph)
-                   AND killed_at >= ?
-                 GROUP BY victim_ship_type_id
-            SQL, array_merge([$scopeIds['corp']], $hullIds, [$since]));
+            $rows = DB::select("
+                SELECT k.victim_ship_type_id AS hid, COUNT(*) AS n
+                  FROM killmails k
+                 WHERE k.victim_corporation_id = ?
+                   AND k.victim_ship_type_id IN ($ph)
+                   AND k.killed_at >= ?
+                   $systemPh
+                 GROUP BY k.victim_ship_type_id
+            ", array_merge([$scopeIds['corp']], $hullIds, [$since], $systemParams));
             foreach ($rows as $r) $out[(int) $r->hid] = (int) $r->n;
         }
 
