@@ -44,6 +44,7 @@
             </div>
         @else
             <form method="GET" class="dm-head">
+                <input type="hidden" name="view" value="{{ $view_mode ?? 'deficit' }}">
                 <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">Hub</label>
                 <select name="hub" onchange="this.form.submit()">
                     <option value="all" @selected($hub_id === 0)>All hubs ({{ $hubs->count() }}) · aggregate</option>
@@ -55,8 +56,23 @@
                 </select>
                 <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">Target days</label>
                 <input type="number" name="days" min="3" max="120" value="{{ $target_days }}" style="width:70px;">
+                <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;margin-left:0.6rem;">View</label>
+                @php $mode = $view_mode ?? 'deficit'; @endphp
+                <div style="display:inline-flex;gap:0;border:1px solid #26262b;border-radius:3px;overflow:hidden;font-family:'JetBrains Mono',monospace;font-size:0.72rem;">
+                    <button type="button" onclick="location.search='?hub={{ $hub_id === 0 ? 'all' : $hub_id }}&days={{ $target_days }}&view=deficit'"
+                            style="padding:0.25rem 0.7rem;cursor:pointer;border:none;
+                                   background:{{ $mode === 'deficit' ? 'rgba(239,68,68,0.2)' : 'transparent' }};
+                                   color:{{ $mode === 'deficit' ? '#fca5a5' : '#7a7a82' }};">deficit only</button>
+                    <button type="button" onclick="location.search='?hub={{ $hub_id === 0 ? 'all' : $hub_id }}&days={{ $target_days }}&view=all'"
+                            style="padding:0.25rem 0.7rem;cursor:pointer;border:none;border-left:1px solid #26262b;
+                                   background:{{ $mode === 'all' ? 'rgba(79,208,208,0.15)' : 'transparent' }};
+                                   color:{{ $mode === 'all' ? '#4fd0d0' : '#7a7a82' }};">all items</button>
+                </div>
                 <button type="submit" style="background:rgba(79,208,208,0.1);border:1px solid rgba(79,208,208,0.3);color:#4fd0d0;padding:0.25rem 0.7rem;border-radius:3px;font-size:0.72rem;font-family:'JetBrains Mono',monospace;cursor:pointer;">Apply</button>
-                <span style="color:#3a3a42;margin-left:auto;font-size:0.7rem;">Burn window: {{ $window_days }}d losses · {{ $doctrine_count }} doctrine{{ $doctrine_count === 1 ? '' : 's' }}</span>
+                <span style="color:#3a3a42;margin-left:auto;font-size:0.7rem;">
+                    Burn window: {{ $window_days }}d losses · {{ $doctrine_count }} doctrine{{ $doctrine_count === 1 ? '' : 's' }}
+                    @if (($hidden_count ?? 0) > 0) · {{ $hidden_count }} row{{ $hidden_count === 1 ? '' : 's' }} hidden @endif
+                </span>
             </form>
 
             <div class="dm-totals">

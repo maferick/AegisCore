@@ -59,6 +59,9 @@ class DoctrineMarket extends Page
 
     public int $targetDays = self::TARGET_COVERAGE_DAYS;
 
+    /** all = every line; deficit = only rows where target > stock. */
+    public string $viewMode = 'deficit';
+
     public static function shouldRegisterNavigation(): bool
     {
         return Auth::check();
@@ -82,6 +85,9 @@ class DoctrineMarket extends Page
         }
         $t = (int) request()->query('days', self::TARGET_COVERAGE_DAYS);
         $this->targetDays = max(3, min($t, 120));
+
+        $view = (string) request()->query('view', 'deficit');
+        $this->viewMode = in_array($view, ['all', 'deficit'], true) ? $view : 'deficit';
     }
 
     /** @return array<string,mixed> */
@@ -144,7 +150,10 @@ class DoctrineMarket extends Page
         // 2. Per-module weekly burn.
         //    canonical_type_id + flag_category is the burn key; meta
         //    variants collapse to the same canonical stock bucket.
-        [$moduleBurn, $hullBurn] = $this->computeBurn($doctrines);
+        [$moduleBurn, $hullBurn] = $this->computeBurn(
+            $doctrines,
+            ['corp' => $corpId ?: null, 'alliance' => $allianceId ?: null, 'bloc' => $blocId],
+        );
 
         // 3. Stock from market_orders across the selected hub(s).
         $typeIds = array_unique(array_merge(array_keys($moduleBurn), array_keys($hullBurn)));
@@ -169,13 +178,21 @@ class DoctrineMarket extends Page
             return ($b['deficit_qty'] <=> $a['deficit_qty']) ?: ($b['weekly_burn'] <=> $a['weekly_burn']);
         });
 
+        // Totals are always computed over the full row set so the
+        // deficit-toggle doesn't hide the KPI tiles.
         $totals = $this->totals($rows);
+
+        $displayRows = $this->viewMode === 'deficit'
+            ? array_values(array_filter($rows, fn ($r) => ($r['deficit_qty'] ?? 0) > 0))
+            : $rows;
 
         return [
             'corp_id' => $corpId ?: null, 'alliance_id' => $allianceId ?: null, 'bloc_id' => $blocId,
             'hubs' => $visibleHubs, 'hub_id' => $hubId, 'hub_name' => $hubName,
             'target_days' => $targetDays, 'window_days' => self::WINDOW_DAYS,
-            'rows' => $rows, 'totals' => $totals, 'doctrine_count' => count($doctrines),
+            'rows' => $displayRows, 'totals' => $totals, 'doctrine_count' => count($doctrines),
+            'view_mode' => $this->viewMode,
+            'hidden_count' => count($rows) - count($displayRows),
             'no_hub' => false,
         ];
     }
@@ -269,7 +286,17 @@ class DoctrineMarket extends Page
      * @return array{0: array<int,array<string,mixed>>, 1: array<int,array<string,mixed>>}
      *   [moduleBurn keyed by canonical_type_id, hullBurn keyed by hull_type_id]
      */
-    private function computeBurn(array $doctrines): array
+    /**
+     * Hull burn uses *every* active doctrine for the hull at the
+     * viewer's scope (not just the top-1/2 primary variants we
+     * display) so replenishment matches reality. Module burn stays
+     * on the primary doctrines only — otherwise the shopping list
+     * picks up tail-variant charges that bury the signal.
+     *
+     * @param list<array<string,mixed>> $doctrines  Primary variants only.
+     * @param array{corp:?int,alliance:?int,bloc:?int} $scopeIds
+     */
+    private function computeBurn(array $doctrines, array $scopeIds): array
     {
         if ($doctrines === []) return [[], []];
         $ids = array_column($doctrines, 'id');
@@ -284,16 +311,14 @@ class DoctrineMarket extends Page
         $hullBurn = [];
         $windowDays = self::WINDOW_DAYS;
 
+        // Per-hull primary weekly burn (used for module burn — we only
+        // want the primary variant's modules on the shopping list).
+        $primaryHullWeeklyBurn = [];
         foreach ($doctrines as $d) {
-            $losses = (int) $d['scope_n'];           // losses in window
+            $losses = (int) $d['scope_n'];
             $weeklyHulls = $losses * 7.0 / $windowDays;
-
-            // Hull itself is also burned at the same rate.
             $hid = (int) $d['hull_type_id'];
-            $hullRow = $hullBurn[$hid] ?? ['type_id' => $hid, 'name' => null, 'weekly_burn' => 0.0, 'contributors' => []];
-            $hullRow['weekly_burn'] += $weeklyHulls;
-            $hullRow['contributors'][] = ['doctrine' => $d['canonical_name'], 'scope' => $d['scope'], 'scope_n' => $losses, 'qty_per_fit' => 1];
-            $hullBurn[$hid] = $hullRow;
+            $primaryHullWeeklyBurn[$hid] = ($primaryHullWeeklyBurn[$hid] ?? 0.0) + $weeklyHulls;
 
             $mods = $modulesByDoctrine->get($d['id']) ?? collect();
             foreach ($mods as $m) {
@@ -309,7 +334,30 @@ class DoctrineMarket extends Page
             }
         }
 
-        // Fill hull names.
+        // Hull burn — widen to ALL active doctrines for the viewer's
+        // scope (corp → alliance → bloc precedence, matches the
+        // adopter table the primary doctrines were pulled from).
+        $hullIds = array_keys($primaryHullWeeklyBurn);
+        $hullTotals = $this->allDoctrineHullTotals($hullIds, $scopeIds);
+
+        foreach ($hullIds as $hid) {
+            $primaryWeekly = (float) ($primaryHullWeeklyBurn[$hid] ?? 0);
+            $totalLosses = (int) ($hullTotals[$hid] ?? 0);
+            $totalWeekly = $totalLosses > 0
+                ? $totalLosses * 7.0 / $windowDays
+                : $primaryWeekly;           // fallback
+            $tailWeekly = max(0.0, $totalWeekly - $primaryWeekly);
+            $hullBurn[$hid] = [
+                'type_id' => $hid,
+                'name' => null,
+                'weekly_burn' => $totalWeekly,
+                'primary_weekly_burn' => $primaryWeekly,
+                'tail_weekly_burn' => $tailWeekly,
+                'total_losses_30d' => $totalLosses,
+                'contributors' => [],
+            ];
+        }
+
         if ($hullBurn !== []) {
             $names = DB::table('ref_item_types')->whereIn('id', array_keys($hullBurn))->pluck('name', 'id');
             foreach ($hullBurn as $hid => $r) {
@@ -318,6 +366,67 @@ class DoctrineMarket extends Page
         }
 
         return [$moduleBurn, $hullBurn];
+    }
+
+    /**
+     * True 30-day raw loss count per hull, at the widest available
+     * scope (bloc > alliance > corp). Queries killmails directly so
+     * we don't inherit the doctrine pipeline's fit-attribution
+     * double-counting (one kill can match multiple doctrine variants,
+     * inflating adopter sums 2× or more).
+     *
+     * @param list<int> $hullIds
+     * @param array{corp:?int,alliance:?int,bloc:?int} $scopeIds
+     * @return array<int,int>
+     */
+    private function allDoctrineHullTotals(array $hullIds, array $scopeIds): array
+    {
+        if ($hullIds === []) return [];
+        $out = [];
+        foreach ($hullIds as $hid) $out[$hid] = 0;
+
+        $since = now()->subDays(self::WINDOW_DAYS);
+        $ph = implode(',', array_fill(0, count($hullIds), '?'));
+
+        // Widest-available scope wins: bloc → alliance → corp. Use
+        // raw killmail counts scoped to the viewer's membership.
+        if (($scopeIds['bloc'] ?? null) !== null) {
+            $rows = DB::select(<<<SQL
+                SELECT k.victim_ship_type_id AS hid, COUNT(*) AS n
+                  FROM killmails k
+                  JOIN coalition_entity_labels cel
+                    ON cel.entity_type = 'alliance'
+                   AND cel.entity_id = k.victim_alliance_id
+                   AND cel.is_active = 1
+                 WHERE cel.bloc_id = ?
+                   AND k.victim_ship_type_id IN ($ph)
+                   AND k.killed_at >= ?
+                 GROUP BY k.victim_ship_type_id
+            SQL, array_merge([$scopeIds['bloc']], $hullIds, [$since]));
+            foreach ($rows as $r) $out[(int) $r->hid] = (int) $r->n;
+        } elseif (($scopeIds['alliance'] ?? null) !== null) {
+            $rows = DB::select(<<<SQL
+                SELECT victim_ship_type_id AS hid, COUNT(*) AS n
+                  FROM killmails
+                 WHERE victim_alliance_id = ?
+                   AND victim_ship_type_id IN ($ph)
+                   AND killed_at >= ?
+                 GROUP BY victim_ship_type_id
+            SQL, array_merge([$scopeIds['alliance']], $hullIds, [$since]));
+            foreach ($rows as $r) $out[(int) $r->hid] = (int) $r->n;
+        } elseif (($scopeIds['corp'] ?? null) !== null) {
+            $rows = DB::select(<<<SQL
+                SELECT victim_ship_type_id AS hid, COUNT(*) AS n
+                  FROM killmails
+                 WHERE victim_corporation_id = ?
+                   AND victim_ship_type_id IN ($ph)
+                   AND killed_at >= ?
+                 GROUP BY victim_ship_type_id
+            SQL, array_merge([$scopeIds['corp']], $hullIds, [$since]));
+            foreach ($rows as $r) $out[(int) $r->hid] = (int) $r->n;
+        }
+
+        return $out;
     }
 
     /**
@@ -409,6 +518,9 @@ class DoctrineMarket extends Page
             'slot' => $meta['slot'] ?? null,
             'kind' => $kind,
             'weekly_burn' => $weekly,
+            'primary_weekly_burn' => $meta['primary_weekly_burn'] ?? null,
+            'tail_weekly_burn' => $meta['tail_weekly_burn'] ?? null,
+            'total_losses_30d' => $meta['total_losses_30d'] ?? null,
             'daily_burn' => $daily,
             'stock' => $stock,
             'runway_days' => $runwayDays,
