@@ -55,7 +55,11 @@ class DoctrineMarket extends Page
 
     private const TARGET_COVERAGE_DAYS = 60;
 
+    /** Hub used for stock counts (where we keep inventory). */
     public ?int $hubId = null;
+
+    /** Hub used for price reference (where you'd buy to refill). */
+    public ?int $priceHubId = null;
 
     public int $targetDays = self::TARGET_COVERAGE_DAYS;
 
@@ -71,18 +75,27 @@ class DoctrineMarket extends Page
     {
         $user = Auth::user();
         if ($user === null) return;
-        // hub=0 (or "all") → aggregate across every hub the viewer
-        // can see. Any positive integer → single hub.
-        $q = (string) request()->query('hub', '');
-        if ($q === 'all' || $q === '0') {
-            $this->hubId = 0;
-        } elseif ($q !== '' && ctype_digit($q)) {
-            $this->hubId = (int) $q;
-        } else {
-            $this->hubId = $user->default_private_market_hub_id
-                ?? $policy->visibleHubsFor($user)->value('id');
-            $this->hubId = $this->hubId ? (int) $this->hubId : null;
-        }
+        // Stock hub: hub=0 / "all" → aggregate every visible hub;
+        // positive integer → specific hub. Default: user's private
+        // staging hub (what they keep inventory in), fallback to
+        // first visible hub.
+        $parse = function (string $q, $default): ?int {
+            if ($q === 'all' || $q === '0') return 0;
+            if ($q !== '' && ctype_digit($q)) return (int) $q;
+            return $default ? (int) $default : null;
+        };
+
+        $defaultStock = $user->default_private_market_hub_id
+            ?? $policy->visibleHubsFor($user)->where('is_public_reference', 0)->value('id')
+            ?? $policy->visibleHubsFor($user)->value('id');
+        $this->hubId = $parse((string) request()->query('hub', ''), $defaultStock);
+
+        // Price hub: where we'd buy the deficit. Default: first
+        // public reference (Jita) so prices match real market. Falls
+        // back to the stock hub when no public ref exists.
+        $defaultPrice = $policy->visibleHubsFor($user)->where('is_public_reference', 1)->value('id')
+            ?? $defaultStock;
+        $this->priceHubId = $parse((string) request()->query('price_hub', ''), $defaultPrice);
         $t = (int) request()->query('days', self::TARGET_COVERAGE_DAYS);
         $this->targetDays = max(3, min($t, 120));
 
@@ -126,21 +139,30 @@ class DoctrineMarket extends Page
             ];
         }
 
-        // Aggregate mode (hub=0 / "all") scans every visible hub and
-        // sums stock / picks the cheapest price point across them.
-        // Single-hub mode (hub=<id>) keeps the old one-location query.
-        if ($this->hubId === 0) {
-            $locationIds = $visibleHubs->pluck('location_id')->map(fn ($v) => (int) $v)->all();
-            $hubId = 0;
-            $hubName = 'All hubs (' . count($locationIds) . ')';
-        } else {
-            $hubId = $this->hubId && $visibleHubs->pluck('id')->contains($this->hubId)
-                ? $this->hubId
-                : (int) $visibleHubs->first()->id;
-            $hub = $visibleHubs->firstWhere('id', $hubId);
-            $locationIds = [(int) $hub->location_id];
-            $hubName = (string) $hub->structure_name;
-        }
+        // Resolve stock hub (inventory lookup) + price hub (deficit
+        // pricing) independently. Both accept "all" to aggregate.
+        $resolveHub = function (?int $id) use ($visibleHubs): array {
+            if ($id === 0) {
+                return [
+                    'id' => 0,
+                    'locationIds' => $visibleHubs->pluck('location_id')->map(fn ($v) => (int) $v)->all(),
+                    'name' => 'All hubs (' . $visibleHubs->count() . ')',
+                ];
+            }
+            $ok = $id && $visibleHubs->pluck('id')->contains($id);
+            $row = $ok ? $visibleHubs->firstWhere('id', $id) : $visibleHubs->first();
+            return [
+                'id' => (int) $row->id,
+                'locationIds' => [(int) $row->location_id],
+                'name' => (string) ($row->structure_name ?: "Hub #{$row->id}"),
+            ];
+        };
+        $stock = $resolveHub($this->hubId);
+        $price = $resolveHub($this->priceHubId);
+        $hubId = $stock['id'];
+        $hubName = $stock['name'];
+        $priceHubId = $price['id'];
+        $priceHubName = $price['name'];
 
         // 1. Pull primary doctrines across all three scope tiers.
         //    Collapse to unique doctrine_id so a fit adopted by both
@@ -155,13 +177,15 @@ class DoctrineMarket extends Page
             ['corp' => $corpId ?: null, 'alliance' => $allianceId ?: null, 'bloc' => $blocId],
         );
 
-        // 3. Stock from market_orders across the selected hub(s).
+        // 3. Stock from market_orders across the selected stock hub(s).
         $typeIds = array_unique(array_merge(array_keys($moduleBurn), array_keys($hullBurn)));
-        $stockByType = $this->stockAtHubs($typeIds, $locationIds);
+        $stockByType = $this->stockAtHubs($typeIds, $stock['locationIds']);
 
-        // 4. Price (median of lowest 5 sell orders per type) aggregated
-        //    across locations — cheapest across all hubs wins.
-        $priceByType = $this->priceAtHubs($typeIds, $locationIds);
+        // 4. Price from the selected price hub(s). Usually a public
+        //    reference hub (Jita) even when stock lives in a private
+        //    staging hub — "deficit ISK" then matches what you'd
+        //    actually pay to refill on the open market.
+        $priceByType = $this->priceAtHubs($typeIds, $price['locationIds']);
 
         // 5. Build rows.
         $rows = [];
@@ -188,7 +212,9 @@ class DoctrineMarket extends Page
 
         return [
             'corp_id' => $corpId ?: null, 'alliance_id' => $allianceId ?: null, 'bloc_id' => $blocId,
-            'hubs' => $visibleHubs, 'hub_id' => $hubId, 'hub_name' => $hubName,
+            'hubs' => $visibleHubs,
+            'hub_id' => $hubId, 'hub_name' => $hubName,
+            'price_hub_id' => $priceHubId, 'price_hub_name' => $priceHubName,
             'target_days' => $targetDays, 'window_days' => self::WINDOW_DAYS,
             'rows' => $displayRows, 'totals' => $totals, 'doctrine_count' => count($doctrines),
             'view_mode' => $this->viewMode,

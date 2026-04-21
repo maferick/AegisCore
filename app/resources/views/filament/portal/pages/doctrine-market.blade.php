@@ -45,12 +45,21 @@
         @else
             <form method="GET" class="dm-head">
                 <input type="hidden" name="view" value="{{ $view_mode ?? 'deficit' }}">
-                <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">Hub</label>
+                <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;" title="Where you keep inventory (what the Stock column counts)">Stock hub</label>
                 <select name="hub" onchange="this.form.submit()">
                     <option value="all" @selected($hub_id === 0)>All hubs ({{ $hubs->count() }}) · aggregate</option>
                     @foreach ($hubs as $h)
                         <option value="{{ $h->id }}" @selected($h->id === $hub_id)>
-                            {{ $h->structure_name }} @if ($h->is_public_reference) · public @endif
+                            {{ $h->structure_name ?: 'Hub #'.$h->id }} @if ($h->is_public_reference) · public @endif
+                        </option>
+                    @endforeach
+                </select>
+                <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;" title="Where we price the deficit (typically Jita IV)">Price hub</label>
+                <select name="price_hub" onchange="this.form.submit()">
+                    <option value="all" @selected($price_hub_id === 0)>All hubs · cheapest wins</option>
+                    @foreach ($hubs as $h)
+                        <option value="{{ $h->id }}" @selected($h->id === $price_hub_id)>
+                            {{ $h->structure_name ?: 'Hub #'.$h->id }} @if ($h->is_public_reference) · public @endif
                         </option>
                     @endforeach
                 </select>
@@ -59,11 +68,18 @@
                 <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;margin-left:0.6rem;">View</label>
                 @php $mode = $view_mode ?? 'deficit'; @endphp
                 <div style="display:inline-flex;gap:0;border:1px solid #26262b;border-radius:3px;overflow:hidden;font-family:'JetBrains Mono',monospace;font-size:0.72rem;">
-                    <button type="button" onclick="location.search='?hub={{ $hub_id === 0 ? 'all' : $hub_id }}&days={{ $target_days }}&view=deficit'"
+                @php
+                    $qsBase = http_build_query([
+                        'hub' => $hub_id === 0 ? 'all' : $hub_id,
+                        'price_hub' => $price_hub_id === 0 ? 'all' : $price_hub_id,
+                        'days' => $target_days,
+                    ]);
+                @endphp
+                    <button type="button" onclick="location.search='?{{ $qsBase }}&view=deficit'"
                             style="padding:0.25rem 0.7rem;cursor:pointer;border:none;
                                    background:{{ $mode === 'deficit' ? 'rgba(239,68,68,0.2)' : 'transparent' }};
                                    color:{{ $mode === 'deficit' ? '#fca5a5' : '#7a7a82' }};">deficit only</button>
-                    <button type="button" onclick="location.search='?hub={{ $hub_id === 0 ? 'all' : $hub_id }}&days={{ $target_days }}&view=all'"
+                    <button type="button" onclick="location.search='?{{ $qsBase }}&view=all'"
                             style="padding:0.25rem 0.7rem;cursor:pointer;border:none;border-left:1px solid #26262b;
                                    background:{{ $mode === 'all' ? 'rgba(79,208,208,0.15)' : 'transparent' }};
                                    color:{{ $mode === 'all' ? '#4fd0d0' : '#7a7a82' }};">all items</button>
