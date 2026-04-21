@@ -166,7 +166,7 @@
                 @php
                     $buyall = collect($rows)
                         ->filter(fn ($r) => $r['deficit_qty'] > 0)
-                        ->map(fn ($r) => $r['deficit_qty'] . ' ' . $r['name'])
+                        ->map(fn ($r) => $r['deficit_qty'] . ' ' . ($r['buyall_name'] ?? $r['name']))
                         ->values()
                         ->implode("\n");
                 @endphp
