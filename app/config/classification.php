@@ -50,15 +50,18 @@ return [
     |--------------------------------------------------------------------------
     |
     | The standing values at which the resolver interprets a contact as
-    | friendly or hostile. Matches CCP's in-game ±5 threshold for
-    | standing-applied behaviour (fleet autojoin, station services).
-    | Pulled into config so a future tune (e.g. tighten to ±7.5 for
-    | donor-support signal) doesn't require a code change.
+    | friendly or hostile. Matches EVE's overview colour semantics: any
+    | positive standing is blue (friendly), any negative is red (hostile).
+    | A 0.1 contact is still a blue on the in-game overview, so the
+    | platform's contact tagging should agree. Pulled into config so a
+    | future tune (e.g. require ±5 for stronger auto-signal) doesn't
+    | require a code change — use 5.0 / -5.0 to mirror CCP's fleet
+    | autojoin / station service threshold instead.
     |
     */
     'standings' => [
-        'friendly_at' => (float) env('CLASSIFICATION_STANDING_FRIENDLY_AT', 5.0),
-        'hostile_at' => (float) env('CLASSIFICATION_STANDING_HOSTILE_AT', -5.0),
+        'friendly_at' => (float) env('CLASSIFICATION_STANDING_FRIENDLY_AT', 0.01),
+        'hostile_at' => (float) env('CLASSIFICATION_STANDING_HOSTILE_AT', -0.01),
     ],
 
     /*

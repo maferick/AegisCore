@@ -92,22 +92,23 @@ class CharacterStanding extends Model
      * the threshold in one place so the /account/settings display and
      * the downstream report agree on what "blue" means.
      *
-     *   >= +5.0  → 'friendly'
-     *   <= -5.0  → 'enemy'
-     *   else     → 'neutral'
+     *   > 0.0  → 'friendly'
+     *   < 0.0  → 'enemy'
+     *   == 0.0 → 'neutral'
      *
-     * CCP's in-game UI uses ±5 as the "standing applied" threshold for
-     * most contact-sensitive game behaviour (fleet autojoin, station
-     * service access), so mirroring it avoids a per-surface argument
-     * about where to draw the line.
+     * Mirrors EVE's overview colour semantics: any positive standing
+     * renders blue (friendly), any negative renders red (enemy). The
+     * ±5 "standing applied" threshold CCP uses for fleet autojoin /
+     * station services is a separate concept we don't key UI colour
+     * off of — a 0.1 contact is still a blue on the overview.
      */
     public function classification(): string
     {
         $value = (float) $this->standing;
-        if ($value >= 5.0) {
+        if ($value > 0.0) {
             return 'friendly';
         }
-        if ($value <= -5.0) {
+        if ($value < 0.0) {
             return 'enemy';
         }
 
