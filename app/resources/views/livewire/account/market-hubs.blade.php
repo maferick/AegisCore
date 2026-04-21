@@ -133,11 +133,23 @@
                             <td>{{ $hub->region?->name ?? '—' }}</td>
                             <td class="mono">
                                 {{ $activeCount }} / {{ $totalCount }}
-                                @if ($mine)
-                                    <span class="badge ok" title="You're a collector on this hub" style="margin-left: 0.3rem;">You</span>
-                                    @if ($mine->is_primary)
-                                        <span class="badge warn" title="Primary collector" style="margin-left: 0.2rem;">Primary</span>
-                                    @endif
+                                @php
+                                    $mainCol = $hub->getAttribute('my_main_collector');
+                                    $altCols = $hub->getAttribute('my_alt_collectors') ?? [];
+                                @endphp
+                                @if ($mainCol || ! empty($altCols))
+                                    <span class="badge ok" title="Your characters on this hub" style="margin-left: 0.3rem;">You</span>
+                                    <div style="font-size:0.68rem;color:var(--muted);margin-top:0.15rem;">
+                                        @if ($mainCol)
+                                            <span title="Main character"><strong>{{ $mainCol['character_name'] }}</strong> (main)</span>
+                                            @if ($mainCol['collector']->is_primary) · primary @endif
+                                        @endif
+                                        @foreach ($altCols as $a)
+                                            @if ($mainCol || $loop->index > 0) · @endif
+                                            <span title="Alt character">{{ $a['character_name'] }} (alt)</span>
+                                            @if ($a['collector']->is_primary) · primary @endif
+                                        @endforeach
+                                    </div>
                                 @endif
                             </td>
                             <td>

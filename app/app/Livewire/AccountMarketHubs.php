@@ -96,13 +96,52 @@ class AccountMarketHubs extends Component
      */
     private function decoratePrivateHubs(Collection $hubs, int $userId): Collection
     {
-        return $hubs->each(function (MarketHub $hub) use ($userId): void {
+        $user = Auth::user();
+        $mainCharId = $user?->main_character_id;
+        // Hydrate character names for all my_collectors in a single
+        // query rather than per-collector lazy-load. Covers main + alts.
+        $myCollectors = [];
+        foreach ($hubs as $hub) {
+            foreach ($hub->collectors as $c) {
+                if ((int) $c->user_id === $userId) $myCollectors[] = $c;
+            }
+        }
+        $charIds = array_unique(array_map(fn ($c) => (int) $c->character_id, $myCollectors));
+        $charMap = [];
+        if ($charIds) {
+            $charMap = \App\Domains\UsersCharacters\Models\Character::query()
+                ->whereIn('character_id', $charIds)
+                ->pluck('name', 'id')
+                ->all();
+            $idByCharId = \App\Domains\UsersCharacters\Models\Character::query()
+                ->whereIn('character_id', $charIds)
+                ->pluck('id', 'character_id')
+                ->all();
+        } else {
+            $idByCharId = [];
+        }
+
+        return $hubs->each(function (MarketHub $hub) use ($userId, $mainCharId, $charMap, $idByCharId): void {
             /** @var Collection<int, MarketHubCollector> $collectors */
             $collectors = $hub->collectors;
-            $hub->setAttribute(
-                'my_collector',
-                $collectors->firstWhere('user_id', $userId),
-            );
+            $mine = $collectors->where('user_id', $userId)->values();
+            $hub->setAttribute('my_collector', $mine->first());
+            // Main + alts split: main collector first, then alts.
+            $mainCollector = null;
+            $altCollectors = [];
+            foreach ($mine as $c) {
+                $charRowId = $idByCharId[(int) $c->character_id] ?? null;
+                $isMain = $mainCharId !== null && $charRowId !== null && (int) $charRowId === (int) $mainCharId;
+                $decorated = [
+                    'collector' => $c,
+                    'character_name' => $charMap[$charRowId] ?? ('Character #' . $c->character_id),
+                    'is_main' => $isMain,
+                ];
+                if ($isMain) $mainCollector = $decorated;
+                else $altCollectors[] = $decorated;
+            }
+            $hub->setAttribute('my_main_collector', $mainCollector);
+            $hub->setAttribute('my_alt_collectors', $altCollectors);
             $hub->setAttribute(
                 'active_collector_count',
                 $collectors->where('is_active', true)->count(),
