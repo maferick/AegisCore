@@ -65,6 +65,12 @@ final class CombatAnomalyService
     // is a specialist one with no comparable doctrine.
     public const STRUCTURAL_SURVIVAL_HULLS = [45534]; // Monitor
 
+    // Categories where high survival is a role pattern, not a tell.
+    // Tackle pilots (interceptors, dictors) burn out or warp off by
+    // design once primary engagement starts, so "survived when peers
+    // died" is noise. Damage + feed + fit stay measurable.
+    public const STRUCTURAL_SURVIVAL_CATEGORIES = ['tackle'];
+
     // Per-run caches: survive across compute() calls on the same
     // service instance. The artisan command dispatches thousands of
     // candidates through one instance, so doctrine + cohort lookups
@@ -330,9 +336,10 @@ final class CombatAnomalyService
         foreach ($pilotFeatures as $f) {
             $bid = (int) $f->battle_id;
             // Skip battles where pilot flew a structurally-invulnerable
-            // hull (Monitor etc). Their survival is a hull property,
-            // not a behavioural tell.
+            // hull (Monitor etc) or a category whose survival is a
+            // role pattern (tackle warps off by design).
             if (in_array((int) $f->ship_type_id, self::STRUCTURAL_SURVIVAL_HULLS, true)) continue;
+            if (in_array((string) $f->ship_class_category, self::STRUCTURAL_SURVIVAL_CATEGORIES, true)) continue;
             $stats = $peerStatsByBattle[$bid] ?? null;
             if ($stats === null || $stats['count'] < 3) continue;
             $peerDeaths = 0;
