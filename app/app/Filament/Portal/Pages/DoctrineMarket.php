@@ -158,10 +158,11 @@ class DoctrineMarket extends Page
             }
             $ok = $id && $visibleHubs->pluck('id')->contains($id);
             $row = $ok ? $visibleHubs->firstWhere('id', $id) : $visibleHubs->first();
+            $name = $row->structure_name ?: ('Structure ' . substr((string) $row->location_id, -8) . ' (private)');
             return [
                 'id' => (int) $row->id,
                 'locationIds' => [(int) $row->location_id],
-                'name' => (string) ($row->structure_name ?: "Hub #{$row->id}"),
+                'name' => (string) $name,
             ];
         };
         $stock = $resolveHub($this->hubId);
