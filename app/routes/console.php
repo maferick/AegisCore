@@ -250,6 +250,18 @@ Schedule::command('neo4j:sync-spatial')
     ->onOneServer()
     ->name('neo4j-sync-spatial');
 
+// Voronoi catchment rebuild — per-system nearest market hub by
+// stargate jumps. Depends on Neo4j's JUMPS_TO edges (seeded by
+// graph_universe_sync, not churned by day-to-day syncs), but we
+// still run after neo4j:sync-spatial so a fresh JUMPS_TO projection
+// is in place if the graph was rebuilt. Cheap (≤ 10 hubs × BFS to
+// 30 jumps), idempotent DELETE + bulk insert inside one tx.
+Schedule::command('markets:rebuild-hub-catchments')
+    ->dailyAt('03:30')
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('markets-rebuild-hub-catchments');
+
 // Hull + doctrine taxonomy — ship_class_category_mapping is static,
 // auto_doctrines churns daily as the learner catches new fits.
 Schedule::command('neo4j:sync-taxonomy')
