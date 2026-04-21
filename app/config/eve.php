@@ -184,6 +184,7 @@ return [
             'EVE_SSO_MARKET_SCOPES',
             'publicData esi-search.search_structures.v1 '
             .'esi-universe.read_structures.v1 esi-markets.structure_markets.v1 '
+            .'esi-markets.read_character_orders.v1 '
             .'esi-corporations.read_contacts.v1 esi-alliances.read_contacts.v1 '
             .'esi-characters.read_contacts.v1',
         ),

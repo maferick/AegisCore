@@ -276,6 +276,19 @@ Schedule::command('counter-intel:compute-combat-anomalies')
     ->withoutOverlapping(180)
     ->name('counter-intel-combat-anomalies');
 
+// Personal market orders (main + alts). Hourly sweep hits
+// /characters/{id}/orders/ (open) + /orders/history/ (90d) per
+// market-tokened character; CCP caches orders 1200s / history
+// 3600s, so hourly cadence never beats the cache and still picks
+// up sell-completions within the hour. Skips characters whose
+// market token predates the esi-markets.read_character_orders.v1
+// scope addition — portal page nudges them to re-authorise.
+Schedule::command('eve:sync-personal-orders')
+    ->hourly()
+    ->onOneServer()
+    ->withoutOverlapping(30)
+    ->name('eve-sync-personal-orders');
+
 // Hull + doctrine taxonomy — ship_class_category_mapping is static,
 // auto_doctrines churns daily as the learner catches new fits.
 Schedule::command('neo4j:sync-taxonomy')
