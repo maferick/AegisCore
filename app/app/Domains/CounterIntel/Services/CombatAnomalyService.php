@@ -427,7 +427,7 @@ final class CombatAnomalyService
              WHERE k.victim_character_id = ?
                AND k.killed_at BETWEEN ? AND ?
         SQL, [$characterId, $windowStart->toDateTimeString(), $windowEnd->toDateTimeString()]);
-        if ($losses === []) return ['median' => null, 'losses' => 0];
+        if ($losses === []) return ['median' => null, 'ratio_median' => null, 'losses' => 0];
 
         $mismatches = [];
         $ratios = [];
