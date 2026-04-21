@@ -341,6 +341,72 @@
             </div>
         @endif
 
+        @if (! empty($dossier['combat_anomaly']))
+            @php $combat = $dossier['combat_anomaly']; $c = $combat['row']; @endphp
+            @php
+                $bandColor = match ($c['combat_anomaly_band']) {
+                    'reinforces' => ['fg' => '#fca5a5', 'bg' => 'rgba(239,68,68,0.1)', 'border' => '#ef4444'],
+                    'weakens'    => ['fg' => '#86efac', 'bg' => 'rgba(34,197,94,0.1)', 'border' => '#22c55e'],
+                    'neutral'    => ['fg' => '#e5e5e7', 'bg' => 'rgba(255,255,255,0.03)', 'border' => '#3a3a42'],
+                    default      => ['fg' => '#7a7a82', 'bg' => 'rgba(255,255,255,0.02)', 'border' => '#26262b'],
+                };
+            @endphp
+            <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-top:1rem;">
+                <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin-bottom:0.6rem;">
+                    Combat anomaly signal
+                    <span style="font-size:0.6rem; font-weight:400; color:#7a7a82; letter-spacing:0; text-transform:none;">
+                        (Phase 1 · review support, not verdict · confidence {{ $c['comparison_confidence'] }})
+                    </span>
+                </h3>
+                <div style="padding:0.55rem 0.75rem; border:1px solid {{ $bandColor['border'] }}; background:{{ $bandColor['bg'] }}; border-radius:4px; color:{{ $bandColor['fg'] }}; font-size:0.82rem; margin-bottom:0.7rem;">
+                    {{ $combat['headline'] }}
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:0.5rem; margin-bottom:0.75rem;">
+                    <div style="padding:0.5rem; border:1px solid #26262b; border-radius:4px;">
+                        <div style="font-size:0.62rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Battles attended</div>
+                        <div style="font-family:'JetBrains Mono', monospace; font-size:0.95rem;">{{ $c['battles_attended'] }} <span style="color:#7a7a82; font-size:0.7rem;">· {{ $c['battles_as_victim'] }} as victim</span></div>
+                    </div>
+                    @if ($c['damage_z_battle'] !== null)
+                        <div style="padding:0.5rem; border:1px solid #26262b; border-radius:4px;">
+                            <div style="font-size:0.62rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">In-battle damage z</div>
+                            <div style="font-family:'JetBrains Mono', monospace; font-size:0.95rem;">{{ number_format((float) $c['damage_z_battle'], 2) }} <span style="color:#7a7a82; font-size:0.7rem;">· med ratio {{ number_format((float) $c['damage_share_median'], 2) }}</span></div>
+                        </div>
+                    @endif
+                    @if ($c['survival_rate_peer_loss'] !== null)
+                        <div style="padding:0.5rem; border:1px solid #26262b; border-radius:4px;">
+                            <div style="font-size:0.62rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Survival in peer-loss battles</div>
+                            <div style="font-family:'JetBrains Mono', monospace; font-size:0.95rem;">{{ number_format((float) $c['survival_rate_peer_loss'] * 100, 0) }}% <span style="color:#7a7a82; font-size:0.7rem;">· {{ $c['survival_battles_qualifying'] }} battles</span></div>
+                        </div>
+                    @endif
+                    @if ($c['feed_rate'] !== null)
+                        <div style="padding:0.5rem; border:1px solid #26262b; border-radius:4px;">
+                            <div style="font-size:0.62rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Alliance ISK-lost rate</div>
+                            <div style="font-family:'JetBrains Mono', monospace; font-size:0.95rem;">{{ number_format((float) $c['feed_rate'] * 100, 0) }}%</div>
+                        </div>
+                    @endif
+                    @if ($c['fit_deviation_median'] !== null && $c['fit_losses_counted'] >= 2)
+                        <div style="padding:0.5rem; border:1px solid #26262b; border-radius:4px;">
+                            <div style="font-size:0.62rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Fit deviation (median slots off)</div>
+                            <div style="font-family:'JetBrains Mono', monospace; font-size:0.95rem;">{{ $c['fit_deviation_median'] }} <span style="color:#7a7a82; font-size:0.7rem;">· {{ $c['fit_losses_counted'] }} losses examined</span></div>
+                        </div>
+                    @endif
+                </div>
+                @if (! empty($combat['signals']))
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        @foreach ($combat['signals'] as $s)
+                            @php $sc = $s['direction'] === 'reinforces' ? '#fca5a5' : '#86efac'; @endphp
+                            <div style="font-size:0.78rem; color:#e5e5e7; border-left:3px solid {{ $sc }}; padding-left:0.5rem;">
+                                <span style="color:{{ $sc }}; font-size:0.62rem; text-transform:uppercase; letter-spacing:0.08em; margin-right:0.4rem;">{{ $s['direction'] }}</span>
+                                {{ $s['text'] }}
+                            </div>
+                        @endforeach
+                    </div>
+                @else
+                    <div style="font-size:0.78rem; color:#7a7a82; font-style:italic;">No individual signals crossed threshold.</div>
+                @endif
+            </div>
+        @endif
+
         <div style="margin-top:1rem;">
             <a href="/admin/counter-intel" style="font-size:0.85rem; color:#4fd0d0; text-decoration:none;">← back to review queue</a>
         </div>

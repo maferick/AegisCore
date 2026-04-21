@@ -87,6 +87,7 @@ final class CounterIntelDossierService
         $cohortBaseline = $anomaly ? $this->cohortBaseline($viewerBlocId) : null;
         $similarPilots = $this->similarPilots($characterId);
         $coJoins = $this->coordinatedJoins($characterId, $affiliation['current']['alliance_id'] ?? null, $affiliation['current']['start_date'] ?? null, $viewerBlocId);
+        $combat = $this->combatAnomaly($characterId, $viewerBlocId);
 
         return [
             'not_found' => false,
@@ -103,7 +104,80 @@ final class CounterIntelDossierService
             'cohort_baseline' => $cohortBaseline,
             'similar_pilots' => $similarPilots,
             'coordinated_joins' => $coJoins,
+            'combat_anomaly' => $combat,
         ];
+    }
+
+    /**
+     * Latest ci_combat_anomalies row for the (character, bloc) plus
+     * a list of human-readable phrases describing each signal that
+     * contributed to the reinforces / weakens banding. Null when no
+     * row has been computed yet.
+     *
+     * Lexicon constraint mirrors the rest of this service: phrases
+     * must read as review support, never as automated verdict.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function combatAnomaly(int $characterId, int $viewerBlocId): ?array
+    {
+        $row = DB::table('ci_combat_anomalies')
+            ->where('character_id', $characterId)
+            ->where('viewer_bloc_id', $viewerBlocId)
+            ->orderByDesc('window_end_date')
+            ->first();
+        if ($row === null) return null;
+
+        $signals = [];
+        if ($row->damage_z_battle !== null) {
+            $z = (float) $row->damage_z_battle;
+            if ($z <= -1.0) {
+                $signals[] = ['direction' => 'reinforces', 'text' => sprintf('Damage contribution sits %.1fσ below same-hull peers in the same battles (median ratio %.2f).', abs($z), $row->damage_share_median)];
+            } elseif ($z >= 1.0) {
+                $signals[] = ['direction' => 'weakens', 'text' => sprintf('Damage contribution %.1fσ above same-hull peers in-battle — behaves like an engaged fleet member.', $z)];
+            }
+        }
+        if ($row->survival_battles_qualifying >= 5 && $row->survival_rate_peer_loss !== null) {
+            $rate = (float) $row->survival_rate_peer_loss;
+            if ($rate >= 0.75) {
+                $signals[] = ['direction' => 'reinforces', 'text' => sprintf('Survived %d%% of %d battles where ≥ 50%% of same-category teammates died.', (int) round($rate * 100), $row->survival_battles_qualifying)];
+            } elseif ($rate <= 0.25) {
+                $signals[] = ['direction' => 'weakens', 'text' => sprintf('Died alongside teammates in %d%% of %d heavy-loss battles — no escape bias.', (int) round((1 - $rate) * 100), $row->survival_battles_qualifying)];
+            }
+        }
+        if ($row->feed_rate !== null) {
+            $rate = (float) $row->feed_rate;
+            if ($rate >= 0.65) {
+                $signals[] = ['direction' => 'reinforces', 'text' => sprintf("Alliance lost ISK exchange in %d%% of %d attended battles.", (int) round($rate * 100), $row->battles_attended)];
+            } elseif ($rate <= 0.30) {
+                $signals[] = ['direction' => 'weakens', 'text' => sprintf("Alliance won ISK exchange in %d%% of %d attended battles.", (int) round((1 - $rate) * 100), $row->battles_attended)];
+            }
+        }
+        if ($row->fit_deviation_median !== null && $row->fit_losses_counted >= 2) {
+            $dev = (int) $row->fit_deviation_median;
+            if ($dev >= 5) {
+                $signals[] = ['direction' => 'reinforces', 'text' => sprintf('Typical loss has %d fitted slots off the dominant doctrine head (%d losses examined).', $dev, $row->fit_losses_counted)];
+            } elseif ($dev === 0) {
+                $signals[] = ['direction' => 'weakens', 'text' => sprintf('Every loss examined (%d) matched the dominant doctrine fit.', $row->fit_losses_counted)];
+            }
+        }
+
+        return [
+            'row' => (array) $row,
+            'signals' => $signals,
+            'headline' => $this->combatHeadline($row),
+        ];
+    }
+
+    private function combatHeadline(object $row): string
+    {
+        return match ($row->combat_anomaly_band) {
+            'reinforces' => sprintf('Combat behaviour reinforces review (%d signals out of 4).', $row->signals_reinforcing_count),
+            'weakens' => sprintf('Combat behaviour weakens review (%d signals read normal / positive).', $row->signals_weakening_count),
+            'neutral' => 'Combat behaviour is within normal range — no extra signal either way.',
+            'insufficient_data' => 'Not enough in-battle history to evaluate combat signal.',
+            default => 'Combat signal unavailable.',
+        };
     }
 
     /**

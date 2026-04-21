@@ -262,6 +262,20 @@ Schedule::command('markets:rebuild-hub-catchments')
     ->withoutOverlapping(30)
     ->name('markets-rebuild-hub-catchments');
 
+// Counter-intel combat anomaly layer (Phase 1). Computes per-pilot
+// combat metrics (damage contribution, survival-when-peers-die,
+// feeding bias, fit deviation) for every review candidate in band
+// ∈ {critical, high, elevated}. Framing is review-support only —
+// the dossier renders reinforces / weakens / neutral labels, never
+// "spy verdict". Runs after classification:sweep-stale (05:00) so
+// the candidate set is already refreshed for the day.
+Schedule::command('counter-intel:compute-combat-anomalies')
+    ->dailyAt('05:30')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(60)
+    ->name('counter-intel-combat-anomalies');
+
 // Hull + doctrine taxonomy — ship_class_category_mapping is static,
 // auto_doctrines churns daily as the learner catches new fits.
 Schedule::command('neo4j:sync-taxonomy')
