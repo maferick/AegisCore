@@ -45,12 +45,12 @@
         @else
             <form method="GET" class="dm-head">
                 <input type="hidden" name="view" value="{{ $view_mode ?? 'deficit' }}">
-                <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;" title="Where you keep inventory (what the Stock column counts)">Stock hub</label>
+                <label style="color:#7a7a82;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;" title="Where you keep inventory (what the Stock column counts). Set a default via /portal/account/market-hubs.">Stock hub</label>
                 <select name="hub" onchange="this.form.submit()">
                     <option value="all" @selected($hub_id === 0)>All hubs ({{ $hubs->count() }}) · aggregate</option>
                     @foreach ($hubs as $h)
                         <option value="{{ $h->id }}" @selected($h->id === $hub_id)>
-                            {{ $h->structure_name ?: 'Hub #'.$h->id }} @if ($h->is_public_reference) · public @endif
+                            {{ $h->structure_name ?: ('Structure ' . substr((string) $h->location_id, -8) . ' (private)') }} @if ($h->is_public_reference) · public @endif
                         </option>
                     @endforeach
                 </select>
@@ -59,7 +59,7 @@
                     <option value="all" @selected($price_hub_id === 0)>All hubs · cheapest wins</option>
                     @foreach ($hubs as $h)
                         <option value="{{ $h->id }}" @selected($h->id === $price_hub_id)>
-                            {{ $h->structure_name ?: 'Hub #'.$h->id }} @if ($h->is_public_reference) · public @endif
+                            {{ $h->structure_name ?: ('Structure ' . substr((string) $h->location_id, -8) . ' (private)') }} @if ($h->is_public_reference) · public @endif
                         </option>
                     @endforeach
                 </select>

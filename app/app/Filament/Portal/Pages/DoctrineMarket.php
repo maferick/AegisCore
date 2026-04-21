@@ -85,8 +85,15 @@ class DoctrineMarket extends Page
             return $default ? (int) $default : null;
         };
 
+        // Default stock hub preference:
+        //   1. User's saved default (portal/account/market-hubs)
+        //   2. First visible hub flagged is_public_reference=0
+        //   3. First visible hub NOT at Jita location_id 60003760
+        //      (catches orgs that marked their staging is_public=1)
+        //   4. First visible hub
         $defaultStock = $user->default_private_market_hub_id
             ?? $policy->visibleHubsFor($user)->where('is_public_reference', 0)->value('id')
+            ?? $policy->visibleHubsFor($user)->where('location_id', '!=', 60003760)->value('id')
             ?? $policy->visibleHubsFor($user)->value('id');
         $this->hubId = $parse((string) request()->query('hub', ''), $defaultStock);
 
