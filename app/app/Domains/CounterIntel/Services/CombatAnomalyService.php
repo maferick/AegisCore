@@ -58,6 +58,13 @@ final class CombatAnomalyService
     public const FEED_RATE_WEAKEN = 0.30;
     public const FIT_DEVIATION_RATIO_REINFORCE = 0.5;
 
+    // Hulls whose survival / fit patterns are structural, not
+    // behavioural — excluded from survival + fit-deviation metrics
+    // because including them makes every FC look like a reinforces
+    // case. Monitor (45534) is design-invulnerable; its dominant fit
+    // is a specialist one with no comparable doctrine.
+    public const STRUCTURAL_SURVIVAL_HULLS = [45534]; // Monitor
+
     // Per-run caches: survive across compute() calls on the same
     // service instance. The artisan command dispatches thousands of
     // candidates through one instance, so doctrine + cohort lookups
@@ -274,6 +281,7 @@ final class CombatAnomalyService
         $zWeight = 0.0;
         foreach ($pilotFeatures as $f) {
             $bid = (int) $f->battle_id;
+            if (in_array((int) $f->ship_type_id, self::STRUCTURAL_SURVIVAL_HULLS, true)) continue;
             $stats = $peerStatsByBattle[$bid] ?? null;
             if ($stats === null || $stats['count'] < 3) continue;
             $pilotShare = (float) $f->damage_share;
@@ -321,6 +329,10 @@ final class CombatAnomalyService
         $qualifying = 0;
         foreach ($pilotFeatures as $f) {
             $bid = (int) $f->battle_id;
+            // Skip battles where pilot flew a structurally-invulnerable
+            // hull (Monitor etc). Their survival is a hull property,
+            // not a behavioural tell.
+            if (in_array((int) $f->ship_type_id, self::STRUCTURAL_SURVIVAL_HULLS, true)) continue;
             $stats = $peerStatsByBattle[$bid] ?? null;
             if ($stats === null || $stats['count'] < 3) continue;
             $peerDeaths = 0;
@@ -433,6 +445,9 @@ final class CombatAnomalyService
         $ratios = [];
         foreach ($losses as $loss) {
             $hullId = (int) $loss->hull_id;
+            // Specialist hulls (Monitor) have no comparable doctrine;
+            // skipping keeps the metric defensible.
+            if (in_array($hullId, self::STRUCTURAL_SURVIVAL_HULLS, true)) continue;
             $dominantByFlag = $this->dominantFitForHull($hullId);
             if ($dominantByFlag === []) continue; // no doctrine baseline
             $slotsInDoctrine = count(array_unique(array_keys($dominantByFlag)));
