@@ -273,7 +273,7 @@ Schedule::command('counter-intel:compute-combat-anomalies')
     ->dailyAt('05:30')
     ->timezone('UTC')
     ->onOneServer()
-    ->withoutOverlapping(60)
+    ->withoutOverlapping(180)
     ->name('counter-intel-combat-anomalies');
 
 // Hull + doctrine taxonomy — ship_class_category_mapping is static,

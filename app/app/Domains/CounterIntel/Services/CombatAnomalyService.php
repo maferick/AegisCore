@@ -58,6 +58,15 @@ final class CombatAnomalyService
     public const FEED_RATE_WEAKEN = 0.30;
     public const FIT_DEVIATION_RATIO_REINFORCE = 0.5;
 
+    // Per-run caches: survive across compute() calls on the same
+    // service instance. The artisan command dispatches thousands of
+    // candidates through one instance, so doctrine + cohort lookups
+    // collapse from O(candidates × lookups) to O(distinct keys).
+    /** @var array<int, array<int,int>> */
+    private array $hullFitCache = [];
+    /** @var array<string, array<string,mixed>> */
+    private array $cohortCache = [];
+
     /**
      * Compute + persist combat-anomaly row for one pilot.
      *
@@ -466,12 +475,17 @@ final class CombatAnomalyService
      */
     private function dominantFitForHull(int $hullId): array
     {
+        if (isset($this->hullFitCache[$hullId])) {
+            return $this->hullFitCache[$hullId];
+        }
         $doctrine = DB::table('auto_doctrines')
             ->where('hull_type_id', $hullId)
             ->where('is_active', 1)
             ->orderByDesc('observation_count')
             ->first(['id']);
-        if ($doctrine === null) return [];
+        if ($doctrine === null) {
+            return $this->hullFitCache[$hullId] = [];
+        }
 
         $modules = DB::table('auto_doctrine_modules')
             ->where('doctrine_id', $doctrine->id)
@@ -491,7 +505,7 @@ final class CombatAnomalyService
                 if (! isset($out[$flag])) $out[$flag] = $topTid;
             }
         }
-        return $out;
+        return $this->hullFitCache[$hullId] = $out;
     }
 
     /**
@@ -511,6 +525,12 @@ final class CombatAnomalyService
         ))));
         if ($categories === []) {
             return ['size' => 0, 'damage_share' => null, 'survival_rate' => null, 'feed_rate' => null];
+        }
+
+        sort($categories);
+        $cacheKey = $viewerBlocId . '|' . $windowEnd->toDateString() . '|' . implode(',', $categories);
+        if (isset($this->cohortCache[$cacheKey])) {
+            return $this->cohortCache[$cacheKey];
         }
 
         $catPh = implode(',', array_fill(0, count($categories), '?'));
@@ -533,7 +553,12 @@ final class CombatAnomalyService
         ));
         $cohortIds = array_map(fn ($r) => (int) $r->character_id, $peers);
         if (count($cohortIds) < self::MIN_COHORT_SIZE) {
-            return ['size' => count($cohortIds), 'damage_share' => null, 'survival_rate' => null, 'feed_rate' => null];
+            return $this->cohortCache[$cacheKey] = [
+                'size' => count($cohortIds),
+                'damage_share' => null,
+                'survival_rate' => null,
+                'feed_rate' => null,
+            ];
         }
 
         // Cohort damage_share aggregate: median + stddev across peer
@@ -549,7 +574,7 @@ final class CombatAnomalyService
         SQL, array_merge($cohortIds, $categories));
         $shares = array_map(fn ($r) => (float) $r->avg_share, $peerShares);
 
-        return [
+        return $this->cohortCache[$cacheKey] = [
             'size' => count($cohortIds),
             'damage_share' => $this->medianStddev($shares),
             // Survival + feed baselines: conservative default of 0.5
