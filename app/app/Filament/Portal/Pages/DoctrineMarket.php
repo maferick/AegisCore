@@ -356,30 +356,47 @@ class DoctrineMarket extends Page
 
             $mods = $modulesByDoctrine->get($d['id']) ?? collect();
             foreach ($mods as $m) {
-                $typeId = (int) $m->canonical_type_id;
-                if ($typeId <= 0) continue;
+                $canonTid = (int) $m->canonical_type_id;
+                if ($canonTid <= 0) continue;
                 $qty = max(1, (int) $m->quantity);
-                $weekly = $weeklyHulls * $qty;
-                $row = $moduleBurn[$typeId] ?? ['type_id' => $typeId, 'name' => $m->type_name, 'slot' => $m->flag_category, 'weekly_burn' => 0.0, 'contributors' => [], 'variant_counts' => [], 'variant_names' => []];
-                $row['weekly_burn'] += $weekly;
-                if (! $row['name'] && $m->type_name) $row['name'] = $m->type_name;
-                $row['contributors'][] = ['doctrine' => $d['canonical_name'], 'scope' => $d['scope'], 'scope_n' => $losses, 'qty_per_fit' => $qty];
-                // Aggregate variants across contributing doctrines so the
-                // buyall can surface the actually-flown meta variant
-                // (e.g. Dread Guristas over T1 canonical) even though
-                // deficit math stays at the canonical bucket.
+                // Split the canonical bucket into per-variant rows:
+                // stock + burn + deficit are priced against the variant
+                // pilots actually fit, not the T1 parent. Share of the
+                // module's weekly burn goes to each variant proportional
+                // to its observation count across the contributing
+                // doctrines.
                 $variants = json_decode((string) ($m->variants_json ?? '[]'), true) ?: [];
+                if ($variants === []) {
+                    $variants = [['type_id' => $canonTid, 'name' => $m->type_name, 'count' => 1]];
+                }
+                $totalCount = 0;
+                foreach ($variants as $v) $totalCount += max(0, (int) ($v['count'] ?? 0));
+                if ($totalCount <= 0) $totalCount = 1;
                 foreach ($variants as $v) {
                     $vtid = (int) ($v['type_id'] ?? 0);
                     if ($vtid <= 0) continue;
-                    $vcount = (int) ($v['count'] ?? 0);
-                    $row['variant_counts'][$vtid] = ($row['variant_counts'][$vtid] ?? 0) + $vcount;
+                    $vcount = max(0, (int) ($v['count'] ?? 0));
+                    $share = $vcount / $totalCount;
+                    if ($share <= 0.0) continue;
+                    $weekly = $weeklyHulls * $qty * $share;
                     $vname = (string) ($v['name'] ?? '');
-                    if ($vname !== '' && ! str_starts_with($vname, 'type ')) {
-                        $row['variant_names'][$vtid] = $vname;
-                    }
+                    if ($vname === '' || str_starts_with($vname, 'type ')) $vname = null;
+                    $row = $moduleBurn[$vtid] ?? [
+                        'type_id' => $vtid,
+                        'name' => $vname,
+                        'slot' => $m->flag_category,
+                        'canonical_type_id' => $canonTid,
+                        'weekly_burn' => 0.0,
+                        'contributors' => [],
+                    ];
+                    $row['weekly_burn'] += $weekly;
+                    if (! $row['name'] && $vname) $row['name'] = $vname;
+                    $row['contributors'][] = [
+                        'doctrine' => $d['canonical_name'], 'scope' => $d['scope'],
+                        'scope_n' => $losses, 'qty_per_fit' => $qty, 'variant_share' => $share,
+                    ];
+                    $moduleBurn[$vtid] = $row;
                 }
-                $moduleBurn[$typeId] = $row;
             }
         }
 
@@ -411,6 +428,16 @@ class DoctrineMarket extends Page
             $names = DB::table('ref_item_types')->whereIn('id', array_keys($hullBurn))->pluck('name', 'id');
             foreach ($hullBurn as $hid => $r) {
                 $hullBurn[$hid]['name'] = $names[$hid] ?? ('Hull #' . $hid);
+            }
+        }
+
+        // Fill any module row whose variants_json carried only the
+        // "type N" placeholder (older doctrine computes) from ref.
+        $missing = array_keys(array_filter($moduleBurn, fn ($r) => empty($r['name'])));
+        if ($missing) {
+            $names = DB::table('ref_item_types')->whereIn('id', $missing)->pluck('name', 'id');
+            foreach ($missing as $tid) {
+                $moduleBurn[$tid]['name'] = $names[$tid] ?? ('type ' . $tid);
             }
         }
 
@@ -562,25 +589,9 @@ class DoctrineMarket extends Page
         $price = $priceByType[$typeId] ?? null;
         $buyIsk = $price !== null ? $deficit * $price : null;
 
-        // Buyall name: top-count variant per canonical bucket. The
-        // deficit quantity is calculated against the canonical (stock
-        // fungibility), but the shopping list should read the name of
-        // what's actually flown so multibuy lands on the right item.
-        $buyallName = $meta['name'] ?? ('type ' . $typeId);
-        if (! empty($meta['variant_counts'])) {
-            $counts = $meta['variant_counts'];
-            arsort($counts);
-            $topVid = (int) array_key_first($counts);
-            if ($topVid > 0 && $topVid !== $typeId) {
-                $candidate = $meta['variant_names'][$topVid] ?? null;
-                if ($candidate) $buyallName = $candidate;
-            }
-        }
-
         return [
             'type_id' => $typeId,
             'name' => $meta['name'] ?? ('type ' . $typeId),
-            'buyall_name' => $buyallName,
             'slot' => $meta['slot'] ?? null,
             'kind' => $kind,
             'weekly_burn' => $weekly,
