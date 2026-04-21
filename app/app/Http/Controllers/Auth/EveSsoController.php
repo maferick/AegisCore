@@ -593,8 +593,12 @@ class EveSsoController extends Controller
     private function upsertCharacterAndUser(EveSsoToken $token): User
     {
         $affiliation = $this->fetchCharacterAffiliation($token->characterId);
+        // If an authenticated user is initiating this flow, we're
+        // linking an alt — bind the new character to the existing
+        // user rather than creating a fresh one.
+        $currentUser = Auth::user();
 
-        return DB::transaction(function () use ($token, $affiliation) {
+        return DB::transaction(function () use ($token, $affiliation, $currentUser) {
             /** @var Character $character */
             $character = Character::firstOrNew(['character_id' => $token->characterId]);
             $character->name = $token->characterName;
@@ -607,7 +611,14 @@ class EveSsoController extends Controller
                 $character->alliance_id = $affiliation['alliance_id'];
             }
 
-            if ($character->user_id === null) {
+            if ($currentUser !== null && $character->user_id === null) {
+                // Alt-link: character is unlinked + a user is already
+                // logged in. Bind to the current user. Never overwrite
+                // an existing user_id — that would be a re-login, not
+                // an alt link, and the other branch handles the refresh.
+                $character->user_id = $currentUser->id;
+                $user = User::findOrFail($currentUser->id);
+            } elseif ($character->user_id === null) {
                 $user = User::create([
                     'name' => $token->characterName,
                     // Synthetic — we never send to or authenticate against
@@ -633,6 +644,16 @@ class EveSsoController extends Controller
             }
 
             $character->save();
+
+            // Auto-assign as main if the user has no main yet. Covers:
+            //   - first-ever login (character just created)
+            //   - alt-link where the user previously had a null main
+            //     (legacy row). Alt-link normally won't promote since
+            //     the parent user already has a main set.
+            if ($user->main_character_id === null) {
+                $user->main_character_id = $character->id;
+                $user->save();
+            }
 
             return $user;
         });

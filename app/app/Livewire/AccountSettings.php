@@ -131,8 +131,9 @@ class AccountSettings extends Component
 
     public function render(SyncViewerContextForCharacter $sync): View
     {
+        $user = Auth::user();
         return view('livewire.account.settings', [
-            'user' => Auth::user(),
+            'user' => $user,
             'is_donor' => $this->isDonor(),
             'is_admin' => $this->isAdmin(),
             // Feature gate for the market-data + structure-picker
@@ -153,7 +154,40 @@ class AccountSettings extends Component
             'coalition_blocs' => $this->coalitionBlocs(),
             'lookup_classification' => $this->lookupClassificationFresh(),
             'viewer_overrides' => $this->viewerOverrides(),
+            'linked_characters' => $user ? $user->characters()->orderBy('id')->get() : collect(),
+            'main_character_id' => $user->main_character_id ?? null,
+            'alt_link_url' => EveSsoClient::isConfigured() ? route('auth.eve.redirect') : null,
         ]);
+    }
+
+    /**
+     * Promote one of the user's linked characters to main. Alt-link
+     * semantics: exactly one main per user, other linked characters
+     * remain as alts. No-op if the id doesn't belong to the user.
+     */
+    public function promoteMainCharacter(int $characterId): void
+    {
+        $user = Auth::user();
+        if ($user === null) return;
+        $character = $user->characters()->where('id', $characterId)->first();
+        if ($character === null) return;
+        $user->main_character_id = $character->id;
+        $user->save();
+    }
+
+    /**
+     * Unlink an alt character from this account. Main character can't
+     * be unlinked here — promote a different alt to main first.
+     */
+    public function unlinkCharacter(int $characterId): void
+    {
+        $user = Auth::user();
+        if ($user === null) return;
+        if ((int) ($user->main_character_id ?? 0) === $characterId) return;
+        $character = $user->characters()->where('id', $characterId)->first();
+        if ($character === null) return;
+        $character->user_id = null;
+        $character->save();
     }
 
     // ------------------------------------------------------------------

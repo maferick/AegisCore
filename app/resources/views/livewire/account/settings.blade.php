@@ -54,11 +54,44 @@
             </div>
             <div class="kv-label">Linked characters</div>
             <div>
-                @forelse ($user->characters as $c)
-                    <div class="mono">{{ $c->name }} <span class="badge muted">#{{ $c->character_id }}</span></div>
+                @forelse ($linked_characters as $c)
+                    @php $isMain = (int) $main_character_id === (int) $c->id; @endphp
+                    <div class="mono" style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">
+                        <img src="https://images.evetech.net/characters/{{ $c->character_id }}/portrait?size=32"
+                             referrerpolicy="no-referrer"
+                             style="width:22px;height:22px;border-radius:50%;" alt="">
+                        <span>{{ $c->name }}</span>
+                        <span class="badge muted">#{{ $c->character_id }}</span>
+                        @if ($isMain)
+                            <span class="badge ok" title="Primary character for display + donor attribution">Main</span>
+                        @else
+                            <span class="badge muted">Alt</span>
+                            <button type="button" wire:click="promoteMainCharacter({{ $c->id }})"
+                                    wire:confirm="Make {{ $c->name }} the main character on this account?"
+                                    style="background:rgba(79,208,208,0.1);border:1px solid rgba(79,208,208,0.3);color:#4fd0d0;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.68rem;cursor:pointer;">
+                                Set as main
+                            </button>
+                            <button type="button" wire:click="unlinkCharacter({{ $c->id }})"
+                                    wire:confirm="Unlink {{ $c->name }} from this account? It can be re-linked via EVE SSO later."
+                                    style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.68rem;cursor:pointer;">
+                                Unlink
+                            </button>
+                        @endif
+                    </div>
                 @empty
                     <span class="badge muted">None</span>
                 @endforelse
+                @if ($alt_link_url)
+                    <div style="margin-top:0.5rem;">
+                        <a href="{{ $alt_link_url }}"
+                           style="display:inline-block;background:rgba(79,208,208,0.12);border:1px solid rgba(79,208,208,0.35);color:#4fd0d0;padding:0.3rem 0.7rem;border-radius:4px;font-size:0.75rem;text-decoration:none;">
+                            + Link another character (EVE SSO)
+                        </a>
+                        <span style="color:var(--muted);font-size:0.7rem;margin-left:0.5rem;">
+                            Log in as an alt to bind it to this account for record keeping + market roll-ups.
+                        </span>
+                    </div>
+                @endif
             </div>
         </div>
     </section>

@@ -11,6 +11,7 @@ use Filament\Panel;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -37,13 +38,38 @@ class User extends Authenticatable implements FilamentUser
 
     /**
      * Characters linked to this user via EVE SSO login.
-     *
-     * Phase 1: 0 or 1 (the character the user logged in as).
-     * Phase 2+: can grow when alt-linking lands.
+     * After alt-linking landed: one main + N alts, all via user_id.
      */
     public function characters(): HasMany
     {
         return $this->hasMany(Character::class);
+    }
+
+    /**
+     * The user's designated main character. One per user; alts are
+     * every other character linked via user_id. Nullable for legacy
+     * / bootstrap accounts that never set one.
+     */
+    public function mainCharacter(): BelongsTo
+    {
+        return $this->belongsTo(Character::class, 'main_character_id');
+    }
+
+    /**
+     * Non-main characters linked to this user (i.e. alts).
+     * Ordered by id so display is stable.
+     *
+     * @return HasMany<Character>
+     */
+    public function alts(): HasMany
+    {
+        return $this->hasMany(Character::class)
+            ->where(function ($q) {
+                if ($this->main_character_id) {
+                    $q->where('id', '!=', $this->main_character_id);
+                }
+            })
+            ->orderBy('id');
     }
 
     /**
