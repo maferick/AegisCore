@@ -30,6 +30,7 @@
         .pp-band-slow_capital  { color: #c792ea; font-weight: 700; }
         .pp-band-reduce        { color: #fca5a5; font-weight: 700; }
         .pp-band-hold          { color: #4fd0d0; }
+        .pp-band-observing     { color: #7a7a82; }
         .pp-band-low_data      { color: #7a7a82; font-style: italic; }
         .pp-band-try_new       { color: #e5a900; font-weight: 700; }
         .pp-confidence-high    { color: #86efac; }
@@ -66,7 +67,7 @@
 
             <div class="pp-totals">
                 <div class="pp-tile">
-                    <div class="label">Items you sold here</div>
+                    <div class="label">Items listed here</div>
                     <div class="value">{{ count($user_types) }}</div>
                 </div>
                 <div class="pp-tile">
@@ -90,15 +91,19 @@
                     <div class="value pp-band-hold">{{ $totals['band_counts']['hold'] ?? 0 }}</div>
                 </div>
                 <div class="pp-tile">
+                    <div class="label">Observing</div>
+                    <div class="value pp-band-observing">{{ $totals['band_counts']['observing'] ?? 0 }}</div>
+                </div>
+                <div class="pp-tile">
                     <div class="label">Opportunity items</div>
                     <div class="value pp-band-try_new">{{ $totals['opportunity_types'] }}</div>
                 </div>
             </div>
 
             <div class="pp-section">
-                <h3>Items you sold here
+                <h3>Items you've listed here
                     <span style="font-size:0.6rem; font-weight:400; color:#7a7a82; letter-spacing:0; text-transform:none;">
-                        ({{ count($user_types) }} types with at least one finalised sell listing · Jita sell-floor + 10-15% upmarket)
+                        ({{ count($user_types) }} types listed — finalised or still open · Jita sell-floor + 10-15% upmarket)
                     </span>
                 </h3>
                 @if (empty($user_types))

@@ -90,10 +90,16 @@ final class PersonalOrderPredictor
         );
 
         $userTypes = $this->analyseUserRows($myRows);
-        // Show only types with at least one finalised sell listing
-        // at this station — the user's ask: "items I sold there",
-        // not "every item ever touched".
-        $userTypes = array_filter($userTypes, fn ($r) => ($r['listings'] ?? 0) >= 1);
+        // Include any type the user has listed for sale at this
+        // station, whether finalised (sold / unsold / partial) or
+        // still on the market as open. Items with only open listings
+        // land with band='low_data' since there's no finalised signal
+        // yet, but they're still visible so the aggregate matches
+        // the raw listings panel below.
+        $userTypes = array_filter(
+            $userTypes,
+            fn ($r) => ($r['sell_listings'] ?? 0) >= 1,
+        );
 
         $regional = $this->regionalSignal($regionId, array_keys($userTypes));
         $jita = $this->jitaSellFloor(array_keys($userTypes));
@@ -115,7 +121,7 @@ final class PersonalOrderPredictor
         $priorityRank = ['high' => 0, 'medium' => 1, 'low' => 2];
         $bandRank = [
             'stock_more' => 0, 'test_more' => 1, 'slow_capital' => 2,
-            'reduce' => 3, 'hold' => 4, 'low_data' => 5,
+            'reduce' => 3, 'hold' => 4, 'observing' => 5, 'low_data' => 6,
         ];
         usort($userTypes, function ($a, $b) use ($priorityRank, $bandRank) {
             return ($priorityRank[$a['priority']] ?? 9) <=> ($priorityRank[$b['priority']] ?? 9)
@@ -406,8 +412,12 @@ final class PersonalOrderPredictor
         // Guardrails: stock_more requires ≥ 2 listings + non-slow velocity,
         // otherwise downgrade to test_more (single-listing 100% hits), or
         // slow_capital (high sell-through but long turnaround ties up ISK).
+        $sellListings = (int) $row['sell_listings'];
+        $hasOnlyOpen = $listings < 1 && $sellListings >= 1;
         $band = 'hold';
-        if ($listings < 1 || $rate === null) {
+        if ($hasOnlyOpen) {
+            $band = 'observing'; // listed at station, no finalised outcome yet
+        } elseif ($listings < 1 || $rate === null) {
             $band = 'low_data';
         } elseif ($rate >= 0.70) {
             if ($listings < 2) {
@@ -503,6 +513,7 @@ final class PersonalOrderPredictor
             'reduce'       => sprintf('Only %d%% of listed volume moved across %d listings — pulls capital.', $ratePct, $listings),
             'hold'         => sprintf('Middle-band %d%% sell-through across %d listings · %s — current cadence works.',
                 $ratePct, $listings, $velStr ?? '—'),
+            'observing'    => 'Currently listed, no finalised outcome yet — wait for first close to evaluate.',
             'low_data'     => 'No finalised listings in window — observe first, decide later.',
             default        => '',
         };
@@ -622,7 +633,7 @@ final class PersonalOrderPredictor
     {
         $c = [
             'stock_more' => 0, 'test_more' => 0, 'slow_capital' => 0,
-            'reduce' => 0, 'hold' => 0, 'low_data' => 0,
+            'reduce' => 0, 'hold' => 0, 'observing' => 0, 'low_data' => 0,
         ];
         foreach ($userTypes as $t) {
             $b = $t['band'] ?? null;
