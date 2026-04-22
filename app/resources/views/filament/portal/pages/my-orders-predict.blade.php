@@ -25,14 +25,25 @@
         .pp-table td { padding: 0.4rem 0.55rem; border-bottom: 1px solid #1a1a1e; font-variant-numeric: tabular-nums; vertical-align: middle; }
         .pp-table .num { text-align: right; }
         .pp-icon { width: 18px; height: 18px; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
-        .pp-band-stock_more { color: #86efac; font-weight: 700; }
-        .pp-band-reduce     { color: #fca5a5; font-weight: 700; }
-        .pp-band-hold       { color: #4fd0d0; }
-        .pp-band-low_data   { color: #7a7a82; font-style: italic; }
-        .pp-band-try_new    { color: #e5a900; font-weight: 700; }
-        .pp-confidence-high   { color: #86efac; }
-        .pp-confidence-medium { color: #e5a900; }
-        .pp-confidence-low    { color: #7a7a82; }
+        .pp-band-stock_more    { color: #86efac; font-weight: 700; }
+        .pp-band-test_more     { color: #e5a900; font-weight: 700; }
+        .pp-band-slow_capital  { color: #c792ea; font-weight: 700; }
+        .pp-band-reduce        { color: #fca5a5; font-weight: 700; }
+        .pp-band-hold          { color: #4fd0d0; }
+        .pp-band-low_data      { color: #7a7a82; font-style: italic; }
+        .pp-band-try_new       { color: #e5a900; font-weight: 700; }
+        .pp-confidence-high    { color: #86efac; }
+        .pp-confidence-medium  { color: #e5a900; }
+        .pp-confidence-low     { color: #7a7a82; }
+        .pp-priority-high      { color: #ef4444; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.62rem; }
+        .pp-priority-medium    { color: #e5a900; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.62rem; }
+        .pp-priority-low       { color: #7a7a82; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.62rem; }
+        .pp-velocity-fast      { color: #86efac; }
+        .pp-velocity-medium    { color: #4fd0d0; }
+        .pp-velocity-slow      { color: #c792ea; }
+        .pp-price-premium      { color: #86efac; }
+        .pp-price-underpriced  { color: #e5a900; }
+        .pp-price-aligned      { color: #7a7a82; }
         .pp-empty { color: #7a7a82; font-style: italic; padding: 1.5rem; text-align: center; border: 1px dashed #26262b; border-radius: 8px; }
     </style>
 
@@ -63,6 +74,14 @@
                     <div class="value pp-band-stock_more">{{ $totals['band_counts']['stock_more'] ?? 0 }}</div>
                 </div>
                 <div class="pp-tile">
+                    <div class="label">Test more</div>
+                    <div class="value pp-band-test_more">{{ $totals['band_counts']['test_more'] ?? 0 }}</div>
+                </div>
+                <div class="pp-tile">
+                    <div class="label">Slow capital</div>
+                    <div class="value pp-band-slow_capital">{{ $totals['band_counts']['slow_capital'] ?? 0 }}</div>
+                </div>
+                <div class="pp-tile">
                     <div class="label">Reduce / stop</div>
                     <div class="value pp-band-reduce">{{ $totals['band_counts']['reduce'] ?? 0 }}</div>
                 </div>
@@ -88,27 +107,40 @@
                     <table class="pp-table">
                         <thead>
                             <tr>
+                                <th>Priority</th>
                                 <th>Item</th>
                                 <th>Recommendation</th>
                                 <th>Confidence</th>
+                                <th>Velocity</th>
                                 <th class="num">Listings</th>
                                 <th class="num">Sell-through</th>
-                                <th class="num">Time-to-sell</th>
+                                <th class="num">ISK/day</th>
                                 <th class="num">Jita sell-floor</th>
                                 <th class="num">Sell at (+10-15%)</th>
-                                <th class="num">Suggested qty</th>
+                                <th class="num">Qty</th>
                                 <th>Reason</th>
                             </tr>
                         </thead>
                         <tbody>
                             @foreach ($user_types as $r)
                                 <tr>
+                                    <td><span class="pp-priority-{{ $r['priority'] }}">{{ $r['priority'] }}</span></td>
                                     <td>
                                         <img class="pp-icon" src="https://images.evetech.net/types/{{ $r['type_id'] }}/icon?size=32" referrerpolicy="no-referrer" alt="">
                                         {{ $r['type_name'] }}
                                     </td>
                                     <td><span class="pp-band-{{ $r['band'] }}">{{ str_replace('_', ' ', $r['band']) }}</span></td>
-                                    <td><span class="pp-confidence-{{ $r['confidence'] }}">{{ $r['confidence'] }}</span></td>
+                                    <td>
+                                        <span class="pp-confidence-{{ $r['confidence'] }}">{{ $r['confidence'] }}</span>
+                                        <span style="color:#7a7a82;font-size:0.62rem;">({{ number_format((float) ($r['confidence_score'] ?? 0), 2) }})</span>
+                                    </td>
+                                    <td>
+                                        @if ($r['velocity'])
+                                            <span class="pp-velocity-{{ $r['velocity'] }}">{{ $r['velocity'] }}</span>
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
+                                    </td>
                                     <td class="num">{{ $r['listings'] }}</td>
                                     <td class="num">
                                         @if ($r['sell_through_rate'] !== null)
@@ -116,9 +148,11 @@
                                         @else — @endif
                                     </td>
                                     <td class="num">
-                                        @if ($r['expected_days_to_sell'] !== null)
-                                            {{ number_format((float) $r['expected_days_to_sell'], 1) }} d
-                                        @else — @endif
+                                        @if ($r['isk_per_day'] !== null)
+                                            {{ $fmtIsk((float) $r['isk_per_day']) }}
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
                                     </td>
                                     <td class="num">
                                         @if ($r['jita_sell'] !== null)
@@ -127,9 +161,12 @@
                                             <span style="color:#7a7a82;">—</span>
                                         @endif
                                     </td>
-                                    <td class="num pp-band-stock_more">
+                                    <td class="num">
                                         @if ($r['jita_upmarket_low'] !== null)
-                                            {{ $fmtIsk((float) $r['jita_upmarket_low']) }}-{{ $fmtIsk((float) $r['jita_upmarket_high']) }}
+                                            <span class="pp-band-stock_more">{{ $fmtIsk((float) $r['jita_upmarket_low']) }}-{{ $fmtIsk((float) $r['jita_upmarket_high']) }}</span>
+                                            @if (! empty($r['price_signal']) && $r['price_signal'] !== 'aligned')
+                                                <div style="font-size:0.6rem;" class="pp-price-{{ $r['price_signal'] }}">{{ str_replace('_', ' ', $r['price_signal']) }}</div>
+                                            @endif
                                         @else
                                             <span style="color:#7a7a82;">—</span>
                                         @endif

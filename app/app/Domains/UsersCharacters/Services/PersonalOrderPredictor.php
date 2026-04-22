@@ -111,12 +111,19 @@ final class PersonalOrderPredictor
             $row += $this->recommendation($row);
         }
         unset($row);
-        // Stable ordering: stock_more first, then reduce, then hold, then low_data.
-        $bandRank = ['stock_more' => 0, 'try_new' => 1, 'hold' => 2, 'reduce' => 3, 'low_data' => 4];
-        $userTypes = collect($userTypes)
-            ->sortBy(fn ($r) => ($bandRank[$r['band']] ?? 99) * 1000 - ($r['listings'] ?? 0))
-            ->values()
-            ->all();
+        // Sort: priority desc (high → low), then band, then isk_per_day desc, listings desc.
+        $priorityRank = ['high' => 0, 'medium' => 1, 'low' => 2];
+        $bandRank = [
+            'stock_more' => 0, 'test_more' => 1, 'slow_capital' => 2,
+            'reduce' => 3, 'hold' => 4, 'low_data' => 5,
+        ];
+        usort($userTypes, function ($a, $b) use ($priorityRank, $bandRank) {
+            return ($priorityRank[$a['priority']] ?? 9) <=> ($priorityRank[$b['priority']] ?? 9)
+                ?: ($bandRank[$a['band']] ?? 99) <=> ($bandRank[$b['band']] ?? 99)
+                ?: ($b['isk_per_day'] ?? 0) <=> ($a['isk_per_day'] ?? 0)
+                ?: ($b['listings'] ?? 0) <=> ($a['listings'] ?? 0);
+        });
+        $userTypes = array_values($userTypes);
 
         $opportunityTypes = $this->opportunityCandidates($regionId, array_keys(array_flip(array_column($userTypes, 'type_id'))));
 
@@ -354,59 +361,158 @@ final class PersonalOrderPredictor
         $listings = (int) $row['listings'];
         $rate = $row['sell_through_rate'];
 
-        // Band uses the rate; confidence carries the data quality so
-        // 1-2 listings at 100% sell-through still reads as stock_more
-        // with low confidence rather than shrugging at real signal.
-        $band = 'hold';
-        $confidence = 'low';
-        if ($listings >= 10) $confidence = 'high';
-        elseif ($listings >= 4) $confidence = 'medium';
+        $listingDays = $row['avg_listing_days'];
+        $unitsSold = (int) $row['units_sold'];
+        $dailyFill = $row['daily_fill']; // units per day observed
+        $realisedMid = $row['realised_price_median'];
+        $jitaSell = $row['jita_sell'] ?? null;
 
+        // ---- Velocity class ----
+        $velocity = null;
+        if ($listingDays !== null) {
+            $velocity = $listingDays < 7 ? 'fast' : ($listingDays <= 21 ? 'medium' : 'slow');
+        }
+
+        // ---- Capital efficiency ----
+        // ISK/day = realised_price × units sold per listing-day.
+        // Tells the donor whether the item is a good use of capital
+        // even when it moves — a 16-day dread listing at 3B ISK is
+        // slow-but-lucrative; an auto-cannon at 100K that turns in
+        // 3 hours is low-per-unit-but-fast.
+        $iskPerDay = null;
+        if ($realisedMid !== null && $dailyFill !== null && $dailyFill > 0) {
+            $iskPerDay = $realisedMid * $dailyFill;
+        }
+
+        // ---- Weighted confidence ----
+        // Combines listings count + units sold + recency. All three
+        // components are normalised to [0,1] then blended; high
+        // confidence requires genuine repeat evidence, not just one
+        // lucky closed order.
+        $listingsScore = min(1.0, $listings / 10.0);
+        $unitsScore = min(1.0, $unitsSold / 200.0);
+        $recencyScore = 0.2;
+        if ($row['last_seen'] !== null) {
+            $ageDays = max(0, (time() - (int) $row['last_seen']) / 86400);
+            $recencyScore = $ageDays <= 7 ? 1.0
+                : ($ageDays <= 30 ? 0.7
+                : ($ageDays <= 60 ? 0.4 : 0.2));
+        }
+        $confidenceScore = $listingsScore * 0.4 + $unitsScore * 0.4 + $recencyScore * 0.2;
+        $confidence = $confidenceScore >= 0.7 ? 'high'
+            : ($confidenceScore >= 0.4 ? 'medium' : 'low');
+
+        // ---- Band ----
+        // Guardrails: stock_more requires ≥ 2 listings + non-slow velocity,
+        // otherwise downgrade to test_more (single-listing 100% hits), or
+        // slow_capital (high sell-through but long turnaround ties up ISK).
+        $band = 'hold';
         if ($listings < 1 || $rate === null) {
             $band = 'low_data';
         } elseif ($rate >= 0.70) {
-            $band = 'stock_more';
+            if ($listings < 2) {
+                $band = 'test_more';
+            } elseif ($velocity === 'slow') {
+                $band = 'slow_capital';
+            } else {
+                $band = 'stock_more';
+            }
         } elseif ($rate <= 0.30 && $listings >= 2) {
-            // Require ≥ 2 before calling "reduce" — a single failed
-            // listing at an off price isn't enough to tell the donor
-            // to stop stocking entirely.
             $band = 'reduce';
         }
 
+        // ---- Quantity ----
+        // Velocity-driven: daily fill × runway. When fill is slow, the
+        // runway math naturally shrinks (slow_capital rows get small qty).
         $suggestedQty = null;
-        if ($band === 'stock_more' && $row['daily_fill'] !== null && $row['daily_fill'] > 0) {
-            $suggestedQty = (int) ceil($row['daily_fill'] * self::RUNWAY_DAYS);
-        } elseif ($band === 'stock_more' && $row['regional_daily_volume']) {
-            // Fallback: 5% of regional flow, 14d runway.
-            $suggestedQty = (int) ceil($row['regional_daily_volume'] * 0.05 * self::RUNWAY_DAYS);
+        if (in_array($band, ['stock_more', 'test_more', 'slow_capital'], true)) {
+            if ($dailyFill !== null && $dailyFill > 0) {
+                $suggestedQty = (int) ceil($dailyFill * self::RUNWAY_DAYS);
+            } elseif ($row['regional_daily_volume']) {
+                // Fallback: 5% of regional flow × runway
+                $suggestedQty = (int) ceil($row['regional_daily_volume'] * 0.05 * self::RUNWAY_DAYS);
+            }
         }
 
-        $expectedDays = null;
-        if ($row['avg_listing_days'] !== null) $expectedDays = round($row['avg_listing_days'], 1);
-        elseif ($suggestedQty && $row['regional_daily_volume']) {
-            $expectedDays = round($suggestedQty / max(0.01, $row['regional_daily_volume']), 1);
+        $expectedDays = $listingDays !== null ? round($listingDays, 1) : null;
+
+        // ---- Price-elasticity signal ----
+        // Cross realised_price_p25/p75 with Jita + markup. When donor's
+        // historical sells land below the +10-15% upmarket band, the
+        // market has probably shifted — surface as "price lifted".
+        $priceSignal = null;
+        if ($realisedMid !== null && $jitaSell !== null) {
+            $upLow = $jitaSell * (1 + self::MARKUP_LOW);
+            $upHigh = $jitaSell * (1 + self::MARKUP_HIGH);
+            if ($realisedMid > $upHigh) {
+                $priceSignal = 'premium'; // selling above the upmarket band
+            } elseif ($realisedMid < $upLow * 0.85) {
+                $priceSignal = 'underpriced'; // leaving money on the table
+            } else {
+                $priceSignal = 'aligned';
+            }
         }
 
-        $reason = match ($band) {
-            'stock_more' => $listings >= 4
-                ? sprintf('Sell-through %.0f%% across %d listings — item moves at this station.', (float) ($rate ?? 0) * 100, $listings)
-                : sprintf('Sell-through %.0f%% on %d listing%s — small sample, expand cautiously.', (float) ($rate ?? 0) * 100, $listings, $listings === 1 ? '' : 's'),
-            'reduce'     => sprintf('Only %.0f%% of listed volume sold across %d listings — pulls capital.', (float) ($rate ?? 0) * 100, $listings),
-            'hold'       => sprintf('Middle ground (%.0f%% sell-through, %d listings) — current cadence works.', (float) ($rate ?? 0) * 100, $listings),
-            'low_data'   => 'No finalised listings in window — observe first, decide later.',
-            default      => '',
-        };
+        // ---- Priority ----
+        // High-level "what to actually do first" column. High = scale,
+        // medium = maintain, low = test/monitor.
+        $priority = 'low';
+        if ($band === 'stock_more' && $confidence === 'high') {
+            $priority = 'high';
+        } elseif ($band === 'stock_more' && $confidence === 'medium') {
+            $priority = 'medium';
+        } elseif ($band === 'slow_capital' && $confidence !== 'low') {
+            $priority = 'medium';
+        } elseif ($band === 'reduce') {
+            $priority = $confidence === 'high' ? 'high' : 'medium';
+        }
+
+        // ---- Reason (context-aware) ----
+        $reason = $this->reasonFor($band, $listings, $rate ?? 0.0, $velocity, $priceSignal, $unitsSold);
 
         return [
             'band' => $band,
             'confidence' => $confidence,
+            'confidence_score' => round($confidenceScore, 3),
+            'velocity' => $velocity,
+            'priority' => $priority,
+            'isk_per_day' => $iskPerDay,
+            'price_signal' => $priceSignal,
             'suggested_qty' => $suggestedQty,
             'suggested_price_low' => $row['realised_price_p25'],
-            'suggested_price_mid' => $row['realised_price_median'],
+            'suggested_price_mid' => $realisedMid,
             'suggested_price_high' => $row['realised_price_p75'],
             'expected_days_to_sell' => $expectedDays,
             'reason' => $reason,
         ];
+    }
+
+    private function reasonFor(string $band, int $listings, float $rate, ?string $velocity, ?string $priceSignal, int $unitsSold): string
+    {
+        $ratePct = (int) round($rate * 100);
+        $velStr = $velocity === 'fast' ? 'fast turnover'
+            : ($velocity === 'medium' ? 'steady turnover'
+            : ($velocity === 'slow' ? 'slow turnover' : null));
+
+        $base = match ($band) {
+            'stock_more'   => sprintf('Consistent %d%% sell-through over %d listings · %s · %d units moved.',
+                $ratePct, $listings, $velStr ?? '—', $unitsSold),
+            'test_more'    => sprintf('%d%% sell-through on %d listing — strong signal but small sample. Expand cautiously.',
+                $ratePct, $listings),
+            'slow_capital' => sprintf('High %d%% sell-through but slow turnover (capital tied up) — size qty modestly.', $ratePct),
+            'reduce'       => sprintf('Only %d%% of listed volume moved across %d listings — pulls capital.', $ratePct, $listings),
+            'hold'         => sprintf('Middle-band %d%% sell-through across %d listings · %s — current cadence works.',
+                $ratePct, $listings, $velStr ?? '—'),
+            'low_data'     => 'No finalised listings in window — observe first, decide later.',
+            default        => '',
+        };
+
+        if ($priceSignal === 'underpriced') {
+            $base .= ' Price appears below Jita +10-15% — room to lift asking.';
+        } elseif ($priceSignal === 'premium') {
+            $base .= ' Selling at a premium vs Jita markup — market rewards this station.';
+        }
+        return $base;
     }
 
     /**
@@ -514,7 +620,10 @@ final class PersonalOrderPredictor
     /** @param list<int> $userTypeIds */
     private function bandCounts(array $userTypes): array
     {
-        $c = ['stock_more' => 0, 'reduce' => 0, 'hold' => 0, 'low_data' => 0];
+        $c = [
+            'stock_more' => 0, 'test_more' => 0, 'slow_capital' => 0,
+            'reduce' => 0, 'hold' => 0, 'low_data' => 0,
+        ];
         foreach ($userTypes as $t) {
             $b = $t['band'] ?? null;
             if ($b && isset($c[$b])) $c[$b]++;
