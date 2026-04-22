@@ -120,6 +120,12 @@ final class PersonalOrderPredictor
 
         $opportunityTypes = $this->opportunityCandidates($regionId, array_keys(array_flip(array_column($userTypes, 'type_id'))));
 
+        // Raw listing log — every finalised sell listing the viewer
+        // placed at this station, one row per listing. Visible for
+        // operator insight: the aggregate is the recommendation, the
+        // raw table is the evidence.
+        $rawListings = $this->rawSellListings($characterIds, $locationId);
+
         $totals = [
             'types' => count($userTypes),
             'opportunity_types' => count($opportunityTypes),
@@ -131,6 +137,7 @@ final class PersonalOrderPredictor
             'region' => $regionId ? $this->regionMeta($regionId) : null,
             'user_types' => $userTypes,
             'opportunity_types' => $opportunityTypes,
+            'raw_listings' => $rawListings,
             'totals' => $totals,
         ];
     }
@@ -400,6 +407,61 @@ final class PersonalOrderPredictor
             'expected_days_to_sell' => $expectedDays,
             'reason' => $reason,
         ];
+    }
+
+    /**
+     * Every finalised sell listing the viewer has touched at this
+     * station, newest first. No window cap — once a row lands in
+     * personal_market_orders we keep it even past ESI's 90d history
+     * cap, so the log grows over time.
+     *
+     * @param list<int> $characterIds
+     * @return list<array<string,mixed>>
+     */
+    private function rawSellListings(array $characterIds, int $locationId): array
+    {
+        if ($characterIds === []) return [];
+        $placeholders = implode(',', array_fill(0, count($characterIds), '?'));
+        $rows = DB::select(<<<SQL
+            SELECT o.order_id, o.character_id, o.type_id, o.price,
+                   o.volume_total, o.volume_remain, o.issued, o.state,
+                   o.first_observed_at, o.last_observed_at,
+                   rit.name AS type_name
+              FROM personal_market_orders o
+              LEFT JOIN ref_item_types rit ON rit.id = o.type_id
+             WHERE o.character_id IN ($placeholders)
+               AND o.location_id = ?
+               AND o.is_buy = 0
+             ORDER BY o.issued DESC
+        SQL, array_merge($characterIds, [$locationId]));
+
+        $nameCache = [];
+        $out = [];
+        foreach ($rows as $r) {
+            $vt = (int) $r->volume_total;
+            $vr = (int) $r->volume_remain;
+            $outcome = match (true) {
+                $r->state === 'open'       => 'open',
+                $vr === 0                  => 'sold_out',
+                $vr === $vt                => 'unsold',
+                default                    => 'partial',
+            };
+            $out[] = [
+                'order_id' => (int) $r->order_id,
+                'character_id' => (int) $r->character_id,
+                'type_id' => (int) $r->type_id,
+                'type_name' => $r->type_name ?? ('type ' . $r->type_id),
+                'price' => (float) $r->price,
+                'volume_total' => $vt,
+                'volume_remain' => $vr,
+                'volume_sold' => max(0, $vt - $vr),
+                'state' => $r->state,
+                'outcome' => $outcome,
+                'issued' => $r->issued,
+                'last_observed_at' => $r->last_observed_at,
+            ];
+        }
+        return $out;
     }
 
     /**

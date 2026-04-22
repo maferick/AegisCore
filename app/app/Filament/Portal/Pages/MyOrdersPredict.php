@@ -42,6 +42,16 @@ class MyOrdersPredict extends Page
         $predictor = app(PersonalOrderPredictor::class);
         $result = $predictor->predict($user, $locationId);
 
-        return ['no_user' => false, 'no_station' => false] + $result;
+        // Attach main/alt metadata for the raw-listing table.
+        $mainCharId = $user->main_character_id;
+        $charMeta = [];
+        foreach ($user->characters as $c) {
+            $charMeta[(int) $c->character_id] = [
+                'name' => $c->name,
+                'is_main' => $mainCharId !== null && (int) $c->id === (int) $mainCharId,
+            ];
+        }
+
+        return ['no_user' => false, 'no_station' => false, 'character_meta' => $charMeta] + $result;
     }
 }

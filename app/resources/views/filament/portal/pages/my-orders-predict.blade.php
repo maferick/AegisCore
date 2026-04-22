@@ -145,6 +145,66 @@
                 @endif
             </div>
 
+            @if (! empty($raw_listings))
+                <div class="pp-section">
+                    <h3>Previous listings here
+                        <span style="font-size:0.6rem; font-weight:400; color:#7a7a82; letter-spacing:0; text-transform:none;">
+                            ({{ count($raw_listings) }} sell listings, newest first · grows beyond CCP's 90d history cap as rows accumulate)
+                        </span>
+                    </h3>
+                    <table class="pp-table">
+                        <thead>
+                            <tr>
+                                <th>Issued</th>
+                                <th>Character</th>
+                                <th>Item</th>
+                                <th class="num">Price</th>
+                                <th class="num">Qty (sold / listed)</th>
+                                <th>Outcome</th>
+                                <th>Last seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($raw_listings as $l)
+                                @php
+                                    $m = $character_meta[$l['character_id']] ?? ['name' => 'char #' . $l['character_id'], 'is_main' => false];
+                                    $outcomeClass = match ($l['outcome']) {
+                                        'sold_out' => 'pp-band-stock_more',
+                                        'partial'  => 'pp-band-hold',
+                                        'unsold'   => 'pp-band-reduce',
+                                        'open'     => 'pp-band-try_new',
+                                        default    => '',
+                                    };
+                                @endphp
+                                <tr>
+                                    <td style="color:#7a7a82;">{{ \Carbon\Carbon::parse($l['issued'])->format('Y-m-d') }}</td>
+                                    <td>
+                                        <img src="https://images.evetech.net/characters/{{ $l['character_id'] }}/portrait?size=32"
+                                             class="pp-icon" style="border-radius:50%;" referrerpolicy="no-referrer" alt="">
+                                        {{ $m['name'] }}
+                                        @if ($m['is_main'])
+                                            <span style="font-size:0.55rem;color:#4fd0d0;margin-left:3px;">main</span>
+                                        @else
+                                            <span style="font-size:0.55rem;color:#7a7a82;margin-left:3px;">alt</span>
+                                        @endif
+                                    </td>
+                                    <td>
+                                        <img class="pp-icon" src="https://images.evetech.net/types/{{ $l['type_id'] }}/icon?size=32" referrerpolicy="no-referrer" alt="">
+                                        {{ $l['type_name'] }}
+                                    </td>
+                                    <td class="num">{{ $fmtIsk((float) $l['price']) }}</td>
+                                    <td class="num">
+                                        {{ number_format($l['volume_sold']) }} / {{ number_format($l['volume_total']) }}
+                                    </td>
+                                    <td><span class="{{ $outcomeClass }}">{{ str_replace('_', ' ', $l['outcome']) }}</span></td>
+                                    <td style="color:#7a7a82;">{{ \Carbon\Carbon::parse($l['last_observed_at'])->diffForHumans() }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            @endif
+
             @if (! empty($opportunity_types))
                 <div class="pp-section">
                     <h3>Opportunity items · region top movers you haven't stocked</h3>
