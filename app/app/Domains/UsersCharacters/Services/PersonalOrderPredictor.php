@@ -330,16 +330,22 @@ final class PersonalOrderPredictor
         $listings = (int) $row['listings'];
         $rate = $row['sell_through_rate'];
 
+        // Band uses the rate; confidence carries the data quality so
+        // 1-2 listings at 100% sell-through still reads as stock_more
+        // with low confidence rather than shrugging at real signal.
         $band = 'hold';
         $confidence = 'low';
         if ($listings >= 10) $confidence = 'high';
         elseif ($listings >= 4) $confidence = 'medium';
 
-        if ($listings < 3) {
+        if ($listings < 1 || $rate === null) {
             $band = 'low_data';
-        } elseif ($rate !== null && $rate >= 0.70) {
+        } elseif ($rate >= 0.70) {
             $band = 'stock_more';
-        } elseif ($rate !== null && $rate <= 0.30) {
+        } elseif ($rate <= 0.30 && $listings >= 2) {
+            // Require ≥ 2 before calling "reduce" — a single failed
+            // listing at an off price isn't enough to tell the donor
+            // to stop stocking entirely.
             $band = 'reduce';
         }
 
@@ -358,10 +364,12 @@ final class PersonalOrderPredictor
         }
 
         $reason = match ($band) {
-            'stock_more' => sprintf("Sell-through %.0f%% across %d listings — item moves at this station.", (float) ($rate ?? 0) * 100, $listings),
-            'reduce'     => sprintf("Only %.0f%% of listed volume sold across %d listings — pulls capital.", (float) ($rate ?? 0) * 100, $listings),
-            'hold'       => sprintf("Middle ground (%.0f%% sell-through, %d listings) — current cadence works.", (float) ($rate ?? 0) * 100, $listings),
-            'low_data'   => sprintf("Only %d finalised listings — not enough to recommend either direction.", $listings),
+            'stock_more' => $listings >= 4
+                ? sprintf('Sell-through %.0f%% across %d listings — item moves at this station.', (float) ($rate ?? 0) * 100, $listings)
+                : sprintf('Sell-through %.0f%% on %d listing%s — small sample, expand cautiously.', (float) ($rate ?? 0) * 100, $listings, $listings === 1 ? '' : 's'),
+            'reduce'     => sprintf('Only %.0f%% of listed volume sold across %d listings — pulls capital.', (float) ($rate ?? 0) * 100, $listings),
+            'hold'       => sprintf('Middle ground (%.0f%% sell-through, %d listings) — current cadence works.', (float) ($rate ?? 0) * 100, $listings),
+            'low_data'   => 'No finalised listings in window — observe first, decide later.',
             default      => '',
         };
 
