@@ -87,12 +87,12 @@ class MyOrders extends Page
         $locations = [];
         if ($locationIds) {
             $stations = DB::table('ref_npc_stations')
-                ->whereIn('id', $locationIds)
+                ->whereIn('ref_npc_stations.id', $locationIds)
                 ->leftJoin('ref_solar_systems AS s', 's.id', '=', 'ref_npc_stations.solar_system_id')
-                ->select('ref_npc_stations.id', 's.name AS system_name')
+                ->select('ref_npc_stations.id AS station_id', 's.name AS system_name')
                 ->get();
             foreach ($stations as $s) {
-                $locations[(int) $s->id] = ['name' => $s->system_name ? ($s->system_name . ' station') : "Station #{$s->id}"];
+                $locations[(int) $s->station_id] = ['name' => $s->system_name ? ($s->system_name . ' station') : "Station #{$s->station_id}"];
             }
             $hubs = DB::table('market_hubs')
                 ->whereIn('location_id', $locationIds)
