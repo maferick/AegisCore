@@ -111,6 +111,27 @@ class MyOrders extends Page
             }
         }
 
+        // Distinct stations this user has touched (for the predict
+        // buttons + "jump to station" links). Limit to stations with
+        // at least one finalised sell listing, which is what the
+        // predictor has signal for.
+        $stationsUsed = DB::table('personal_market_orders')
+            ->whereIn('character_id', $characterIds)
+            ->where('is_buy', 0)
+            ->select('location_id', DB::raw('COUNT(*) AS listings'))
+            ->groupBy('location_id')
+            ->orderByDesc('listings')
+            ->get();
+        $stationsOut = [];
+        foreach ($stationsUsed as $s) {
+            $lid = (int) $s->location_id;
+            $stationsOut[] = [
+                'location_id' => $lid,
+                'name' => $locations[$lid]['name'] ?? ('Structure ' . substr((string) $lid, -8)),
+                'listings' => (int) $s->listings,
+            ];
+        }
+
         // Character display metadata keyed by character_id.
         $charMeta = [];
         foreach ($characters as $c) {
@@ -160,6 +181,7 @@ class MyOrders extends Page
             'character_filter' => $characterFilter,
             'orders' => $orders,
             'locations' => $locations,
+            'stations_used' => $stationsOut,
             'totals_open' => $totalsOpen,
             'missing_scope_character_ids' => $missingScope,
             'no_token_character_ids' => $noToken,

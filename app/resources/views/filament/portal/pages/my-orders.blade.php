@@ -99,6 +99,26 @@
                 </span>
             </form>
 
+            @if (! empty($stations_used))
+                <div style="margin-bottom: 1.1rem;">
+                    <div style="font-size:0.68rem;color:#7a7a82;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:0.35rem;">
+                        Predict per station
+                        <span style="text-transform:none;color:#7a7a82;font-size:0.7rem;margin-left:0.4rem;">
+                            ·  uses your main + alts' sell history at that station + regional flow
+                        </span>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:0.3rem;">
+                        @foreach ($stations_used as $s)
+                            <a href="/portal/my-orders/predict?station={{ $s['location_id'] }}"
+                               style="background:rgba(79,208,208,0.08);border:1px solid rgba(79,208,208,0.3);color:#4fd0d0;padding:0.25rem 0.6rem;border-radius:3px;font-size:0.72rem;font-family:'JetBrains Mono', monospace;text-decoration:none;">
+                                Predict · {{ $s['name'] }}
+                                <span style="color:#7a7a82;margin-left:0.3rem;">({{ $s['listings'] }})</span>
+                            </a>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+
             <div class="mo-totals">
                 <div class="mo-tile">
                     <div class="label">Open orders</div>
