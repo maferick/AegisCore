@@ -58,6 +58,10 @@ final class PersonalOrderPredictor
     public const WINDOW_DAYS = 90;        // history depth CCP gives us
     public const REGIONAL_DAYS = 30;      // market_history window
     public const RUNWAY_DAYS = 14;        // target stock coverage
+    public const JITA_LOCATION_ID = 60003760;
+    public const JITA_REGION_ID = 10000002;
+    public const MARKUP_LOW = 0.10;       // +10%
+    public const MARKUP_HIGH = 0.15;      // +15%
 
     /**
      * @return array{
@@ -86,11 +90,24 @@ final class PersonalOrderPredictor
         );
 
         $userTypes = $this->analyseUserRows($myRows);
+        // Show only types with at least one finalised sell listing
+        // at this station — the user's ask: "items I sold there",
+        // not "every item ever touched".
+        $userTypes = array_filter($userTypes, fn ($r) => ($r['listings'] ?? 0) >= 1);
 
         $regional = $this->regionalSignal($regionId, array_keys($userTypes));
+        $jita = $this->jitaSellFloor(array_keys($userTypes));
         foreach ($userTypes as $tid => &$row) {
             $row['regional_daily_volume'] = $regional[$tid]['daily_volume'] ?? null;
             $row['regional_avg_price'] = $regional[$tid]['avg_price'] ?? null;
+            $row['jita_sell'] = $jita[$tid] ?? null;
+            if ($row['jita_sell'] !== null) {
+                $row['jita_upmarket_low'] = round($row['jita_sell'] * (1 + self::MARKUP_LOW), 2);
+                $row['jita_upmarket_high'] = round($row['jita_sell'] * (1 + self::MARKUP_HIGH), 2);
+            } else {
+                $row['jita_upmarket_low'] = null;
+                $row['jita_upmarket_high'] = null;
+            }
             $row += $this->recommendation($row);
         }
         unset($row);
@@ -383,6 +400,53 @@ final class PersonalOrderPredictor
             'expected_days_to_sell' => $expectedDays,
             'reason' => $reason,
         ];
+    }
+
+    /**
+     * Cheapest live Jita 4-4 sell price per type. Falls back to
+     * the 7-day Jita-region market_history average when no live
+     * snapshot exists (the market poller may not cover every type).
+     *
+     * @param list<int> $typeIds
+     * @return array<int, float>
+     */
+    private function jitaSellFloor(array $typeIds): array
+    {
+        if ($typeIds === []) return [];
+        $placeholders = implode(',', array_fill(0, count($typeIds), '?'));
+        $since = now()->subHours(6)->toDateTimeString();
+        $rows = DB::select(<<<SQL
+            SELECT type_id, MIN(price) AS price
+              FROM market_orders
+             WHERE location_id = ?
+               AND is_buy = 0
+               AND type_id IN ($placeholders)
+               AND observed_at >= ?
+               AND volume_remain > 0
+             GROUP BY type_id
+        SQL, array_merge([self::JITA_LOCATION_ID], $typeIds, [$since]));
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r->type_id] = (float) $r->price;
+        }
+
+        $missing = array_values(array_diff($typeIds, array_keys($out)));
+        if ($missing === []) return $out;
+
+        $placeholders = implode(',', array_fill(0, count($missing), '?'));
+        $sinceDate = now()->subDays(7)->toDateString();
+        $fallback = DB::select(<<<SQL
+            SELECT type_id, AVG(average) AS avg_price
+              FROM market_history
+             WHERE region_id = ?
+               AND type_id IN ($placeholders)
+               AND trade_date >= ?
+             GROUP BY type_id
+        SQL, array_merge([self::JITA_REGION_ID], $missing, [$sinceDate]));
+        foreach ($fallback as $r) {
+            $out[(int) $r->type_id] = (float) $r->avg_price;
+        }
+        return $out;
     }
 
     /** @param list<int> $userTypeIds */

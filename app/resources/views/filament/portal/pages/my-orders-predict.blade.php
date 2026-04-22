@@ -55,8 +55,8 @@
 
             <div class="pp-totals">
                 <div class="pp-tile">
-                    <div class="label">Items you've traded here</div>
-                    <div class="value">{{ $totals['types'] }}</div>
+                    <div class="label">Items you sold here</div>
+                    <div class="value">{{ count($user_types) }}</div>
                 </div>
                 <div class="pp-tile">
                     <div class="label">Stock more</div>
@@ -77,9 +77,13 @@
             </div>
 
             <div class="pp-section">
-                <h3>Your items at this station</h3>
+                <h3>Items you sold here
+                    <span style="font-size:0.6rem; font-weight:400; color:#7a7a82; letter-spacing:0; text-transform:none;">
+                        ({{ count($user_types) }} types with at least one finalised sell listing · Jita sell-floor + 10-15% upmarket)
+                    </span>
+                </h3>
                 @if (empty($user_types))
-                    <div class="pp-empty">No sell history observed at this station in the window. Personal orders sync runs hourly.</div>
+                    <div class="pp-empty">No finalised sell listings here yet. Once one closes in the 90d window it will appear.</div>
                 @else
                     <table class="pp-table">
                         <thead>
@@ -90,8 +94,9 @@
                                 <th class="num">Listings</th>
                                 <th class="num">Sell-through</th>
                                 <th class="num">Time-to-sell</th>
+                                <th class="num">Jita sell-floor</th>
+                                <th class="num">Sell at (+10-15%)</th>
                                 <th class="num">Suggested qty</th>
-                                <th class="num">Price band (p25-p75)</th>
                                 <th>Reason</th>
                             </tr>
                         </thead>
@@ -116,14 +121,21 @@
                                         @else — @endif
                                     </td>
                                     <td class="num">
-                                        {{ $r['suggested_qty'] !== null ? number_format($r['suggested_qty']) : '—' }}
+                                        @if ($r['jita_sell'] !== null)
+                                            {{ $fmtIsk((float) $r['jita_sell']) }}
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
+                                    </td>
+                                    <td class="num pp-band-stock_more">
+                                        @if ($r['jita_upmarket_low'] !== null)
+                                            {{ $fmtIsk((float) $r['jita_upmarket_low']) }}-{{ $fmtIsk((float) $r['jita_upmarket_high']) }}
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
                                     </td>
                                     <td class="num">
-                                        @if ($r['suggested_price_low'] && $r['suggested_price_high'])
-                                            {{ $fmtIsk((float) $r['suggested_price_low']) }}-{{ $fmtIsk((float) $r['suggested_price_high']) }}
-                                        @elseif ($r['suggested_price_mid'])
-                                            {{ $fmtIsk((float) $r['suggested_price_mid']) }}
-                                        @else — @endif
+                                        {{ $r['suggested_qty'] !== null ? number_format($r['suggested_qty']) : '—' }}
                                     </td>
                                     <td style="color:#7a7a82;font-size:0.72rem;">{{ $r['reason'] }}</td>
                                 </tr>
