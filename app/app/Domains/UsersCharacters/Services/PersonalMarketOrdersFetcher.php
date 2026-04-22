@@ -120,7 +120,7 @@ final class PersonalMarketOrdersFetcher
         $regionMap = [];
         if ($locationIds) {
             $stations = DB::table('ref_npc_stations')
-                ->whereIn('id', $locationIds)
+                ->whereIn('ref_npc_stations.id', $locationIds)
                 ->leftJoin('ref_solar_systems', 'ref_solar_systems.id', '=', 'ref_npc_stations.solar_system_id')
                 ->select('ref_npc_stations.id AS station_id', 'ref_solar_systems.region_id AS region_id')
                 ->get();
