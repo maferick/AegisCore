@@ -211,6 +211,45 @@
                 @endif
             </div>
 
+            @php
+                $actionable = collect($user_types)->filter(fn ($r) => in_array($r['band'], ['stock_more','test_more','test_now','slow_capital'], true) && ($r['suggested_qty'] ?? 0) > 0);
+                $buyallLines = $actionable->map(fn ($r) => $r['suggested_qty'] . ' ' . $r['type_name'])->implode("\n");
+                $sellPriceLines = $actionable->map(function ($r) use ($fmtIsk) {
+                    // Prefer realised_price_median when pilot has evidence it
+                    // sells at that price; else use Jita +15% upmarket high.
+                    $price = $r['suggested_price_mid'] ?? $r['jita_upmarket_high'] ?? null;
+                    if ($price === null) return null;
+                    return $r['type_name'] . ' @ ' . $fmtIsk((float) $price) . ' ISK';
+                })->filter()->implode("\n");
+            @endphp
+            @if ($actionable->isNotEmpty())
+                <div class="pp-section">
+                    <h3>Buyall + sell-price notepad
+                        <span style="font-size:0.6rem; font-weight:400; color:#7a7a82; letter-spacing:0; text-transform:none;">
+                            ({{ $actionable->count() }} actionable items · paste the buyall into EVE multibuy, keep sell-prices for reference)
+                        </span>
+                    </h3>
+                    <div style="display:grid;grid-template-columns: 1fr 1fr;gap:0.8rem;">
+                        <div>
+                            <div style="font-size:0.62rem;color:#7a7a82;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">
+                                Buyall — paste into multibuy
+                            </div>
+                            <textarea readonly rows="{{ max(4, min(16, $actionable->count())) }}"
+                                      onclick="this.select()"
+                                      style="width:100%;background:#0c0c0e;color:#e5e5e7;border:1px solid #26262b;border-radius:4px;padding:0.6rem 0.7rem;font-family:'JetBrains Mono',monospace;font-size:0.78rem;resize:vertical;">{{ $buyallLines }}</textarea>
+                        </div>
+                        <div>
+                            <div style="font-size:0.62rem;color:#7a7a82;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">
+                                Sell prices — list at these
+                            </div>
+                            <textarea readonly rows="{{ max(4, min(16, $actionable->count())) }}"
+                                      onclick="this.select()"
+                                      style="width:100%;background:#0c0c0e;color:#e5e5e7;border:1px solid #26262b;border-radius:4px;padding:0.6rem 0.7rem;font-family:'JetBrains Mono',monospace;font-size:0.78rem;resize:vertical;">{{ $sellPriceLines }}</textarea>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             @if (! empty($raw_listings))
                 <div class="pp-section">
                     <h3>Previous listings here
