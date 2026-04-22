@@ -27,6 +27,7 @@
         .pp-icon { width: 18px; height: 18px; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
         .pp-band-stock_more    { color: #86efac; font-weight: 700; }
         .pp-band-test_more     { color: #e5a900; font-weight: 700; }
+        .pp-band-test_now      { color: #ffc107; font-weight: 700; }
         .pp-band-slow_capital  { color: #c792ea; font-weight: 700; }
         .pp-band-reduce        { color: #fca5a5; font-weight: 700; }
         .pp-band-hold          { color: #4fd0d0; }
@@ -79,6 +80,10 @@
                     <div class="value pp-band-test_more">{{ $totals['band_counts']['test_more'] ?? 0 }}</div>
                 </div>
                 <div class="pp-tile">
+                    <div class="label">Test now · regional demand</div>
+                    <div class="value pp-band-test_now">{{ $totals['band_counts']['test_now'] ?? 0 }}</div>
+                </div>
+                <div class="pp-tile">
                     <div class="label">Slow capital</div>
                     <div class="value pp-band-slow_capital">{{ $totals['band_counts']['slow_capital'] ?? 0 }}</div>
                 </div>
@@ -120,6 +125,7 @@
                                 <th class="num">Listings</th>
                                 <th class="num">Sell-through</th>
                                 <th class="num">ISK/day</th>
+                                <th class="num">Region flow</th>
                                 <th class="num">Jita sell-floor</th>
                                 <th class="num">Sell at (+10-15%)</th>
                                 <th class="num">Qty</th>
@@ -155,6 +161,24 @@
                                     <td class="num">
                                         @if ($r['isk_per_day'] !== null)
                                             {{ $fmtIsk((float) $r['isk_per_day']) }}
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
+                                    </td>
+                                    <td class="num">
+                                        @if ($r['regional_daily_volume_display'] !== null)
+                                            @php
+                                                $tier = $r['regional_demand_tier'] ?? 'none';
+                                                $tierClass = match ($tier) {
+                                                    'strong'   => 'pp-band-stock_more',
+                                                    'moderate' => 'pp-band-test_now',
+                                                    'thin'     => 'pp-band-hold',
+                                                    'minimal', 'none' => 'pp-band-reduce',
+                                                    default    => '',
+                                                };
+                                            @endphp
+                                            <span class="{{ $tierClass }}">{{ number_format((float) $r['regional_daily_volume_display'], 1) }}/d</span>
+                                            <div style="font-size:0.58rem;color:#7a7a82;">{{ $tier }}</div>
                                         @else
                                             <span style="color:#7a7a82;">—</span>
                                         @endif

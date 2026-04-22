@@ -120,8 +120,8 @@ final class PersonalOrderPredictor
         // Sort: priority desc (high → low), then band, then isk_per_day desc, listings desc.
         $priorityRank = ['high' => 0, 'medium' => 1, 'low' => 2];
         $bandRank = [
-            'stock_more' => 0, 'test_more' => 1, 'slow_capital' => 2,
-            'reduce' => 3, 'hold' => 4, 'observing' => 5, 'low_data' => 6,
+            'stock_more' => 0, 'test_more' => 1, 'test_now' => 2, 'slow_capital' => 3,
+            'reduce' => 4, 'hold' => 5, 'observing' => 6, 'low_data' => 7,
         ];
         usort($userTypes, function ($a, $b) use ($priorityRank, $bandRank) {
             return ($priorityRank[$a['priority']] ?? 9) <=> ($priorityRank[$b['priority']] ?? 9)
@@ -499,8 +499,34 @@ final class PersonalOrderPredictor
             $priority = $confidence === 'high' ? 'high' : 'medium';
         }
 
+        // ---- Regional demand ----
+        // Even when the pilot has never sold this item at the station,
+        // market_history tells us whether it moves region-wide. That
+        // flips "no personal signal" from noise into a real read on
+        // the opportunity. Surfaces as a tier + a one-liner.
+        $regional = $this->regionalVerdict($row);
+
         // ---- Reason (context-aware) ----
         $reason = $this->reasonFor($band, $listings, $rate ?? 0.0, $velocity, $priceSignal, $unitsSold);
+        // Always append regional context — it's the answer to "does
+        // this move at all?" which is useful regardless of band.
+        if ($regional['reason']) {
+            $reason .= ' ' . $regional['reason'];
+        }
+
+        // ---- Observing → lift to test_now when region has demand ----
+        // A "listed, no finalised" row with strong regional demand is
+        // more actionable than pure observing — the donor already
+        // knows the item moves, they just haven't closed one here yet.
+        if ($band === 'observing' && in_array($regional['tier'], ['strong', 'moderate'], true)) {
+            $band = 'test_now';
+            $priority = 'medium';
+        }
+
+        // ---- Quantity recompute for test_now ----
+        if ($band === 'test_now' && $suggestedQty === null && $row['regional_daily_volume']) {
+            $suggestedQty = (int) ceil($row['regional_daily_volume'] * 0.05 * self::RUNWAY_DAYS);
+        }
 
         return [
             'band' => $band,
@@ -510,6 +536,8 @@ final class PersonalOrderPredictor
             'priority' => $priority,
             'isk_per_day' => $iskPerDay,
             'price_signal' => $priceSignal,
+            'regional_demand_tier' => $regional['tier'],
+            'regional_daily_volume_display' => $row['regional_daily_volume'] ?? null,
             'suggested_qty' => $suggestedQty,
             'suggested_price_low' => $row['realised_price_p25'],
             'suggested_price_mid' => $realisedMid,
@@ -546,6 +574,36 @@ final class PersonalOrderPredictor
             $base .= ' Selling at a premium vs Jita markup — market rewards this station.';
         }
         return $base;
+    }
+
+    /**
+     * Regional demand verdict for a single row. Uses 30d
+     * market_history volume to categorise whether the item moves
+     * region-wide even when the viewer's personal history is thin.
+     *
+     * @param array<string,mixed> $row
+     * @return array{tier:string, reason:string}
+     */
+    private function regionalVerdict(array $row): array
+    {
+        $vol = $row['regional_daily_volume'] ?? null;
+        if ($vol === null || $vol <= 0) {
+            return ['tier' => 'none', 'reason' => 'No regional volume observed in the last 30 days — local demand only.'];
+        }
+        if ($vol >= 50) {
+            $tier = 'strong';
+            $msg = 'Region moves ' . number_format($vol, 1) . ' units/day — robust demand, worth stocking more.';
+        } elseif ($vol >= 10) {
+            $tier = 'moderate';
+            $msg = 'Region moves ' . number_format($vol, 1) . ' units/day — steady regional demand.';
+        } elseif ($vol >= 1) {
+            $tier = 'thin';
+            $msg = 'Region moves ' . number_format($vol, 1) . ' units/day — thin demand, expect long time to sell.';
+        } else {
+            $tier = 'minimal';
+            $msg = 'Region moves <1 unit/day — very thin regional demand.';
+        }
+        return ['tier' => $tier, 'reason' => $msg];
     }
 
     /**
@@ -654,7 +712,7 @@ final class PersonalOrderPredictor
     private function bandCounts(array $userTypes): array
     {
         $c = [
-            'stock_more' => 0, 'test_more' => 0, 'slow_capital' => 0,
+            'stock_more' => 0, 'test_more' => 0, 'test_now' => 0, 'slow_capital' => 0,
             'reduce' => 0, 'hold' => 0, 'observing' => 0, 'low_data' => 0,
         ];
         foreach ($userTypes as $t) {
