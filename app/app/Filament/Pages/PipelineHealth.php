@@ -6,17 +6,18 @@ namespace App\Filament\Pages;
 
 use App\Filament\Widgets\EnrichmentTrendChart;
 use App\Filament\Widgets\IngestThroughputChart;
-use App\Filament\Widgets\PipelineHealthWidget;
 use App\Filament\Widgets\TheaterRateChart;
+use App\Pipeline\PipelineHealthService;
 use Filament\Pages\Page;
 
 /**
- * /admin/pipeline-health — operator view of data-pipeline throughput.
+ * /admin/pipeline-health — operator dashboard of pipeline throughput,
+ * backlog, and derived-store freshness. Grafana-style uniform tile
+ * grid with status-coloured borders + three trend charts below.
  *
- * Sits next to System Status in the Monitoring group. System Status
- * answers "is the infrastructure up"; this page answers "is the
- * pipeline keeping up" — ingest lag, enrichment backlog, clustering
- * freshness, derived-store sync, queue pressure.
+ * Sections reflect the data flow:
+ *   Ingest → Enrichment → Clustering → Battle pipeline →
+ *   Derived stores → Queues → ESI coverage → Account-local.
  */
 class PipelineHealth extends Page
 {
@@ -34,28 +35,76 @@ class PipelineHealth extends Page
 
     protected static ?string $slug = 'pipeline-health';
 
-    /**
-     * @return array<int, class-string>
-     */
-    protected function getHeaderWidgets(): array
+    /** @return array<string,mixed> */
+    public function getViewData(): array
     {
+        $snapshot = app(PipelineHealthService::class)->snapshot();
+        $sections = $this->sections($snapshot);
+
+        $overall = 'ok';
+        foreach ($snapshot as $m) {
+            $lvl = $m['level'] ?? 'ok';
+            if ($lvl === 'down') { $overall = 'down'; break; }
+            if ($lvl === 'warn') $overall = 'warn';
+        }
+
         return [
-            PipelineHealthWidget::class,
+            'snapshot' => $snapshot,
+            'sections' => $sections,
+            'overall' => $overall,
+            'computed_at' => now()->format('Y-m-d H:i:s T'),
         ];
     }
 
-    public function getHeaderWidgetsColumns(): int|array
+    /**
+     * Layout definition: section title → ordered list of metric keys.
+     * Rendering + status colours live in the blade.
+     *
+     * @param array<string,mixed> $snapshot
+     * @return array<int, array{title:string, icon:string, keys:list<string>}>
+     */
+    private function sections(array $snapshot): array
     {
-        return 1;
+        return [
+            [
+                'title' => 'Ingest',
+                'icon' => 'heroicon-o-arrow-down-tray',
+                'keys' => ['ingest_lag', 'content_lag', 'r2z2_cursor', 'shells'],
+            ],
+            [
+                'title' => 'Enrichment + clustering',
+                'icon' => 'heroicon-o-cpu-chip',
+                'keys' => ['enrich_backlog', 'cluster_lag'],
+            ],
+            [
+                'title' => 'Battle pipeline',
+                'icon' => 'heroicon-o-squares-plus',
+                'keys' => ['battle_pipeline', 'combat_anomalies'],
+            ],
+            [
+                'title' => 'Queues',
+                'icon' => 'heroicon-o-queue-list',
+                'keys' => ['horizon_queues', 'failed_jobs'],
+            ],
+            [
+                'title' => 'Derived stores',
+                'icon' => 'heroicon-o-server-stack',
+                'keys' => ['neo4j_edges', 'opensearch_docs', 'market_history', 'hub_catchments'],
+            ],
+            [
+                'title' => 'ESI coverage',
+                'icon' => 'heroicon-o-globe-alt',
+                'keys' => ['esi_backlog', 'corp_history', 'alliance_history'],
+            ],
+            [
+                'title' => 'Account-local',
+                'icon' => 'heroicon-o-user-circle',
+                'keys' => ['personal_orders'],
+            ],
+        ];
     }
 
-    /**
-     * Charts render below the stat cards. Two-column layout so
-     * ingest-throughput + theater-rate sit side by side, and the
-     * enrichment-trend bar gets the full width underneath.
-     *
-     * @return array<int, class-string>
-     */
+    /** @return array<int, class-string> */
     protected function getFooterWidgets(): array
     {
         return [

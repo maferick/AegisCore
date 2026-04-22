@@ -73,6 +73,10 @@ class PipelineHealthService
             'corp_history' => $this->probeCorpHistoryCoverage(),
             'alliance_history' => $this->probeAllianceHistoryCoverage(),
             'opensearch_docs' => $this->probeOpenSearchDocs(),
+            'battle_pipeline' => $this->probeBattlePipeline(),
+            'combat_anomalies' => $this->probeCombatAnomalies(),
+            'personal_orders' => $this->probePersonalOrders(),
+            'hub_catchments' => $this->probeHubCatchments(),
         ];
 
         try {
@@ -486,6 +490,135 @@ class PipelineHealthService
             return self::level(number_format($count).' docs indexed', 'ok', ['count' => $count]);
         } catch (Throwable $e) {
             return self::level('OpenSearch unreachable', 'warn', ['error' => $e->getMessage()]);
+        }
+    }
+
+    // -------------------------------------------------------------- //
+    // Battle pipeline + downstream derived tables
+    // -------------------------------------------------------------- //
+
+    private function probeBattlePipeline(): array
+    {
+        try {
+            $pending = (int) DB::selectOne(<<<'SQL'
+                SELECT COUNT(*) AS n FROM (
+                  SELECT bt.id
+                    FROM battle_theaters bt
+                    JOIN battle_theater_participants p ON p.theater_id = bt.id
+                    LEFT JOIN battle_character_role_features f ON f.battle_id = bt.id AND f.alliance_id = p.alliance_id
+                   WHERE bt.locked_at IS NOT NULL AND p.alliance_id > 0 AND f.battle_id IS NULL
+                   GROUP BY bt.id, p.alliance_id
+                   HAVING COUNT(DISTINCT p.character_id) >= 10
+                ) t
+            SQL)->n;
+            $doneLast1h = (int) DB::table('battle_character_role_features')
+                ->where('updated_at', '>=', now()->subHour())
+                ->count(DB::raw('DISTINCT battle_id, alliance_id'));
+            $etaHours = $doneLast1h > 0 ? (int) ceil($pending / $doneLast1h) : null;
+            // Level reflects both depth + drain trend. If we're
+            // making net progress (done_last_1h > 0), a deep queue
+            // is just normal backlog; only treat as down when the
+            // ETA would breach a week at current rate.
+            if ($doneLast1h === 0 && $pending > 0) {
+                $level = 'down';
+            } elseif ($etaHours !== null && $etaHours > 168) {
+                $level = 'down';
+            } elseif ($pending < 10000) {
+                $level = 'ok';
+            } else {
+                $level = 'warn';
+            }
+            $detail = number_format($pending) . ' pairs pending · '
+                . number_format($doneLast1h) . '/hr'
+                . ($etaHours !== null ? ' · ETA ' . $etaHours . 'h' : '');
+            return self::level($detail, $level, [
+                'pending' => $pending,
+                'done_last_1h' => $doneLast1h,
+                'eta_hours' => $etaHours,
+            ]);
+        } catch (Throwable $e) {
+            return self::level('probe failed: ' . $e->getMessage(), 'down');
+        }
+    }
+
+    private function probeCombatAnomalies(): array
+    {
+        try {
+            $row = DB::selectOne(<<<'SQL'
+                SELECT COUNT(*) AS total,
+                       SUM(combat_anomaly_band='reinforces') AS reinforces,
+                       SUM(combat_anomaly_band='weakens') AS weakens,
+                       SUM(combat_anomaly_band='insufficient_data') AS insufficient,
+                       MAX(computed_at) AS latest
+                  FROM ci_combat_anomalies
+            SQL);
+            if ($row === null || (int) $row->total === 0) {
+                return self::level('no rows computed', 'warn');
+            }
+            $ageHours = $row->latest ? (int) abs((int) now()->diffInHours(Carbon::parse($row->latest))) : null;
+            $level = $ageHours !== null && $ageHours > 30 ? 'warn' : 'ok';
+            return self::level(
+                number_format((int) $row->total) . ' rows · ' . (int) $row->reinforces . ' reinforces · ' . (int) $row->weakens . ' weakens · ' . (int) $row->insufficient . ' insufficient',
+                $level,
+                [
+                    'total' => (int) $row->total,
+                    'reinforces' => (int) $row->reinforces,
+                    'weakens' => (int) $row->weakens,
+                    'insufficient' => (int) $row->insufficient,
+                    'age_hours' => $ageHours,
+                ],
+            );
+        } catch (Throwable $e) {
+            return self::level('probe failed: ' . $e->getMessage(), 'down');
+        }
+    }
+
+    private function probePersonalOrders(): array
+    {
+        try {
+            $row = DB::selectOne(<<<'SQL'
+                SELECT COUNT(*) AS total,
+                       SUM(state='open') AS open_n,
+                       MAX(observed_at) AS latest
+                  FROM personal_market_orders
+            SQL);
+            if ($row === null) return self::level('no orders table', 'warn');
+            $ageMin = $row->latest ? (int) abs((int) now()->diffInMinutes(Carbon::parse($row->latest))) : null;
+            $level = $ageMin === null ? 'warn' : ($ageMin < 90 ? 'ok' : ($ageMin < 180 ? 'warn' : 'down'));
+            $detail = number_format((int) $row->total) . ' rows · ' . number_format((int) ($row->open_n ?? 0)) . ' open';
+            if ($ageMin !== null) $detail .= ' · sync ' . $ageMin . 'm ago';
+            return self::level($detail, $level, [
+                'total' => (int) $row->total,
+                'open' => (int) ($row->open_n ?? 0),
+                'age_minutes' => $ageMin,
+            ]);
+        } catch (Throwable $e) {
+            return self::level('probe failed: ' . $e->getMessage(), 'down');
+        }
+    }
+
+    private function probeHubCatchments(): array
+    {
+        try {
+            $row = DB::selectOne(<<<'SQL'
+                SELECT COUNT(*) AS n, MAX(computed_at) AS latest,
+                       COUNT(DISTINCT hub_id) AS hubs
+                  FROM market_hub_catchments
+            SQL);
+            if ($row === null || (int) $row->n === 0) {
+                return self::level('no catchments', 'warn');
+            }
+            $ageHours = $row->latest ? (int) abs((int) now()->diffInHours(Carbon::parse($row->latest))) : null;
+            $level = $ageHours !== null && $ageHours > 48 ? 'warn' : 'ok';
+            $detail = number_format((int) $row->n) . ' systems · ' . (int) $row->hubs . ' hubs'
+                . ($ageHours !== null ? ' · rebuilt ' . $ageHours . 'h ago' : '');
+            return self::level($detail, $level, [
+                'systems' => (int) $row->n,
+                'hubs' => (int) $row->hubs,
+                'age_hours' => $ageHours,
+            ]);
+        } catch (Throwable $e) {
+            return self::level('probe failed: ' . $e->getMessage(), 'down');
         }
     }
 
