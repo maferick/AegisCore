@@ -234,6 +234,8 @@ final class PersonalOrderPredictor
                     'sell_listings_closed' => 0,
                     'sell_listings_unsold' => 0,
                     'sell_listings_partial' => 0,
+                    'open_listings' => 0, 'open_units' => 0,
+                    'open_price_min' => null, 'open_price_max' => null,
                     'units_listed' => 0, 'units_sold' => 0,
                     'listing_days' => [],
                     'realised_prices' => [],
@@ -252,6 +254,14 @@ final class PersonalOrderPredictor
             $row['sell_listings']++;
 
             if ($isOpen) {
+                // Track current open exposure: count + units + latest
+                // listed price so the aggregate reflects that the
+                // donor is already acting on a prior recommendation.
+                $row['open_listings'] = ($row['open_listings'] ?? 0) + 1;
+                $row['open_units'] = ($row['open_units'] ?? 0) + ((int) $r->volume_remain);
+                $p = (float) $r->price;
+                if (! isset($row['open_price_min']) || $p < $row['open_price_min']) $row['open_price_min'] = $p;
+                if (! isset($row['open_price_max']) || $p > $row['open_price_max']) $row['open_price_max'] = $p;
                 continue;
             }
             $volTotal = (int) $r->volume_total;
@@ -465,6 +475,13 @@ final class PersonalOrderPredictor
                 $suggestedQty = (int) ceil($row['regional_daily_volume'] * 0.05 * self::RUNWAY_DAYS);
             }
         }
+        // Net: subtract what's already listed open so the buyall
+        // doesn't recommend doubling up on stock already on grid.
+        $openUnits = (int) ($row['open_units'] ?? 0);
+        if ($suggestedQty !== null && $openUnits > 0) {
+            $suggestedQty = max(0, $suggestedQty - $openUnits);
+            if ($suggestedQty === 0) $suggestedQty = null; // omit from buyall
+        }
 
         $expectedDays = $listingDays !== null ? round($listingDays, 1) : null;
 
@@ -513,6 +530,11 @@ final class PersonalOrderPredictor
         if ($regional['reason']) {
             $reason .= ' ' . $regional['reason'];
         }
+        if (! empty($row['open_listings'])) {
+            $reason .= sprintf(' Currently %d open listing%s (%d units).',
+                $row['open_listings'], $row['open_listings'] === 1 ? '' : 's',
+                (int) ($row['open_units'] ?? 0));
+        }
 
         // ---- Observing → lift to test_now when region has demand ----
         // A "listed, no finalised" row with strong regional demand is
@@ -538,6 +560,10 @@ final class PersonalOrderPredictor
             'price_signal' => $priceSignal,
             'regional_demand_tier' => $regional['tier'],
             'regional_daily_volume_display' => $row['regional_daily_volume'] ?? null,
+            'open_listings' => (int) ($row['open_listings'] ?? 0),
+            'open_units' => (int) ($row['open_units'] ?? 0),
+            'open_price_min' => $row['open_price_min'] ?? null,
+            'open_price_max' => $row['open_price_max'] ?? null,
             'suggested_qty' => $suggestedQty,
             'suggested_price_low' => $row['realised_price_p25'],
             'suggested_price_mid' => $realisedMid,

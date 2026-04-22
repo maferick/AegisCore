@@ -123,6 +123,7 @@
                                 <th>Confidence</th>
                                 <th>Velocity</th>
                                 <th class="num">Listings</th>
+                                <th class="num">Open now</th>
                                 <th class="num">Sell-through</th>
                                 <th class="num">ISK/day</th>
                                 <th class="num">Region flow</th>
@@ -153,6 +154,13 @@
                                         @endif
                                     </td>
                                     <td class="num">{{ $r['listings'] }}</td>
+                                    <td class="num">
+                                        @if (! empty($r['open_listings']))
+                                            <span class="pp-band-stock_more">{{ $r['open_listings'] }} · {{ number_format($r['open_units']) }}u</span>
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
+                                    </td>
                                     <td class="num">
                                         @if ($r['sell_through_rate'] !== null)
                                             {{ number_format((float) $r['sell_through_rate'] * 100, 0) }}%
