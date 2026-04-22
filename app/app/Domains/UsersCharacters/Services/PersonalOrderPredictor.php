@@ -139,6 +139,28 @@ final class PersonalOrderPredictor
         // raw table is the evidence.
         $rawListings = $this->rawSellListings($characterIds, $locationId);
 
+        // "Still worth it?" — decorate every raw row with current
+        // Jita + margin vs the historical sell price, so the donor
+        // can see at a glance whether a previous winner is still
+        // profitable given today's market.
+        $rawTypeIds = array_values(array_unique(array_map(fn ($r) => $r['type_id'], $rawListings)));
+        $rawJita = $rawTypeIds ? $this->jitaSellFloor($rawTypeIds) : [];
+        foreach ($rawListings as &$l) {
+            $jita = $rawJita[$l['type_id']] ?? null;
+            $l['jita_now'] = $jita;
+            if ($jita !== null && $jita > 0) {
+                $margin = ($l['price'] - $jita) / $jita;
+                $l['margin_pct'] = round($margin * 100, 1);
+                $l['viability'] = $margin >= self::MARKUP_LOW
+                    ? 'good'
+                    : ($margin >= 0 ? 'tight' : 'underwater');
+            } else {
+                $l['margin_pct'] = null;
+                $l['viability'] = 'unknown';
+            }
+        }
+        unset($l);
+
         $totals = [
             'types' => count($userTypes),
             'opportunity_types' => count($opportunityTypes),

@@ -200,7 +200,10 @@
                                 <th>Issued</th>
                                 <th>Character</th>
                                 <th>Item</th>
-                                <th class="num">Price</th>
+                                <th class="num">Sold at</th>
+                                <th class="num">Jita now</th>
+                                <th class="num">Margin vs Jita</th>
+                                <th>Still viable?</th>
                                 <th class="num">Qty (sold / listed)</th>
                                 <th>Outcome</th>
                                 <th>Last seen</th>
@@ -216,6 +219,18 @@
                                         'unsold'   => 'pp-band-reduce',
                                         'open'     => 'pp-band-try_new',
                                         default    => '',
+                                    };
+                                    $viabClass = match ($l['viability']) {
+                                        'good'       => 'pp-band-stock_more',
+                                        'tight'      => 'pp-band-test_more',
+                                        'underwater' => 'pp-band-reduce',
+                                        default      => 'pp-band-low_data',
+                                    };
+                                    $viabLabel = match ($l['viability']) {
+                                        'good'       => 'yes · restock',
+                                        'tight'      => 'tight · watch',
+                                        'underwater' => 'no · don\'t restock',
+                                        default      => 'unknown',
                                     };
                                 @endphp
                                 <tr>
@@ -235,6 +250,21 @@
                                         {{ $l['type_name'] }}
                                     </td>
                                     <td class="num">{{ $fmtIsk((float) $l['price']) }}</td>
+                                    <td class="num">
+                                        @if ($l['jita_now'] !== null)
+                                            {{ $fmtIsk((float) $l['jita_now']) }}
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
+                                    </td>
+                                    <td class="num">
+                                        @if ($l['margin_pct'] !== null)
+                                            <span class="{{ $viabClass }}">{{ sprintf('%+.1f%%', $l['margin_pct']) }}</span>
+                                        @else
+                                            <span style="color:#7a7a82;">—</span>
+                                        @endif
+                                    </td>
+                                    <td><span class="{{ $viabClass }}">{{ $viabLabel }}</span></td>
                                     <td class="num">
                                         {{ number_format($l['volume_sold']) }} / {{ number_format($l['volume_total']) }}
                                     </td>
