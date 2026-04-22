@@ -59,6 +59,9 @@ class MyOrders extends Page
         $stateMode = (string) request()->query('state', 'open');
         if (! in_array($stateMode, ['open', 'closed', 'all'], true)) $stateMode = 'open';
 
+        $sideMode = (string) request()->query('side', 'all');
+        if (! in_array($sideMode, ['all', 'buy', 'sell'], true)) $sideMode = 'all';
+
         $characterFilter = (int) request()->query('character', 0);
         $characterIds = $characters->pluck('character_id')->map(fn ($v) => (int) $v)->all();
 
@@ -75,6 +78,11 @@ class MyOrders extends Page
             $q->where('o.state', 'open');
         } elseif ($stateMode === 'closed') {
             $q->whereIn('o.state', ['expired', 'cancelled', 'closed']);
+        }
+        if ($sideMode === 'buy') {
+            $q->where('o.is_buy', 1);
+        } elseif ($sideMode === 'sell') {
+            $q->where('o.is_buy', 0);
         }
         if ($characterFilter > 0 && in_array($characterFilter, $characterIds, true)) {
             $q->where('o.character_id', $characterFilter);
@@ -114,12 +122,17 @@ class MyOrders extends Page
             ];
         }
 
-        // Totals for KPI tiles (always over the filtered slice).
+        // Totals for KPI tiles (always over the filtered slice,
+        // ignoring buy/sell filter so user can see the full split).
         $totalsOpen = DB::table('personal_market_orders')
             ->whereIn('character_id', $characterIds)
             ->where('state', 'open')
+            ->when($characterFilter > 0 && in_array($characterFilter, $characterIds, true),
+                fn ($x) => $x->where('character_id', $characterFilter))
             ->selectRaw('SUM(CASE WHEN is_buy=1 THEN price*volume_remain ELSE 0 END) AS buy_isk,
                          SUM(CASE WHEN is_buy=0 THEN price*volume_remain ELSE 0 END) AS sell_isk,
+                         SUM(CASE WHEN is_buy=1 THEN 1 ELSE 0 END) AS buy_n,
+                         SUM(CASE WHEN is_buy=0 THEN 1 ELSE 0 END) AS sell_n,
                          COUNT(*) AS n')
             ->first();
 
@@ -143,6 +156,7 @@ class MyOrders extends Page
             'character_meta' => $charMeta,
             'main_character_id' => $mainCharId,
             'state_mode' => $stateMode,
+            'side_mode' => $sideMode,
             'character_filter' => $characterFilter,
             'orders' => $orders,
             'locations' => $locations,

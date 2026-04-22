@@ -73,10 +73,25 @@
                     @endforeach
                 </select>
 
+                @php
+                    $qs = function (array $overrides) use ($state_mode, $side_mode, $character_filter) {
+                        $params = array_merge([
+                            'state' => $state_mode,
+                            'side' => $side_mode,
+                            'character' => $character_filter > 0 ? (string) $character_filter : null,
+                        ], $overrides);
+                        $params = array_filter($params, fn ($v) => $v !== null && $v !== '');
+                        return '?' . http_build_query($params);
+                    };
+                @endphp
                 <div class="mo-tabs">
                     @foreach (['open' => 'Open', 'closed' => 'History', 'all' => 'All'] as $key => $label)
-                        <a href="?state={{ $key }}{{ $character_filter > 0 ? '&character=' . $character_filter : '' }}"
-                           class="{{ $state_mode === $key ? 'active' : '' }}">{{ $label }}</a>
+                        <a href="{{ $qs(['state' => $key]) }}" class="{{ $state_mode === $key ? 'active' : '' }}">{{ $label }}</a>
+                    @endforeach
+                </div>
+                <div class="mo-tabs">
+                    @foreach (['all' => 'Both', 'buy' => 'Buy', 'sell' => 'Sell'] as $key => $label)
+                        <a href="{{ $qs(['side' => $key]) }}" class="{{ $side_mode === $key ? 'active' : '' }}">{{ $label }}</a>
                     @endforeach
                 </div>
                 <span style="color:#3a3a42;margin-left:auto;font-size:0.7rem;">
@@ -87,15 +102,20 @@
             <div class="mo-totals">
                 <div class="mo-tile">
                     <div class="label">Open orders</div>
-                    <div class="value">{{ (int) ($totals_open->n ?? 0) }}</div>
+                    <div class="value">{{ (int) ($totals_open->n ?? 0) }}
+                        <span style="font-size:0.7rem;color:#7a7a82;">·
+                            <span class="mo-sell">{{ (int) ($totals_open->sell_n ?? 0) }} sell</span>
+                            / <span class="mo-buy">{{ (int) ($totals_open->buy_n ?? 0) }} buy</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="mo-tile">
                     <div class="label">Sell-side ISK on grid</div>
-                    <div class="value">{{ $fmtIsk((float) ($totals_open->sell_isk ?? 0)) }}</div>
+                    <div class="value mo-sell">{{ $fmtIsk((float) ($totals_open->sell_isk ?? 0)) }}</div>
                 </div>
                 <div class="mo-tile">
                     <div class="label">Buy-side ISK on grid</div>
-                    <div class="value">{{ $fmtIsk((float) ($totals_open->buy_isk ?? 0)) }}</div>
+                    <div class="value mo-buy">{{ $fmtIsk((float) ($totals_open->buy_isk ?? 0)) }}</div>
                 </div>
             </div>
 
