@@ -384,7 +384,7 @@
                 can actually see — ESI enforces the ACL, not us.
             </p>
 
-            @if ($market_token === null)
+            @if ($market_tokens->isEmpty())
                 @if ($market_redirect_url)
                     <a class="btn" href="{{ $market_redirect_url }}">Authorise market data</a>
                 @else
@@ -396,37 +396,64 @@
                     <tr>
                         <th>Character</th>
                         <th>Market scope</th>
+                        <th>Orders scope</th>
                         <th>Access token</th>
                         <th>Expires</th>
                         <th></th>
                     </tr>
                     </thead>
                     <tbody>
-                    <tr>
-                        <td class="mono">{{ $market_token->character_name }} <span class="badge muted">#{{ $market_token->character_id }}</span></td>
-                        <td>
-                            @if ($market_token->hasScope('esi-markets.structure_markets.v1'))
-                                <span class="badge ok">granted</span>
-                            @else
-                                <span class="badge bad">missing</span>
-                            @endif
-                        </td>
-                        <td>
-                            @if ($market_token->isAccessTokenFresh())
-                                <span class="badge ok">fresh</span>
-                            @else
-                                <span class="badge warn">stale — will refresh on next use</span>
-                            @endif
-                        </td>
-                        <td class="mono">{{ $market_token->expires_at?->format('Y-m-d H:i') ?? '—' }}</td>
-                        <td>
-                            @if ($market_redirect_url)
-                                <a class="btn secondary" href="{{ $market_redirect_url }}">Re-authorise</a>
-                            @endif
-                        </td>
-                    </tr>
+                    @foreach ($market_tokens as $tok)
+                        @php $isMain = $user->main_character_id && $tok->character_id === optional($user->mainCharacter)->character_id; @endphp
+                        <tr>
+                            <td class="mono">
+                                {{ $tok->character_name }}
+                                <span class="badge muted">#{{ $tok->character_id }}</span>
+                                @if ($isMain)
+                                    <span class="badge ok" style="margin-left:0.2rem;">main</span>
+                                @else
+                                    <span class="badge muted" style="margin-left:0.2rem;">alt</span>
+                                @endif
+                            </td>
+                            <td>
+                                @if ($tok->hasScope('esi-markets.structure_markets.v1'))
+                                    <span class="badge ok">granted</span>
+                                @else
+                                    <span class="badge bad">missing</span>
+                                @endif
+                            </td>
+                            <td>
+                                @if ($tok->hasScope('esi-markets.read_character_orders.v1'))
+                                    <span class="badge ok">granted</span>
+                                @else
+                                    <span class="badge warn">missing — re-auth needed for /my-orders</span>
+                                @endif
+                            </td>
+                            <td>
+                                @if ($tok->isAccessTokenFresh())
+                                    <span class="badge ok">fresh</span>
+                                @else
+                                    <span class="badge warn">stale — will refresh on next use</span>
+                                @endif
+                            </td>
+                            <td class="mono">{{ $tok->expires_at?->format('Y-m-d H:i') ?? '—' }}</td>
+                            <td>
+                                @if ($market_redirect_url)
+                                    <a class="btn secondary" href="{{ $market_redirect_url }}">Re-authorise</a>
+                                @endif
+                            </td>
+                        </tr>
+                    @endforeach
                     </tbody>
                 </table>
+                @if ($market_redirect_url)
+                    <div style="margin-top:0.6rem;">
+                        <a class="btn" href="{{ $market_redirect_url }}">+ Authorise another character</a>
+                        <span class="subtitle" style="margin-left:0.5rem;font-size:0.78rem;">
+                            Logs in through EVE SSO as the character you want to authorise — existing tokens are preserved.
+                        </span>
+                    </div>
+                @endif
             @endif
         </section>
 

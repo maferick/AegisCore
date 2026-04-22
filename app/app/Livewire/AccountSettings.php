@@ -147,6 +147,7 @@ class AccountSettings extends Component
                 ? route('auth.eve.market.redirect')
                 : null,
             'market_token' => $this->marketToken(),
+            'market_tokens' => $this->marketTokens(),
             'watched_structures' => $this->watchedStructures(),
             'standings_by_owner' => $this->standingsByOwner(),
             'standings_token_missing_scopes' => $this->standingsTokenMissingScopes(),
@@ -223,15 +224,28 @@ class AccountSettings extends Component
 
     private function marketToken(): ?EveMarketToken
     {
+        $tokens = $this->marketTokens();
+        if ($tokens->isEmpty()) return null;
         $user = Auth::user();
-        if ($user === null) {
-            return null;
+        $mainCharId = $user?->mainCharacter?->character_id;
+        if ($mainCharId) {
+            $main = $tokens->firstWhere('character_id', $mainCharId);
+            if ($main) return $main;
         }
+        return $tokens->first();
+    }
 
+    /**
+     * @return \Illuminate\Support\Collection<int, EveMarketToken>
+     */
+    private function marketTokens()
+    {
+        $user = Auth::user();
+        if ($user === null) return collect();
         return EveMarketToken::query()
             ->where('user_id', $user->id)
-            ->orderBy('updated_at', 'desc')
-            ->first();
+            ->orderByDesc('updated_at')
+            ->get();
     }
 
     /** @return Collection<int, MarketWatchedLocation> */
