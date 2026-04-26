@@ -36,6 +36,28 @@ final class CounterIntelDossierService
     private const PHASE1_CAVEAT = 'Early signal model — review aid only, thresholds under calibration.';
 
     /**
+     * Reason codes that depend on a viewer-bloc-relative comparison
+     * (hostile alliance set, viewer-relative graph community). These
+     * count toward the "hostile-relative present" rule used in the
+     * critical-band promotion path.
+     */
+    private const HOSTILE_RELATIVE_REASONS = [
+        'community_mismatch',
+        'asymmetric_pair',
+        'hostile_triangulation',
+    ];
+
+    /**
+     * Reason codes whose render is suppressed when the pilot's
+     * declared alliance is NOT in the viewer's friendly bloc set.
+     * These are hostile-relative metrics that fire baseline-true
+     * for known-hostile alliance members and would create review
+     * noise rather than signal. Still computed + stored, just hidden
+     * from the rendered band.
+     */
+    private const IN_BLOC_ONLY_REASONS = ['community_mismatch'];
+
+    /**
      * @return array<string, mixed>
      */
     public function dossier(int $characterId, int $viewerBlocId): array
@@ -97,7 +119,9 @@ final class CounterIntelDossierService
         $similarPilots = $this->similarPilots($characterId);
         $coJoins = $this->coordinatedJoins($characterId, $affiliation['current']['alliance_id'] ?? null, $affiliation['current']['start_date'] ?? null, $viewerBlocId);
         $combat = $this->combatAnomaly($characterId, $viewerBlocId);
-        $phase1 = $this->phase1Signals($feature, $anomaly);
+        $declaredAllyId = $affiliation['current']['alliance_id'] ?? null;
+        $friendlyAllies = $this->friendlyAllianceIds($viewerBlocId);
+        $phase1 = $this->phase1Signals($feature, $anomaly, $declaredAllyId, $friendlyAllies);
 
         return [
             'not_found' => false,
@@ -121,31 +145,62 @@ final class CounterIntelDossierService
 
     /**
      * Phase 1 Counter-Intel signal expansion. Renders one evidence
-     * sentence per signal that crossed its review threshold. Aggregate
-     * review band derived from how many signals are flashing.
+     * sentence per signal that crossed its review threshold and bands
+     * the aggregate by co-fire rules. Each signal carries machine-
+     * readable metadata (reason_code, confidence, sample_size, raw
+     * metric values) so consumers can audit the call without reaching
+     * back into the feature row.
      *
-     * Each signal entry: ['key' => string, 'severity' => 'flag'|'note',
-     * 'text' => string]. UI renders 'flag' in amber/red, 'note' as a
-     * muted line.
+     * Phase 1.5 banding rules (conservative co-fire):
+     *   - clean      = 0 signals
+     *   - note_only  = 1 signal
+     *   - elevated   = 2 independent signals
+     *   - high       = 3 independent signals
+     *   - critical   = 4+ signals OR 3 signals when at least one is
+     *                  hostile-relative
+     *   - No single signal alone produces critical.
      *
-     * @return array{
-     *   signals: list<array{key:string,severity:string,text:string}>,
-     *   flag_count: int,
-     *   note_count: int,
-     *   band: 'critical'|'elevated'|'note_only'|'clean'|'insufficient_history',
-     *   evidence_summary: string,
-     * }
+     * Confidence demotion: if the dossier-level confidence is "low",
+     * the band drops one level (critical → high → elevated → note_only).
+     * Drivers: small sample size, tiny cohort, missing relative data,
+     * fresh corp join, ESI history artefact density, low battle count.
+     *
+     * community_mismatch render is suppressed when the pilot's declared
+     * alliance is NOT in the viewer bloc's friendly set. Such fires are
+     * baseline-true for known-hostile alliance members and would create
+     * review noise. The signal stays in the rendered list as a
+     * suppressed/diagnostic entry so the audit table can see it.
+     *
+     * @param  list<int>  $friendlyAllyIds  alliances labelled to the viewer's bloc
+     * @return array<string, mixed>
      */
-    private function phase1Signals(object $feature, ?object $anomaly): array
-    {
+    private function phase1Signals(
+        object $feature,
+        ?object $anomaly,
+        ?int $declaredAllyId,
+        array $friendlyAllyIds,
+    ): array {
+        $confidencePenalties = [];
+        $sampleSizes = [
+            'battles' => (int) ($feature->battles ?? 0),
+            'killmails_attacker' => (int) ($feature->killmails_attacker ?? 0),
+            'killmails_victim' => (int) ($feature->killmails_victim ?? 0),
+            'cohort_size' => (int) ($anomaly?->cohort_size ?? 0),
+            'days_since_last_activity' => (int) ($feature->days_since_last_activity ?? 9999),
+        ];
+
         if ((int) ($feature->has_sufficient_history ?? 0) !== 1) {
             return [
                 'signals' => [],
                 'flag_count' => 0,
                 'note_count' => 0,
                 'band' => 'insufficient_history',
+                'confidence' => 'insufficient',
+                'confidence_factors' => ['has_sufficient_history' => false],
+                'sample_sizes' => $sampleSizes,
                 'evidence_summary' => 'Phase 1 signals deferred until pilot has enough activity history.',
                 'caveat' => self::PHASE1_CAVEAT,
+                'declared_in_bloc' => $declaredAllyId !== null && in_array($declaredAllyId, $friendlyAllyIds, true),
             ];
         }
 
@@ -157,91 +212,115 @@ final class CounterIntelDossierService
         $daysToCorp = $feature->dormancy_days_to_corp_change !== null ? (int) $feature->dormancy_days_to_corp_change : null;
         if ($gap !== null && $reactAt !== null && $gap >= 180) {
             $months = (int) round($gap / 30);
-            $reactDate = (string) $reactAt;
-            if ($daysToCorp !== null && $daysToCorp <= 30) {
-                $signals[] = [
-                    'key' => 'dormancy_reactivation',
-                    'severity' => 'flag',
-                    'text' => "Reactivated after {$months}mo dormancy on " . substr($reactDate, 0, 10)
-                        . " and changed corp within {$daysToCorp} day(s) — strategic-timing reactivation.",
-                ];
-            } else {
-                $signals[] = [
-                    'key' => 'dormancy_reactivation',
-                    'severity' => 'note',
-                    'text' => "Reactivated after {$months}mo dormancy on " . substr($reactDate, 0, 10) . '.',
-                ];
-            }
+            $reactDate = substr((string) $reactAt, 0, 10);
+            $strategic = $daysToCorp !== null && $daysToCorp <= 30;
+            $signals[] = [
+                'key' => 'dormancy_reactivation',
+                'reason_code' => 'dormancy_reactivation',
+                'severity' => $strategic ? 'flag' : 'note',
+                'text' => $strategic
+                    ? "Reactivated after {$months}mo dormancy on {$reactDate} and changed corp within {$daysToCorp} day(s) — strategic-timing reactivation."
+                    : "Reactivated after {$months}mo dormancy on {$reactDate}.",
+                'confidence' => $strategic ? 'high' : 'medium',
+                'sample_size' => $sampleSizes['killmails_attacker'] + $sampleSizes['killmails_victim'],
+                'raw' => [
+                    'dormancy_max_gap_days' => $gap,
+                    'dormancy_reactivated_at' => (string) $reactAt,
+                    'dormancy_days_to_corp_change' => $daysToCorp,
+                ],
+            ];
         }
 
-        // §3.1 Corp-hopping cadence — defaulted to NOTE in stabilization
-        // pass after the first run flagged 47% of population. The flag
-        // promotion is held back until Phase 2 calibration normalises
-        // against per-alliance churn baselines.
-        //
-        // Stabilization rule: corp_hopping graduates from note to flag
-        // only when ALL three are true:
-        //   - short_count >= 3 (real <=30d stays after ESI noise filter)
-        //   - distinct_corps_all_time >= 6
-        //   - at least one OTHER signal already fires
-        // The "co-fire" gate is checked in a second pass below.
+        // §3.1 Corp-hopping cadence. Defaulted to note; promotes to flag
+        // only via the co-fire pass below (uncalibrated single signal
+        // would otherwise dominate review queues — see diagnostic doc).
         $shortCount = $feature->corp_tenure_short_count !== null
             ? (int) $feature->corp_tenure_short_count
             : null;
         $stdev = $feature->corp_tenure_stdev_days !== null ? (float) $feature->corp_tenure_stdev_days : null;
         $distinctCorps = (int) ($feature->distinct_corps_all_time ?? 0);
-        $corpHoppingNoteIdx = null;
+        $corpHoppingIdx = null;
         $corpHoppingPromotable = false;
         if ($shortCount !== null && $shortCount >= 3 && $distinctCorps >= 6) {
             $stdevText = $stdev !== null ? sprintf(' (stdev %.0fd)', $stdev) : '';
             $signals[] = [
                 'key' => 'corp_hopping',
+                'reason_code' => 'corp_hopping',
                 'severity' => 'note',
                 'text' => "Corp-hop cadence: {$distinctCorps} corps lifetime, {$shortCount} short stays (1–30d){$stdevText}.",
+                'confidence' => $shortCount >= 5 ? 'medium' : 'low',
+                'sample_size' => $distinctCorps,
+                'raw' => [
+                    'distinct_corps_all_time' => $distinctCorps,
+                    'corp_tenure_short_count' => $shortCount,
+                    'corp_tenure_stdev_days' => $stdev,
+                    'corp_tenure_min_days' => $feature->corp_tenure_min_days,
+                ],
             ];
-            $corpHoppingNoteIdx = array_key_last($signals);
+            $corpHoppingIdx = array_key_last($signals);
             $corpHoppingPromotable = true;
         } elseif ($distinctCorps >= 8) {
             $signals[] = [
                 'key' => 'corp_hopping',
+                'reason_code' => 'corp_hopping',
                 'severity' => 'note',
                 'text' => "Corp history: {$distinctCorps} corps lifetime — high churn worth a glance.",
+                'confidence' => 'low',
+                'sample_size' => $distinctCorps,
+                'raw' => ['distinct_corps_all_time' => $distinctCorps],
             ];
         }
 
-        // §2 Battle-only character — composite score from solo/sg/cheap loss profile.
+        // §2 Battle-only character profile.
         $battleOnly = $feature->battle_only_score !== null ? (float) $feature->battle_only_score : null;
+        $atkN = $sampleSizes['killmails_attacker'];
         if ($battleOnly !== null && $battleOnly >= 0.75) {
             $sgN = (int) ($feature->small_gang_loss_count ?? 0);
             $shipN = (int) ($feature->ship_loss_count ?? 0);
             $signals[] = [
                 'key' => 'battle_only',
+                'reason_code' => 'battle_only',
                 'severity' => 'flag',
                 'text' => sprintf(
                     'Battle-only profile: %d%% abnormal vs typical main pattern (small-gang/solo/cheap losses %d of %d).',
                     (int) round($battleOnly * 100), $sgN, $shipN,
                 ),
+                'confidence' => $atkN >= 50 ? 'high' : ($atkN >= 20 ? 'medium' : 'low'),
+                'sample_size' => $atkN,
+                'raw' => [
+                    'battle_only_score' => $battleOnly,
+                    'small_gang_loss_count' => $sgN,
+                    'ship_loss_count' => $shipN,
+                ],
             ];
         } elseif ($battleOnly !== null && $battleOnly >= 0.55) {
             $signals[] = [
                 'key' => 'battle_only',
+                'reason_code' => 'battle_only',
                 'severity' => 'note',
                 'text' => sprintf('Mostly large-fleet activity (battle-only score %.2f) — limited normal footprint.', $battleOnly),
+                'confidence' => $atkN >= 50 ? 'medium' : 'low',
+                'sample_size' => $atkN,
+                'raw' => ['battle_only_score' => $battleOnly],
             ];
         }
 
-        // §5.3 Pod survival anomaly — escapes pod loss far above peer median.
+        // §5.3 Pod survival anomaly.
         $podSurv = $feature->pod_survival_rate !== null ? (float) $feature->pod_survival_rate : null;
         $shipN = (int) ($feature->ship_loss_count ?? 0);
         if ($podSurv !== null && $shipN >= 10 && $podSurv >= 0.95) {
             $podN = (int) ($feature->pod_loss_count ?? 0);
             $signals[] = [
                 'key' => 'pod_survival',
+                'reason_code' => 'pod_survival',
                 'severity' => 'note',
                 'text' => sprintf(
                     'Pod survival %d%% (%d pods on %d ship losses) — unusually careful or controlled exposure.',
                     (int) round($podSurv * 100), $podN, $shipN,
                 ),
+                'confidence' => $shipN >= 30 ? 'medium' : 'low',
+                'sample_size' => $shipN,
+                'raw' => ['pod_survival_rate' => $podSurv, 'pod_loss_count' => $podN, 'ship_loss_count' => $shipN],
             ];
         }
 
@@ -250,15 +329,19 @@ final class CounterIntelDossierService
         if ($cheap !== null && $shipN >= 10 && $cheap >= 0.70) {
             $signals[] = [
                 'key' => 'cheap_loss',
+                'reason_code' => 'cheap_loss',
                 'severity' => 'note',
                 'text' => sprintf(
                     'Cheap-loss rate %d%% (%d of %d ship losses below 50M ISK) — could be feeding for credibility.',
                     (int) round($cheap * 100), (int) round($cheap * $shipN), $shipN,
                 ),
+                'confidence' => $shipN >= 30 ? 'medium' : 'low',
+                'sample_size' => $shipN,
+                'raw' => ['cheap_loss_rate' => $cheap, 'ship_loss_count' => $shipN],
             ];
         }
 
-        // §1.2 Asymmetric mutual presence — handler/asset directional pattern.
+        // §1.2 Asymmetric mutual presence — directional handler/asset.
         if ($anomaly !== null
             && ($anomaly->asymmetric_top_pair_character_id ?? null) !== null
             && ($anomaly->asymmetric_top_pair_battles ?? 0) >= 5
@@ -272,9 +355,11 @@ final class CounterIntelDossierService
             $inbound = (float) ($anomaly->asymmetric_top_pair_inbound_pct ?? 0);
             $battles = (int) $anomaly->asymmetric_top_pair_battles;
             $delta = $outbound - $inbound;
-            if ($outbound >= 0.40 && $delta >= 0.20) {
+            $strong = $outbound >= 0.40 && $delta >= 0.20;
+            if ($strong) {
                 $signals[] = [
                     'key' => 'asymmetric_pair',
+                    'reason_code' => 'asymmetric_pair',
                     'severity' => 'flag',
                     'text' => sprintf(
                         'Asymmetric counterpart: %s appeared opposite this pilot in %d%% of their active days, but only in %d%% of %s\'s — directional pattern (%d shared days).',
@@ -282,91 +367,253 @@ final class CounterIntelDossierService
                         (int) round($outbound * 100), (int) round($inbound * 100),
                         $oppName, $battles,
                     ),
+                    'confidence' => $battles >= 20 ? 'high' : ($battles >= 10 ? 'medium' : 'low'),
+                    'sample_size' => $battles,
+                    'raw' => [
+                        'opp_character_id' => $oppCid,
+                        'outbound_pct' => $outbound,
+                        'inbound_pct' => $inbound,
+                        'shared_days' => $battles,
+                    ],
                 ];
             } elseif ($outbound >= 0.30) {
                 $signals[] = [
                     'key' => 'asymmetric_pair',
+                    'reason_code' => 'asymmetric_pair',
                     'severity' => 'note',
                     'text' => sprintf(
                         'Frequent hostile counterpart: %s opposite on %d%% of active days (%d shared days).',
                         $oppName, (int) round($outbound * 100), $battles,
                     ),
+                    'confidence' => $battles >= 10 ? 'medium' : 'low',
+                    'sample_size' => $battles,
+                    'raw' => [
+                        'opp_character_id' => $oppCid,
+                        'outbound_pct' => $outbound,
+                        'inbound_pct' => $inbound,
+                        'shared_days' => $battles,
+                    ],
                 ];
             }
         }
 
-        // §4.3 Community vs declared — graph community is mostly hostile.
+        // §4.3 Community vs declared. Suppressed when the pilot's
+        // declared alliance is NOT in the viewer bloc's friendly set —
+        // for known-hostile members, "graph community is mostly hostile"
+        // is baseline truth not a review signal.
+        $declaredInBloc = $declaredAllyId !== null && in_array($declaredAllyId, $friendlyAllyIds, true);
         if ($anomaly !== null
             && $anomaly->community_hostile_pct !== null
             && (int) ($anomaly->community_neighbor_count ?? 0) >= 20
         ) {
             $pct = (float) $anomaly->community_hostile_pct;
             $n = (int) $anomaly->community_neighbor_count;
-            if ($pct >= 0.60) {
-                $signals[] = [
+            $strong = $pct >= 0.60;
+            $intermediate = $pct >= 0.40 && $pct < 0.60;
+            if ($strong || $intermediate) {
+                $entry = [
                     'key' => 'community_mismatch',
-                    'severity' => 'flag',
-                    'text' => sprintf(
-                        'Co-flier graph community is %d%% hostile-tagged (%d neighbours) — graph affiliation contradicts declared bloc.',
-                        (int) round($pct * 100), $n,
-                    ),
+                    'reason_code' => 'community_mismatch',
+                    'severity' => $strong ? 'flag' : 'note',
+                    'text' => $strong
+                        ? sprintf(
+                            'Co-flier graph community is %d%% hostile-tagged (%d neighbours) — graph affiliation contradicts declared bloc.',
+                            (int) round($pct * 100), $n,
+                        )
+                        : sprintf(
+                            'Co-flier mix: %d%% of %d graph neighbours are hostile-tagged.',
+                            (int) round($pct * 100), $n,
+                        ),
+                    'confidence' => $n >= 200 ? 'high' : ($n >= 50 ? 'medium' : 'low'),
+                    'sample_size' => $n,
+                    'raw' => ['community_hostile_pct' => $pct, 'community_neighbor_count' => $n],
                 ];
-            } elseif ($pct >= 0.40) {
-                $signals[] = [
-                    'key' => 'community_mismatch',
-                    'severity' => 'note',
-                    'text' => sprintf(
-                        'Co-flier mix: %d%% of %d graph neighbours are hostile-tagged.',
-                        (int) round($pct * 100), $n,
-                    ),
-                ];
+                if (! $declaredInBloc) {
+                    // Suppress for hostile-alliance members — keep the
+                    // entry but mark it diagnostic-only so it does not
+                    // count toward the band.
+                    $entry['severity'] = 'suppressed';
+                    $entry['suppression_reason'] = 'declared_alliance_not_in_viewer_bloc';
+                    $entry['text'] .= ' [suppressed: pilot is in a hostile-tagged alliance, signal reads as baseline truth here, kept as diagnostic only.]';
+                }
+                $signals[] = $entry;
             }
         }
 
-        // Co-fire promotion: corp_hopping only graduates to a flag
-        // when at least one independent signal is already firing as a
-        // flag. Stops director-facing trust decisions from triggering
-        // on a single-corp-history signal that is still under
-        // calibration.
+        // Co-fire promotion for corp_hopping. Requires another flag
+        // signal (excluding suppressed entries).
         $otherFlagFires = 0;
         foreach ($signals as $idx => $s) {
-            if ($idx === $corpHoppingNoteIdx) continue;
+            if ($idx === $corpHoppingIdx) continue;
             if (($s['severity'] ?? 'note') === 'flag') $otherFlagFires++;
         }
-        if ($corpHoppingPromotable && $corpHoppingNoteIdx !== null && $otherFlagFires >= 1) {
-            $signals[$corpHoppingNoteIdx]['severity'] = 'flag';
-            $signals[$corpHoppingNoteIdx]['text'] .= ' Promoted to flag because another Phase 1 signal is also firing.';
+        if ($corpHoppingPromotable && $corpHoppingIdx !== null && $otherFlagFires >= 1) {
+            $signals[$corpHoppingIdx]['severity'] = 'flag';
+            $signals[$corpHoppingIdx]['text'] .= ' Promoted to flag because another Phase 1 signal is also firing.';
         }
 
+        // Banding from countable signals (suppressed entries excluded).
+        $countable = array_values(array_filter($signals, fn ($s) => ($s['severity'] ?? '') !== 'suppressed'));
         $flagCount = 0;
         $noteCount = 0;
-        foreach ($signals as $s) {
+        $hasHostileRelative = false;
+        foreach ($countable as $s) {
             if ($s['severity'] === 'flag') $flagCount++;
             else $noteCount++;
+            if (in_array($s['reason_code'] ?? '', self::HOSTILE_RELATIVE_REASONS, true)) {
+                $hasHostileRelative = true;
+            }
         }
-        $band = match (true) {
-            $flagCount >= 3 => 'critical',
-            $flagCount >= 1 => 'elevated',
-            $noteCount >= 1 => 'note_only',
-            default => 'clean',
+        $totalSignals = $flagCount + $noteCount;
+        $rawBand = match (true) {
+            $totalSignals === 0 => 'clean',
+            $totalSignals === 1 => 'note_only',
+            $totalSignals === 2 => 'elevated',
+            $totalSignals === 3 => $hasHostileRelative ? 'critical' : 'high',
+            default => 'critical',
         };
-        $summary = match ($band) {
-            'critical' => "Phase 1 review priority: {$flagCount} flag signals fire concurrently — recommend human counter-intel review.",
-            'elevated' => "Phase 1 review priority: {$flagCount} flag signal" . ($flagCount > 1 ? 's' : '')
-                . ($noteCount > 0 ? " plus {$noteCount} supporting note(s)" : '') . '.',
-            'note_only' => "Phase 1 supporting notes: {$noteCount} item(s). No flag signal yet.",
-            'clean' => 'Phase 1 signals clean — pilot looks normal vs the cohort.',
-            default => '',
-        };
+
+        // Confidence aggregate.
+        [$confidence, $confidenceFactors] = $this->aggregateConfidence(
+            $feature, $anomaly, $countable, $sampleSizes,
+        );
+
+        // Demotion: low confidence drops one band level.
+        $demotionLadder = ['critical' => 'high', 'high' => 'elevated', 'elevated' => 'note_only', 'note_only' => 'note_only', 'clean' => 'clean'];
+        $band = $rawBand;
+        $demoted = false;
+        if ($confidence === 'low' && isset($demotionLadder[$rawBand]) && $demotionLadder[$rawBand] !== $rawBand) {
+            $band = $demotionLadder[$rawBand];
+            $demoted = true;
+        }
+
+        $summary = $this->phase1Summary($band, $rawBand, $flagCount, $noteCount, $hasHostileRelative, $demoted, $confidence);
 
         return [
             'signals' => $signals,
             'flag_count' => $flagCount,
             'note_count' => $noteCount,
+            'total_countable' => $totalSignals,
+            'has_hostile_relative' => $hasHostileRelative,
+            'raw_band' => $rawBand,
             'band' => $band,
+            'confidence' => $confidence,
+            'confidence_factors' => $confidenceFactors,
+            'sample_sizes' => $sampleSizes,
             'evidence_summary' => $summary,
             'caveat' => self::PHASE1_CAVEAT,
+            'declared_in_bloc' => $declaredInBloc,
+            'demoted' => $demoted,
         ];
+    }
+
+    /**
+     * @param  list<array<string,mixed>>  $countableSignals
+     * @return array{0: 'low'|'medium'|'high', 1: array<string,mixed>}
+     */
+    private function aggregateConfidence(
+        object $feature,
+        ?object $anomaly,
+        array $countableSignals,
+        array $sampleSizes,
+    ): array {
+        $factors = [];
+        $score = 1.0;
+
+        // Sample size on observed activity.
+        $totalKm = $sampleSizes['killmails_attacker'] + $sampleSizes['killmails_victim'];
+        if ($totalKm < 30) { $score -= 0.30; $factors['low_sample_size'] = $totalKm; }
+        elseif ($totalKm < 100) { $score -= 0.10; }
+
+        // Tiny cohort.
+        $cohort = $sampleSizes['cohort_size'];
+        if ($anomaly === null) {
+            $score -= 0.30;
+            $factors['no_anomaly_row'] = true;
+        } else {
+            if ($cohort < 30) { $score -= 0.20; $factors['tiny_cohort'] = $cohort; }
+            elseif ($cohort < 80) { $score -= 0.05; }
+            // Incomplete relative data — bloc-relative signals have NULL inputs.
+            if ($anomaly->community_hostile_pct === null && $anomaly->asymmetric_top_pair_character_id === null) {
+                $score -= 0.10;
+                $factors['incomplete_relative_data'] = true;
+            }
+        }
+
+        // Fresh corp join (no settled tenure to baseline against).
+        $minTen = $feature->corp_tenure_min_days !== null ? (int) $feature->corp_tenure_min_days : null;
+        if ($minTen !== null && $minTen <= 7 && (int) ($feature->days_since_last_activity ?? 9999) < 30) {
+            $score -= 0.10;
+            $factors['fresh_corp_join'] = $minTen;
+        }
+
+        // ESI 0-day artefact density: short_count >> 0 but min_days is 0 means
+        // the ESI history has back-to-back rows; reduces trust in corp_hopping
+        // weight regardless of its severity.
+        $shortCount = (int) ($feature->corp_tenure_short_count ?? 0);
+        $rawMin = (int) ($feature->corp_tenure_min_days ?? 99999);
+        if ($shortCount > 0 && $rawMin === 0) {
+            $score -= 0.05;
+            $factors['esi_artefact_present'] = true;
+        }
+
+        // Low battle participation.
+        $battles = $sampleSizes['battles'];
+        if ($battles < 5) { $score -= 0.10; $factors['low_battle_participation'] = $battles; }
+
+        $score = max(0.0, min(1.0, $score));
+        $band = match (true) {
+            $score < 0.4 => 'low',
+            $score < 0.7 => 'medium',
+            default => 'high',
+        };
+        $factors['score'] = round($score, 3);
+        return [$band, $factors];
+    }
+
+    private function phase1Summary(
+        string $band,
+        string $rawBand,
+        int $flagCount,
+        int $noteCount,
+        bool $hostileRelative,
+        bool $demoted,
+        string $confidence,
+    ): string {
+        $confTag = "(confidence: {$confidence})";
+        $base = match ($band) {
+            'critical' => "Phase 1 review priority: {$flagCount} flag, {$noteCount} note — recommend human counter-intel review {$confTag}.",
+            'high' => "Phase 1 review priority: {$flagCount} flag, {$noteCount} note — actively reviewable {$confTag}.",
+            'elevated' => "Phase 1 review priority: {$flagCount} flag, {$noteCount} note — worth a glance {$confTag}.",
+            'note_only' => "Phase 1 supporting note(s): {$noteCount}. No flag-grade evidence yet {$confTag}.",
+            'clean' => "Phase 1 signals clean — pilot looks normal vs the cohort {$confTag}.",
+            default => '',
+        };
+        if ($demoted) {
+            $base .= " Demoted from {$rawBand} due to low confidence (small sample / cohort / incomplete data).";
+        }
+        if ($hostileRelative && $rawBand === 'critical') {
+            $base .= ' Includes a hostile-relative signal (community/asymmetric).';
+        }
+        return $base;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function friendlyAllianceIds(int $viewerBlocId): array
+    {
+        return Cache::remember(
+            "ci.friendly_alliances.{$viewerBlocId}",
+            self::CACHE_TTL_SECONDS,
+            fn (): array => DB::table('coalition_entity_labels')
+                ->where('entity_type', 'alliance')
+                ->where('is_active', 1)
+                ->where('bloc_id', $viewerBlocId)
+                ->pluck('entity_id')
+                ->map(fn ($v) => (int) $v)
+                ->all(),
+        );
     }
 
     /**
