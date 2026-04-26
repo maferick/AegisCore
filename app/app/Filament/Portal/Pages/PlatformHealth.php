@@ -100,6 +100,31 @@ class PlatformHealth extends Page
             ->limit(40)
             ->get();
 
+        $openCircuits = DB::table('compute_circuit_state')
+            ->whereIn('state', ['open', 'half_open'])
+            ->orderByDesc('opened_at')
+            ->get();
+
+        // Per-lane aggregates: retry rate + open circuits + last failure.
+        $laneRetry = [];
+        foreach ($lanes as $l) {
+            $row = DB::table('compute_run_log')
+                ->where('lane', $l->lane)
+                ->where('compute_started_at', '>=', now()->subHours(24))
+                ->selectRaw('SUM(retry_count) AS retries, SUM(retry_count > 0) AS retried_runs, COUNT(*) AS runs')
+                ->first();
+            $openForLane = DB::table('compute_circuit_state')
+                ->where('lane', $l->lane)
+                ->whereIn('state', ['open', 'half_open'])
+                ->count();
+            $laneRetry[$l->lane] = [
+                'retries' => (int) ($row->retries ?? 0),
+                'retried_runs' => (int) ($row->retried_runs ?? 0),
+                'runs_24h' => (int) ($row->runs ?? 0),
+                'open_circuits' => $openForLane,
+            ];
+        }
+
         $runningTooLong = DB::table('compute_run_log')
             ->where('status', 'running')
             ->where('compute_started_at', '<=', now()->subMinutes(15))
@@ -180,6 +205,8 @@ class PlatformHealth extends Page
             'parser_pulse' => $parserPulse,
             'alert_pulse' => $alertPulse,
             'incident_pulse' => $incidentPulse,
+            'open_circuits' => $openCircuits,
+            'lane_retry' => $laneRetry,
         ];
     }
 

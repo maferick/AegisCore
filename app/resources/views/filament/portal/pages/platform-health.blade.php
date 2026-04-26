@@ -57,7 +57,7 @@
                     @else
                         <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
                             <thead style="color:#7a7a82;">
-                                <tr><th style="text-align:left;">lane</th><th style="text-align:left;">state</th><th style="text-align:right;">running</th><th style="text-align:right;">succ 24h</th><th style="text-align:right;">fail 24h</th><th style="text-align:right;">avg ms</th><th style="text-align:right;">p95 ms</th><th style="text-align:right;">oldest pend</th><th style="text-align:right;">tput/h</th></tr>
+                                <tr><th style="text-align:left;">lane</th><th style="text-align:left;">state</th><th style="text-align:right;">running</th><th style="text-align:right;">succ 24h</th><th style="text-align:right;">fail 24h</th><th style="text-align:right;">retries</th><th style="text-align:right;">avg ms</th><th style="text-align:right;">p95 ms</th><th style="text-align:right;">oldest pend</th><th style="text-align:right;">tput/h</th></tr>
                             </thead>
                             <tbody>
                                 @foreach ($lanes as $l)
@@ -69,11 +69,21 @@
                                         <td style="padding:3px 4px;"><strong>{{ str_replace('_', ' ', $l->lane) }}</strong></td>
                                         <td style="padding:3px 4px; color:{{ $col }};">{{ str_replace('_', ' ', $l->lane_state) }}</td>
                                         @if ($notInstrumented)
-                                            <td colspan="7" style="padding:3px 4px; text-align:left; color:#7a7a82; font-style:italic;">no instrumented pipelines reporting · expected for ingest/parser/graph until ComputeLog wraps the relevant CLI entries</td>
+                                            <td colspan="8" style="padding:3px 4px; text-align:left; color:#7a7a82; font-style:italic;">no instrumented pipelines reporting · expected for ingest/parser/graph until ComputeLog wraps the relevant CLI entries</td>
                                         @else
+                                            @php
+                                                $r = $lane_retry[$l->lane] ?? ['retries' => 0, 'retried_runs' => 0, 'runs_24h' => 0, 'open_circuits' => 0];
+                                                $retryColor = $r['open_circuits'] > 0 ? '#fb7185' : ($r['retries'] > 0 ? '#fdba74' : '#7a7a82');
+                                            @endphp
                                             <td style="padding:3px 4px; text-align:right; color:{{ $l->running_jobs > 0 ? '#7dd3fc' : '#7a7a82' }};">{{ $l->running_jobs }}</td>
                                             <td style="padding:3px 4px; text-align:right;">{{ $l->succeeded_24h }}</td>
                                             <td style="padding:3px 4px; text-align:right; color:{{ $l->failed_24h > 0 ? '#fb7185' : '#7a7a82' }};">{{ $l->failed_24h }}</td>
+                                            <td style="padding:3px 4px; text-align:right; color:{{ $retryColor }};">
+                                                {{ $r['retries'] }}@if ($r['retried_runs'] > 0) <span style="color:#7a7a82;">/ {{ $r['retried_runs'] }} runs</span>@endif
+                                                @if ($r['open_circuits'] > 0)
+                                                    <span style="margin-left:0.3rem; padding:1px 4px; border-radius:3px; background:rgba(251,113,133,0.15); color:#fb7185; font-size:0.5rem; text-transform:uppercase;">⚡ {{ $r['open_circuits'] }} circuit{{ $r['open_circuits'] === 1 ? '' : 's' }}</span>
+                                                @endif
+                                            </td>
                                             <td style="padding:3px 4px; text-align:right;">{{ $l->avg_duration_ms ?? '—' }}</td>
                                             <td style="padding:3px 4px; text-align:right;">{{ $l->p95_duration_ms ?? '—' }}</td>
                                             <td style="padding:3px 4px; text-align:right;">{{ $l->oldest_pending_seconds ? floor($l->oldest_pending_seconds / 60).'m' : '—' }}</td>
@@ -180,6 +190,31 @@
                         </div>
                     @endif
                 </div>
+
+                {{-- Open circuits --}}
+                @if (count($open_circuits) > 0)
+                    <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="border-left:3px solid #fb7185;">
+                        <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#fb7185; margin:0 0 0.4rem;">⚡ Open circuits ({{ count($open_circuits) }})</h3>
+                        <div style="display:grid; gap:0.25rem; font-size:0.7rem;">
+                            @foreach ($open_circuits as $cir)
+                                @php $stCol = $cir->state === 'half_open' ? '#fde68a' : '#fb7185'; @endphp
+                                <div style="padding:0.25rem 0.4rem; background:rgba(251,113,133,0.06); border-radius:4px;">
+                                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                                        <span style="font-size:0.55rem; color:{{ $stCol }}; text-transform:uppercase;">{{ str_replace('_', ' ', $cir->state) }}</span>
+                                        <strong style="color:#fca5a5;">{{ str_replace('_', ' ', $cir->lane) }} / {{ $cir->pipeline }}</strong>
+                                    </div>
+                                    <div style="color:#7a7a82; font-size:0.6rem; margin-top:0.15rem;">
+                                        {{ $cir->consecutive_failures }} consecutive · last reason: {{ $cir->last_failure_reason }}
+                                        @if ($cir->cooldown_until)
+                                            · cooldown until {{ $cir->cooldown_until }}
+                                        @endif
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                        <div style="margin-top:0.4rem; font-size:0.55rem; color:#7a7a82; font-style:italic;">A pipeline reopens automatically when cooldown expires (half-open). Successful run closes the circuit.</div>
+                    </div>
+                @endif
 
                 {{-- Long-running jobs --}}
                 @if (count($running_too_long) > 0)

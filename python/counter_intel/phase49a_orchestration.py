@@ -106,12 +106,39 @@ class ComputeLog:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         duration_ms = int((time.time() - self._t_start) * 1000)
+
+        # CircuitOpenError is a clean skip — record as 'aborted' with
+        # circuit_state='open' so the dashboard distinguishes it from
+        # an actual run failure.
+        try:
+            from counter_intel.phase49d_retry import CircuitOpenError
+        except Exception:
+            CircuitOpenError = ()  # type: ignore[assignment]
+
         if exc is None:
             status = "succeeded"
             err = None
+        elif CircuitOpenError and isinstance(exc, CircuitOpenError):
+            status = "aborted"
+            err = "circuit open — skipped"
         else:
             status = "failed"
             err = (str(exc) or exc.__class__.__name__)[:500]
+
+        # Pull retry/circuit fields from the stats dict so callers
+        # using the retry helper get them surfaced to compute_run_log
+        # without having to think about it.
+        retry_count = int(self.stats.get("retry_count") or 0)
+        retry_reason = str(self.stats.get("retry_reason") or "none")
+        circuit_state = str(self.stats.get("circuit_state") or "closed")
+        # Sanitise to enum values.
+        if retry_reason not in {"transient", "contention", "rate_limit",
+                                 "permanent", "malformed_input", "none"}:
+            retry_reason = "none"
+        if circuit_state not in {"closed", "open", "half_open"}:
+            # closed_failed (terminal-after-retries) collapses to closed.
+            circuit_state = "closed"
+
         with self._conn.cursor() as cur:
             cur.execute(
                 """
@@ -122,12 +149,16 @@ class ComputeLog:
                        source_row_count = %s,
                        generated_row_count = %s,
                        error_message = %s,
+                       retry_count = %s,
+                       retry_reason = %s,
+                       circuit_state = %s,
                        stats_json = %s
                  WHERE id = %s
                 """,
                 (
                     status, datetime.now(timezone.utc), duration_ms,
                     self.source_row_count, self.generated_row_count, err,
+                    retry_count, retry_reason, circuit_state,
                     json.dumps(self.stats, default=str),
                     self.run_id,
                 ),

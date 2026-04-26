@@ -379,6 +379,98 @@ When `make sde-check` reports `bump=YES`:
 
 ---
 
+## Retry / circuit breaker
+
+`python/counter_intel/phase49d_retry.py` ships shared retry +
+circuit-breaker primitives. Pipelines can opt into retries by
+wrapping their compute call in `retry(fn, policy, conn=,
+lane=, pipeline=, run_log=)`.
+
+### Normal retry behavior
+
+Background retries are **expected** in these cases — operators
+do not need to act:
+
+- **transient** (~ a few per day): mariadb / Neo4j connection
+  blip during a deploy, network hiccup. Single attempt usually
+  succeeds on retry.
+- **contention** (rare): a parallel sweep + recompute hit the
+  same row's lock window. The 1-second back-off resolves it.
+- **rate_limit** (dscan): ESI 429 / dscan rate-limit response.
+  Honored with bounded back-off.
+
+### When retries indicate degradation
+
+If `compute_lane_metrics` shows retry counts that exceed
+**~10% of the lane's runs in 24h**, investigate:
+
+1. Identify the noisy pipeline:
+   `SELECT pipeline, COUNT(*) AS runs, SUM(retry_count) AS total_retries, SUM(retry_count > 0) AS retried_runs FROM compute_run_log WHERE compute_started_at >= NOW() - INTERVAL 24 HOUR GROUP BY pipeline ORDER BY total_retries DESC;`
+2. Correlate the retry_reason distribution:
+   `SELECT pipeline, retry_reason, COUNT(*) FROM compute_run_log WHERE retry_count > 0 AND compute_started_at >= NOW() - INTERVAL 24 HOUR GROUP BY pipeline, retry_reason ORDER BY 3 DESC;`
+3. **transient** dominant → check the dependency that's flaking
+   (mariadb load, Neo4j thread pressure, network).
+4. **contention** dominant → check `SHOW ENGINE INNODB STATUS`
+   for lock waits; consider whether two pipelines run in parallel
+   that shouldn't.
+5. **rate_limit** dominant → upstream (CCP / dscan.info) is
+   throttling. Reduce dscan fetch rate via env var, retry will
+   re-stabilise.
+6. **permanent** / **malformed_input** appearing in retry_reason
+   counts at all means the classifier needs a fix — those
+   classes have budget=0 and shouldn't be retried.
+
+### Circuit breaker — when operators should intervene
+
+Configured: 5 consecutive failures within 10 minutes opens the
+circuit for 5 minutes (×2 cooldown on re-open, capped at 30 min).
+
+**Open circuit** = `compute_circuit_state.state = 'open'`. The
+detector emits a `circuit_open` quality event at severity
+`elevated`. Surfaced on `/portal/intelligence/platform-health`
+in the **⚡ Open circuits** panel.
+
+**Recipe when a circuit opens:**
+
+1. Read the open-circuits panel. Note `lane`, `pipeline`,
+   `last_failure_reason`.
+2. Pull the last 5 failed runs of that pipeline:
+   `SELECT id, compute_started_at, error_message, retry_count, retry_reason FROM compute_run_log WHERE pipeline=? AND status='failed' ORDER BY id DESC LIMIT 5;`
+3. Three patterns:
+   - All `transient`: dependency outage. Wait for cooldown,
+     restart dependency, the next half-open attempt validates.
+   - All `contention`: parallel pipeline collision. Check the
+     host cron — fix the schedule so the collisions don't
+     happen, then close the circuit manually:
+     `UPDATE compute_circuit_state SET state='closed', consecutive_failures=0 WHERE lane=? AND pipeline=?;`
+   - All `permanent`: code bug. Patch the underlying compute,
+     the circuit will close on the next successful manual run.
+4. **Manual circuit close** is safe but should only happen after
+   you've fixed the root cause. Use:
+   `UPDATE compute_circuit_state SET state='closed', consecutive_failures=0, window_failures=0, opened_at=NULL, cooldown_until=NULL WHERE lane=? AND pipeline=?;`
+   Then re-run the pipeline manually to confirm.
+
+### Suppress retry storms
+
+If a single pipeline is producing retry noise (e.g. a downstream
+service known to be flaky for the next hour), you can preempt
+the circuit by setting cooldown manually:
+
+```sql
+INSERT INTO compute_circuit_state
+  (lane, pipeline, state, opened_at, cooldown_until)
+VALUES
+  ('graph', 'phase4-projection', 'open',
+   NOW(), NOW() + INTERVAL 1 HOUR)
+ON DUPLICATE KEY UPDATE
+  state='open', cooldown_until=NOW() + INTERVAL 1 HOUR;
+```
+
+The pipeline will skip with `CircuitOpenError` (logged as
+`status='aborted'`) until the cooldown elapses.
+
+---
+
 ## Retention
 
 `make ci-phase49c-retention CI_ARGS="--dry-run"` first to

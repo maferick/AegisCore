@@ -155,7 +155,23 @@ considered closed for v1.
 - ☑ Neo4j thread budget documented (16 Bolt slots) +
   `neo4j_thread_pressure` detector covers ≥80% utilisation +
   RUNBOOK recipe
-- ☐ retry/back-off policy for failed compute_run_log entries
+- ☑ retry/back-off policy: phase49d_retry.py with RetryClass
+  (transient / contention / rate_limit / permanent /
+  malformed_input), RetryPolicy + 5 default policies (compute
+  / parser / graph / dscan_fetch / uploader_ingest), exponential
+  back-off + jitter + cap, per-class budgets so permanent +
+  malformed never retry
+- ☑ circuit breaker: compute_circuit_state per (lane, pipeline);
+  5 consecutive failures in 10min opens for 5min cooldown
+  (×2 on re-open, capped 30min); half-open + close cycle;
+  emits `circuit_open` system_quality_event
+- ☑ ComputeLog persists retry_count + retry_reason +
+  circuit_state to compute_run_log on exit
+- ☑ platform-health: lane table shows retries column +
+  circuit count badge; new ⚡ Open circuits panel
+- ☑ RUNBOOK retry section: normal vs degradation behavior,
+  open-circuit recipe, manual-close procedure, retry-storm
+  suppression
 - ☑ neo4j thread starvation incident response captured in
   RUNBOOK + script flock + reaper guards
 - **Gate**: zero "insufficient threads" responses from Neo4j
