@@ -185,7 +185,7 @@ class EveLogIngestController extends Controller
         //    metadata, parse + persist events.
         $accepted = $effectiveOffsetEnd;
         try {
-            DB::transaction(function () use ($parser, $data, $file, $logType, $now, $contentBytes, $accepted, $client): void {
+            DB::transaction(function () use ($parser, $data, $file, $logType, $now, $contentBytes, $parserText, $accepted, $client): void {
                 // Update header fields if uploader supplied richer metadata
                 // and the file row is still missing them.
                 $headerUpdates = [];
