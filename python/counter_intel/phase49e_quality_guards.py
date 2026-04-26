@@ -60,6 +60,7 @@ def run_quality_guards(
     # Cross-cutting (no bloc scope).
     counts["parser_drift_split"] = _detect_parser_drift(conn)
     counts["unknown_event_spike"] = _detect_unknown_event_spike(conn)
+    counts["neo4j_thread_pressure"] = _detect_neo4j_thread_pressure(conn)
 
     conn.commit()
     log.info("phase4.9E quality guards done", counts)
@@ -77,16 +78,22 @@ def _resolve_blocs(conn, viewer_bloc_id):
 # Detectors -----------------------------------------------------------
 
 def _detect_incident_explosion(conn, bloc_id) -> int:
-    """Trigger if 24h incident count > 4× rolling 7-day daily mean.
+    """Trigger when 24h incident count is materially above the rolling
+    7-day daily mean. Thresholds tuned 2026-04-27 against real bloc-1
+    baseline (178/d mean, 392/d max over 30d).
+
+    Trigger requires BOTH a ratio gate AND an absolute floor of 200
+    incidents in 24h, so small blocs / quiet days don't false-fire.
 
     Severity:
-      warning   ≥3× mean
-      elevated  ≥4×
-      critical  ≥6×
+      warning   ≥4× mean
+      elevated  ≥6×
+      critical  ≥10×
     """
     end = datetime.now(timezone.utc)
     last_24h_start = end - timedelta(hours=24)
     week_start = end - timedelta(days=7)
+    abs_floor = 200
 
     with conn.cursor() as cur:
         cur.execute(
@@ -104,17 +111,18 @@ def _detect_incident_explosion(conn, bloc_id) -> int:
     recent = int(row.get("recent_24h") or 0)
     total = int(row.get("total_7d") or 0)
     daily_mean = max(1.0, (total - recent) / 6.0)
-    if recent < 3 * daily_mean or recent < 50:
+    if recent < 4 * daily_mean or recent < abs_floor:
         return 0
     ratio = recent / daily_mean
-    severity = "critical" if ratio >= 6 else "elevated" if ratio >= 4 else "warning"
+    severity = "critical" if ratio >= 10 else "elevated" if ratio >= 6 else "warning"
     return _persist_event(
         conn, bloc_id, "incident_explosion", severity,
         last_24h_start, end,
         f"Incident rate spike: {recent} in 24h vs {daily_mean:.1f}/d baseline",
         f"Last 24h saw {recent} incidents — {ratio:.1f}× the rolling 7-day daily mean.",
         recent, daily_mean,
-        {"recent_24h": recent, "daily_mean_prior_6d": round(daily_mean, 2)},
+        {"recent_24h": recent, "daily_mean_prior_6d": round(daily_mean, 2),
+         "abs_floor": abs_floor},
     )
 
 
@@ -155,8 +163,14 @@ def _detect_corridor_explosion(conn, bloc_id) -> int:
 
 
 def _detect_doctrine_mismatch_explosion(conn, bloc_id) -> int:
-    """Trigger when ≥30% of recent force compositions report
-    doctrine_match_pct < 0.30 — suggests doctrine library drift."""
+    """Trigger when force compositions stop matching the doctrine
+    library at a rate well above the v1 corpus baseline. Thresholds
+    tuned 2026-04-27 against real bloc-1 data (64% baseline miss rate
+    under sparse April composition data).
+
+    Trigger floor 70% to keep the detector silent during normal v1
+    operation; meaningful library drift is when the rate climbs into
+    the 80-90% range."""
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=14)
     with conn.cursor() as cur:
@@ -177,9 +191,9 @@ def _detect_doctrine_mismatch_explosion(conn, bloc_id) -> int:
     if total < 10:
         return 0
     rate = missed / total
-    if rate < 0.30:
+    if rate < 0.70:
         return 0
-    severity = "critical" if rate >= 0.60 else "elevated" if rate >= 0.45 else "warning"
+    severity = "critical" if rate >= 0.90 else "elevated" if rate >= 0.80 else "warning"
     return _persist_event(
         conn, bloc_id, "doctrine_mismatch_explosion", severity,
         start, end,
@@ -362,6 +376,54 @@ def _detect_parser_drift(conn) -> int:
             {"historical": historical, "total_events": total},
         )
     return written
+
+
+def _detect_neo4j_thread_pressure(conn) -> int:
+    """Cross-cutting: count `compute_run_log` rows in lane='graph' or
+    lane='operational' whose pipeline names a Neo4j-touching compute
+    AND whose status='running' for > 5 minutes. If that count exceeds
+    80% of the documented Bolt thread pool (16 slots), emit a warning;
+    > 100% emits critical. Read-only — no Neo4j HTTP/Bolt call.
+
+    Why a proxy and not `dbms.listConnections`: the detector runs in
+    the maintenance lane; opening a Neo4j connection from here just
+    to count threads would itself consume a slot. The compute_run_log
+    proxy is good enough for v1 starvation detection.
+    """
+    bolt_max = 16  # mirrors server.bolt.thread_pool_max_size
+    end = datetime.now(timezone.utc)
+    five_min_ago = end - timedelta(minutes=5)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS n FROM compute_run_log
+             WHERE status = 'running'
+               AND compute_started_at <= %s
+               AND lane IN ('graph','operational')
+               AND (pipeline LIKE %s OR pipeline LIKE %s OR pipeline LIKE %s)
+            """,
+            (five_min_ago, "battle%", "neo4j%", "%projection%"),
+        )
+        long_running = int((cur.fetchone() or {}).get("n") or 0)
+
+    if long_running == 0:
+        return 0
+
+    rate = long_running / bolt_max
+    if rate < 0.80:
+        return 0
+
+    severity = "critical" if rate >= 1.0 else "elevated"
+    return _persist_event(
+        conn, None, "neo4j_thread_pressure", severity,
+        five_min_ago, end,
+        f"Neo4j thread pressure: {long_running} long-running graph jobs vs {bolt_max} Bolt slots",
+        f"{long_running} graph/operational compute_run_log rows have been 'running' for >5min. Bolt thread pool is {bolt_max} slots. Past this point Neo4j returns '51N38: insufficient threads'. Investigate orphans + flock guards on host cron.",
+        long_running, bolt_max,
+        {"long_running": long_running, "bolt_max": bolt_max,
+         "ratio": round(rate, 4)},
+    )
 
 
 def _detect_unknown_event_spike(conn) -> int:

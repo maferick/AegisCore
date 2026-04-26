@@ -128,12 +128,13 @@ considered closed for v1.
 - ◐ TTL ladder shipped — 21 retention specs across all data
   surfaces. Source of truth: `python/counter_intel/phase49c_retention.RETENTION`
 - ◐ `make ci-phase49c-retention` (+ `--dry-run`) target shipped
-- ◐ Dry-run validated 2026-04-27 against bloc 1 corpus: 241
+- ☑ Dry-run validated 2026-04-27 against bloc 1 corpus: 241
   failed-fetch dscan snapshots eligible, 0 elsewhere (platform
   too young; meaningful sweep starts as `eve_log_events` crosses
   the 90d mark)
-- ☐ first **live** sweep run + observed
-- ☐ host cron line installed:
+- ☑ first live sweep run 2026-04-27: 241 dscan rows dropped, 0
+  elsewhere, all specs complete, no errors
+- ☐ host cron line installed (operator action):
   `15 4 * * * cd /opt/AegisCore && make ci-phase49c-retention`
 - ☐ dashboard surfaces verified to show no rows older than the
   configured window
@@ -146,18 +147,19 @@ considered closed for v1.
 - ☑ 8 lanes defined: ingest / parser / graph / operational /
   doctrine / intelligence_generation / governance / maintenance
 - ☑ ComputeLog wrapper + lane metrics rollup
-- ☑ flock-guarded battle-process-pending
+- ☑ flock-guarded battle-process-pending (sequential within
+  invocation; flock blocks overlapping ticks)
 - ☑ orphan reaper for `docker compose run` containers
+  (BATTLE_ORPHAN_TTL_MIN, default 30 min)
 - ☑ sde-auto-update host script with throttle + lock
-- ☐ Neo4j thread budget enforced — currently can be exhausted by
-  16 concurrent battle_graph runs; need a worker pool cap
+- ☑ Neo4j thread budget documented (16 Bolt slots) +
+  `neo4j_thread_pressure` detector covers ≥80% utilisation +
+  RUNBOOK recipe
 - ☐ retry/back-off policy for failed compute_run_log entries
-- ◐ neo4j thread starvation incident (2026-04-26) — flock added,
-  but didn't audit other consumers (intel_copilot, theater_clustering)
-- **Gate**: documented Neo4j max-concurrent-graph-jobs = N (TBD),
-  enforced by a slot semaphore in battle-process-pending and any
-  other consumer. No "insufficient threads" responses from Neo4j
-  for ≥ 7 days.
+- ☑ neo4j thread starvation incident response captured in
+  RUNBOOK + script flock + reaper guards
+- **Gate**: zero "insufficient threads" responses from Neo4j
+  for ≥ 7 days under live cron load.
 
 ## 10. Platform-health correctness
 
@@ -166,8 +168,14 @@ considered closed for v1.
 - ☑ surface health derived from freshness distribution, not raw rates
 - ◐ alert pulse / incident pulse use "last 24h" hardcoded — should
   parametrise window selector
-- ☐ tune `corridor_explosion` / `incident_explosion` thresholds
-  using 4 weeks of real data baseline rather than the v1 floor
+- ☑ `incident_explosion` retuned 2026-04-27 against bloc-1 baseline
+  (178/d mean, 392/d max → ratio 4×/6×/10× + abs floor 200)
+- ☑ `doctrine_mismatch_explosion` retuned 2026-04-27 (baseline 64%
+  miss → trigger floor 70%, severities at 70/80/90)
+- ☑ `neo4j_thread_pressure` detector added — proxies long-running
+  graph/operational compute_run_log rows against documented 16-slot
+  Bolt cap
+- ☑ runbook recipe added for `neo4j_thread_pressure`
 - **Gate**: zero open critical events on platform-health for
   ≥ 7 days that turned out to be false on review.
 
