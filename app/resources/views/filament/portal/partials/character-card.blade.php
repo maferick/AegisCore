@@ -470,7 +470,12 @@
                  ESI alliance / no bloc tag) or the dossier service
                  returned not_found. Lexicon constraint enforced by
                  the service: never "spy" / "infiltrator" — review
-                 priority + signals, triage surface only. --}}
+                 priority + signals, triage surface only.
+
+                 Phase 1.5 UI: compact signal cards, per-signal
+                 confidence + sample size badges, raw metric tooltips
+                 via expand toggle, persistent "uncalibrated" + "review
+                 aid only" disclaimer. --}}
             @if (! empty($c['counter_intel']) && empty($c['counter_intel']['not_found']))
                 @php
                     $ci = $c['counter_intel'];
@@ -482,58 +487,120 @@
                         'elevated'  => ['#854d0e', '#fde68a', 'rgba(234,179,8,0.10)', 'rgba(234,179,8,0.30)'],
                         'note_only' => ['#1e3a8a', '#bfdbfe', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)'],
                         'clean'     => ['#14532d', '#86efac', 'rgba(34,197,94,0.08)', 'rgba(34,197,94,0.25)'],
+                        'insufficient_history' => ['#1f2937', '#9ca3af', 'rgba(255,255,255,0.04)', 'rgba(255,255,255,0.10)'],
+                    ];
+                    $confColors = [
+                        'high'   => ['#86efac', 'rgba(34,197,94,0.10)'],
+                        'medium' => ['#fde68a', 'rgba(234,179,8,0.10)'],
+                        'low'    => ['#fca5a5', 'rgba(239,68,68,0.10)'],
+                        'insufficient' => ['#9ca3af', 'rgba(255,255,255,0.04)'],
                     ];
                     $p1Band = $p1['band'] ?? 'clean';
                     [$bgDark, $fg, $bgLight, $border] = $bandColors[$p1Band] ?? $bandColors['clean'];
+                    $confidence = $p1['confidence'] ?? 'medium';
+                    [$confFg, $confBg] = $confColors[$confidence] ?? $confColors['medium'];
+                    $visibleSignals = array_values(array_filter($p1['signals'] ?? [], fn ($s) => ($s['severity'] ?? '') !== 'suppressed'));
+                    $suppressedSignals = array_values(array_filter($p1['signals'] ?? [], fn ($s) => ($s['severity'] ?? '') === 'suppressed'));
                 @endphp
                 <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.06);">
-                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.6rem;">
+                    {{-- Header strip: title + band badge + confidence badge + uncalibrated badge --}}
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.6rem; flex-wrap:wrap;">
                         <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0;">
                             Counter-Intel · review signals
                         </h3>
-                        <span style="font-size:0.55rem; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.08em;
-                                     background:{{ $bgLight }}; color:{{ $fg }}; border:1px solid {{ $border }};">
+                        <span title="Phase 1 review-priority band — derived from the count of independent signals firing."
+                              style="font-size:0.55rem; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.08em;
+                                     background:{{ $bgLight }}; color:{{ $fg }}; border:1px solid {{ $border }}; cursor:help;">
                             {{ str_replace('_', ' ', $p1Band) }}
                         </span>
+                        <span title="Aggregate confidence in this band, derived from sample size, cohort size, fresh corp joins, and ESI artefact density."
+                              style="font-size:0.55rem; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.08em;
+                                     background:{{ $confBg }}; color:{{ $confFg }}; border:1px solid {{ $confBg }}; cursor:help;">
+                            confidence: {{ $confidence }}
+                        </span>
+                        <span title="The Phase 1 signal model is uncalibrated against ground-truth labels yet. Treat output as a triage hint, not a verdict."
+                              style="font-size:0.55rem; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.08em;
+                                     background:rgba(234,179,8,0.10); color:#fde68a; border:1px solid rgba(234,179,8,0.30); cursor:help;">
+                            uncalibrated
+                        </span>
+                        @if ($p1 && ! empty($p1['demoted']))
+                            <span title="Band was demoted one level due to low confidence (small sample, tiny cohort, missing relative data, or ESI artefacts). Raw band before demotion: {{ $p1['raw_band'] ?? '' }}"
+                                  style="font-size:0.55rem; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.08em;
+                                         background:rgba(255,255,255,0.04); color:#9ca3af; border:1px solid rgba(255,255,255,0.10); cursor:help;">
+                                demoted
+                            </span>
+                        @endif
                         <span style="font-size:0.6rem; color:#7a7a82; margin-left:auto; font-style:italic;">
-                            viewer bloc context · cached 10 min · 90-day window
+                            viewer bloc · cached 10 min · 90-day window
                         </span>
                     </div>
 
+                    {{-- Persistent "review aid only" disclaimer --}}
                     @if (! empty($p1['caveat']))
                         <div style="background:rgba(234,179,8,0.06); border:1px solid rgba(234,179,8,0.25); border-radius:6px; padding:0.5rem 0.75rem; margin-bottom:0.6rem; color:#fde68a; font-size:0.72rem; display:flex; gap:0.4rem; align-items:flex-start;">
                             <span style="font-size:0.85rem; line-height:1;" aria-hidden="true">⚠</span>
-                            <span style="line-height:1.3;">{{ $p1['caveat'] }}</span>
+                            <span style="line-height:1.3;">{{ $p1['caveat'] }} This surface is advisory intelligence — never use as the sole basis for a punitive action.</span>
                         </div>
                     @endif
 
+                    {{-- Headline summary --}}
                     @if (! empty($p1['evidence_summary']))
                         <div style="background:{{ $bgLight }}; border:1px solid {{ $border }}; border-radius:6px; padding:0.7rem 0.9rem; margin-bottom:0.75rem; color:{{ $fg }}; font-size:0.82rem;">
                             {{ $p1['evidence_summary'] }}
                         </div>
                     @endif
 
-                    @if (! empty($p1['signals']))
-                        <div style="display:grid; gap:0.45rem;">
-                            @foreach ($p1['signals'] as $sig)
+                    {{-- Signal cards (compact, with confidence + sample size + raw expand) --}}
+                    @if (! empty($visibleSignals))
+                        <div style="display:grid; gap:0.45rem; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));">
+                            @foreach ($visibleSignals as $sig)
                                 @php
                                     $isFlag = ($sig['severity'] ?? 'note') === 'flag';
                                     $rowBg = $isFlag ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.02)';
                                     $rowBorder = $isFlag ? 'rgba(239,68,68,0.30)' : 'rgba(255,255,255,0.06)';
                                     $accent = $isFlag ? '#fca5a5' : '#7dd3fc';
+                                    $sigConf = $sig['confidence'] ?? 'medium';
+                                    [$sigConfFg, $sigConfBg] = $confColors[$sigConf] ?? $confColors['medium'];
+                                    $sampleN = $sig['sample_size'] ?? null;
+                                    $rawId = 'rawsig_' . $c['character_id'] . '_' . ($sig['reason_code'] ?? $sig['key'] ?? 'unk');
                                 @endphp
                                 <div style="display:flex; gap:0.6rem; align-items:flex-start; background:{{ $rowBg }}; border:1px solid {{ $rowBorder }}; border-radius:6px; padding:0.55rem 0.75rem;">
-                                    <span style="display:inline-block; width:0.55rem; height:0.55rem; border-radius:50%; background:{{ $accent }}; flex-shrink:0; margin-top:0.4rem;"></span>
+                                    <span style="display:inline-block; width:0.55rem; height:0.55rem; border-radius:50%; background:{{ $accent }}; flex-shrink:0; margin-top:0.45rem;"></span>
                                     <div style="flex:1; min-width:0;">
-                                        <div style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82; margin-bottom:0.15rem;">
-                                            {{ str_replace('_', ' ', $sig['key']) }}
+                                        <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-bottom:0.2rem;">
+                                            <span style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">
+                                                {{ str_replace('_', ' ', $sig['reason_code'] ?? $sig['key']) }}
+                                            </span>
                                             @if ($isFlag)
-                                                <span style="color:{{ $accent }}; margin-left:0.3rem;">· flag</span>
+                                                <span style="font-size:0.55rem; color:{{ $accent }}; text-transform:uppercase; letter-spacing:0.08em;">flag</span>
+                                            @else
+                                                <span style="font-size:0.55rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.08em;">note</span>
+                                            @endif
+                                            <span title="Per-signal confidence — derived from this signal's sample size and inputs."
+                                                  style="font-size:0.5rem; padding:1px 6px; border-radius:3px; text-transform:uppercase; letter-spacing:0.06em;
+                                                         background:{{ $sigConfBg }}; color:{{ $sigConfFg }}; cursor:help;">
+                                                {{ $sigConf }}
+                                            </span>
+                                            @if ($sampleN !== null)
+                                                <span title="Underlying sample size used to compute this signal."
+                                                      style="font-size:0.5rem; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:#9ca3af; cursor:help;">
+                                                    n={{ number_format((int) $sampleN) }}
+                                                </span>
+                                            @endif
+                                            @if (! empty($sig['raw']))
+                                                <button type="button"
+                                                        onclick="document.getElementById('{{ $rawId }}').classList.toggle('hidden')"
+                                                        style="font-size:0.5rem; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:#9ca3af; border:none; cursor:pointer; text-transform:uppercase; letter-spacing:0.06em;">
+                                                    raw
+                                                </button>
                                             @endif
                                         </div>
                                         <div style="font-size:0.82rem; color:#e5e5e7; line-height:1.4;">
                                             {{ $sig['text'] }}
                                         </div>
+                                        @if (! empty($sig['raw']))
+                                            <div id="{{ $rawId }}" class="hidden" style="margin-top:0.35rem; padding:0.4rem 0.55rem; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.05); border-radius:4px; font-family:ui-monospace,monospace; font-size:0.68rem; color:#cbd5e1; overflow-x:auto; white-space:pre-wrap;">{{ json_encode($sig['raw'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</div>
+                                        @endif
                                     </div>
                                 </div>
                             @endforeach
@@ -541,6 +608,35 @@
                     @else
                         <div style="font-size:0.78rem; color:#7a7a82; font-style:italic; padding:0.5rem 0.75rem; background:rgba(255,255,255,0.02); border:1px dashed rgba(255,255,255,0.08); border-radius:6px;">
                             No Phase 1 signals are flashing — pilot reads as normal vs the cohort.
+                        </div>
+                    @endif
+
+                    @if (! empty($suppressedSignals))
+                        <details style="margin-top:0.5rem;">
+                            <summary style="cursor:pointer; font-size:0.65rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">
+                                Suppressed diagnostics · {{ count($suppressedSignals) }}
+                                <span style="text-transform:none; letter-spacing:0; font-style:italic; color:#6b7280;">
+                                    — bloc-relative signals that fire baseline-true and are kept for audit only
+                                </span>
+                            </summary>
+                            <div style="display:grid; gap:0.3rem; margin-top:0.4rem;">
+                                @foreach ($suppressedSignals as $sig)
+                                    <div style="font-size:0.72rem; color:#9ca3af; padding:0.35rem 0.6rem; background:rgba(255,255,255,0.02); border:1px dashed rgba(255,255,255,0.08); border-radius:4px;">
+                                        <span style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:#6b7280;">
+                                            {{ str_replace('_', ' ', $sig['reason_code'] ?? $sig['key']) }} · suppressed ({{ $sig['suppression_reason'] ?? 'unknown' }})
+                                        </span>
+                                        <div style="margin-top:0.15rem;">{{ $sig['text'] }}</div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </details>
+                    @endif
+
+                    {{-- Aggregate sample sizes (small footer line) --}}
+                    @if (! empty($p1['sample_sizes']))
+                        @php $ss = $p1['sample_sizes']; @endphp
+                        <div style="margin-top:0.5rem; font-size:0.6rem; color:#6b7280; font-style:italic;">
+                            sample · battles {{ $ss['battles'] ?? 0 }} · km(att) {{ $ss['killmails_attacker'] ?? 0 }} · km(vic) {{ $ss['killmails_victim'] ?? 0 }} · cohort {{ $ss['cohort_size'] ?? 0 }} · last activity {{ $ss['days_since_last_activity'] ?? '—' }}d ago
                         </div>
                     @endif
 
