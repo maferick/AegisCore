@@ -66,21 +66,42 @@ class EveLogIngestController extends Controller
             return response()->json(['status' => 'error', 'message' => 'offset_end < offset_start'], 422);
         }
 
-        // 3. Hash check on the raw content. Uploader sends UTF-8 bytes.
+        // Auth ACK — stamp the client row as soon as the bearer is
+        // validated, before payload validation runs. Lets the
+        // /portal/uploaders status page show "live" even when chunks
+        // are being rejected for content reasons (so the operator can
+        // distinguish "uploader is reaching us" from "uploader is
+        // silent").
+        DB::table('eve_log_upload_clients')
+            ->where('id', $client->id)
+            ->update([
+                'last_seen_at' => now(),
+                'last_remote_ip' => mb_substr((string) $request->ip(), 0, 64),
+                'updated_at' => now(),
+            ]);
+
+        // 3. Hash check + content-length policy.
+        // We trust the actual byte length of `content` over the
+        // payload's offset_end. JSON round-trip on the .NET side can
+        // produce a small (typically ≤ a few bytes) drift between the
+        // C# byte count (Encoding.UTF8.GetBytes) and the wire JSON
+        // string length the server reads after json_decode (e.g.
+        // surrogate / BOM normalisation). The chunk_sha256 still
+        // anchors integrity — we hash exactly what we received and
+        // anchor continuity on bytes-received, not on what the client
+        // claims the offset_end is.
         $contentBytes = $data['content'];
-        $expectedLen = $data['offset_end'] - $data['offset_start'];
-        if (strlen($contentBytes) !== $expectedLen) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'content length does not match offset window',
-                'expected' => $expectedLen,
-                'got' => strlen($contentBytes),
-            ], 422);
-        }
         $sha = hash('sha256', $contentBytes);
         if (strcasecmp($sha, $data['chunk_sha256']) !== 0) {
-            return response()->json(['status' => 'error', 'message' => 'sha256 mismatch'], 422);
+            return response()->json([
+                'status' => 'error',
+                'message' => 'sha256 mismatch',
+                'expected_sha256' => mb_strtolower($data['chunk_sha256']),
+                'got_sha256' => $sha,
+                'got_length' => strlen($contentBytes),
+            ], 422);
         }
+        $effectiveOffsetEnd = (int) $data['offset_start'] + strlen($contentBytes);
 
         // 4. Resolve / create the file record.
         $now = now();
@@ -138,7 +159,7 @@ class EveLogIngestController extends Controller
 
         // 6. Begin transaction. Insert chunk receipt, update file
         //    metadata, parse + persist events.
-        $accepted = (int) $data['offset_end'];
+        $accepted = $effectiveOffsetEnd;
         try {
             DB::transaction(function () use ($parser, $data, $file, $logType, $now, $contentBytes, $accepted, $client): void {
                 // Update header fields if uploader supplied richer metadata
@@ -249,13 +270,7 @@ class EveLogIngestController extends Controller
                         'updated_at' => $now,
                     ]));
 
-                DB::table('eve_log_upload_clients')
-                    ->where('id', $client->id)
-                    ->update([
-                        'last_seen_at' => $now,
-                        'last_remote_ip' => mb_substr((string) request()->ip(), 0, 64),
-                        'updated_at' => $now,
-                    ]);
+                // last_seen_at already stamped on auth ACK above.
             });
         } catch (\Throwable $e) {
             Log::error('eve_log_ingest chunk failed', [
