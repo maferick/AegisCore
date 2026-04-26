@@ -21,6 +21,12 @@ from counter_intel.phase1 import run_bloc_agnostic as phase1_agnostic, run_bloc_
 from counter_intel.phase2_triangulation import run as phase2_triangulation
 from counter_intel.phase2_baseline import run as phase2_baseline
 from counter_intel.phase2_cohort_features import run as phase2_cohort_features
+from counter_intel.phase4 import (
+    run_timelines as phase4_timelines,
+    run_fleet_participation as phase4_fleet_participation,
+    run_intel_reliability as phase4_intel_reliability,
+    run_session_correlation as phase4_session_correlation,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -70,6 +76,24 @@ def main() -> int:
     p2c.add_argument("--window-end", type=str, default=None)
     p2c.add_argument("--force", action="store_true", help="recompute rows even when already filled")
 
+    p4t = sub.add_parser("phase4-timelines", help="Phase 4.1 — operational timeline events from log streams.")
+    p4t.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4t.add_argument("--since-hours", type=int, default=168, help="how many hours back to scan (default 7d)")
+
+    p4f = sub.add_parser("phase4-fleet-participation", help="Phase 4.2 — per-character fleet presence windows.")
+    p4f.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4f.add_argument("--since-hours", type=int, default=168)
+
+    p4i = sub.add_parser("phase4-intel-reliability", help="Phase 4.3 — per-reporter intel reliability profiles.")
+    p4i.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4i.add_argument("--window-end", type=str, default=None)
+    p4i.add_argument("--window-days", type=int, default=30)
+
+    p4s = sub.add_parser("phase4-session-correlation", help="Phase 4.4 — pairwise session correlation edges.")
+    p4s.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4s.add_argument("--window-end", type=str, default=None)
+    p4s.add_argument("--window-days", type=int, default=30)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -91,6 +115,14 @@ def main() -> int:
         return _run_phase2_baseline(args)
     if args.cmd == "phase2-cohort-features":
         return _run_phase2_cohort_features(args)
+    if args.cmd == "phase4-timelines":
+        return _run_phase4_timelines(args)
+    if args.cmd == "phase4-fleet-participation":
+        return _run_phase4_fleet_participation(args)
+    if args.cmd == "phase4-intel-reliability":
+        return _run_phase4_intel_reliability(args)
+    if args.cmd == "phase4-session-correlation":
+        return _run_phase4_session_correlation(args)
     parser.print_help()
     return 2
 
@@ -181,4 +213,50 @@ def _run_phase2_cohort_features(args) -> int:
     with connection(cfg) as conn:
         stats = phase2_cohort_features(conn, cfg, window_end=window_end, force=bool(getattr(args, "force", False)))
     log.info("phase2 cohort-features complete", stats)
+    return 0
+
+
+def _run_phase4_timelines(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase4_timelines(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4 timelines complete", stats)
+    return 0
+
+
+def _run_phase4_fleet_participation(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase4_fleet_participation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4 fleet-participation complete", stats)
+    return 0
+
+
+def _run_phase4_intel_reliability(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    if window_end is None:
+        from datetime import timezone, datetime as _dt
+        window_end = _dt.now(timezone.utc).date()
+    with connection(cfg) as conn:
+        stats = phase4_intel_reliability(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                         window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4 intel-reliability complete", stats)
+    return 0
+
+
+def _run_phase4_session_correlation(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    if window_end is None:
+        from datetime import timezone, datetime as _dt
+        window_end = _dt.now(timezone.utc).date()
+    with connection(cfg) as conn:
+        stats = phase4_session_correlation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                           window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4 session-correlation complete", stats)
     return 0

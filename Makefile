@@ -482,6 +482,22 @@ ci-phase2-baseline:
 ci-phase2-cohort-features:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-cohort-features $(CI_ARGS)
 
+# Counter-Intel Phase 4 — log-derived operational analytics. Each
+# pass is idempotent (UPSERT). Run after eve-log-ingest is producing
+# events.
+# Args: VIEWER_BLOC=1 CI_ARGS="--since-hours=168" or "--window-end=2026-04-26"
+ci-phase4-timelines:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-timelines --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase4-fleet-participation:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-fleet-participation --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase4-intel-reliability:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-intel-reliability --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase4-session-correlation:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-session-correlation --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in
