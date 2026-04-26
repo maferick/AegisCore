@@ -145,6 +145,78 @@ class OperationsIncidentDossier extends Page
                 ->get();
         }
 
+        // Phase 4.5D — force compositions + transitions for this incident.
+        $forceCompositions = DB::table('operational_force_compositions as f')
+            ->leftJoin('auto_doctrines as d', 'd.id', '=', 'f.primary_doctrine_id')
+            ->where('f.incident_id', $this->incidentId)
+            ->orderBy('f.snapshot_at')
+            ->select('f.id', 'f.dscan_snapshot_id', 'f.snapshot_at',
+                'f.primary_doctrine_name', 'f.doctrine_confidence',
+                'f.doctrine_match_pct', 'f.ship_total',
+                'f.estimated_logistics_count', 'f.estimated_tackle_count',
+                'f.estimated_dps_count', 'f.estimated_capital_count',
+                'f.estimated_super_count', 'f.estimated_bomber_count',
+                'f.estimated_ewar_count', 'f.estimated_command_count',
+                'f.estimated_logistics_ratio', 'f.estimated_tackle_ratio',
+                'f.projection_strength', 'f.mobility', 'f.brawl_range',
+                'f.ship_breakdown_json',
+                'd.canonical_name as doctrine_canonical')
+            ->get();
+
+        $forceTransitions = DB::table('operational_force_transitions')
+            ->where('incident_id', $this->incidentId)
+            ->orderBy('from_at')
+            ->get();
+
+        // Roll-up summary across all compositions in the incident.
+        $forceSummary = null;
+        if ($forceCompositions->isNotEmpty()) {
+            $maxShip = (int) $forceCompositions->max('ship_total');
+            $caps = (int) $forceCompositions->max('estimated_capital_count');
+            $supers = (int) $forceCompositions->max('estimated_super_count');
+            $logi = (int) $forceCompositions->max('estimated_logistics_count');
+            $tackle = (int) $forceCompositions->max('estimated_tackle_count');
+            $doctrines = $forceCompositions
+                ->pluck('primary_doctrine_name')
+                ->filter()
+                ->countBy()
+                ->sortDesc()
+                ->take(3);
+            $primaryProjection = $forceCompositions
+                ->pluck('projection_strength')
+                ->filter()
+                ->countBy()
+                ->sortDesc()
+                ->keys()
+                ->first();
+            $primaryMobility = $forceCompositions
+                ->pluck('mobility')
+                ->filter()
+                ->countBy()
+                ->sortDesc()
+                ->keys()
+                ->first();
+            $primaryBrawl = $forceCompositions
+                ->pluck('brawl_range')
+                ->filter()
+                ->countBy()
+                ->sortDesc()
+                ->keys()
+                ->first();
+            $forceSummary = [
+                'snapshots' => $forceCompositions->count(),
+                'peak_ship_total' => $maxShip,
+                'peak_capital' => $caps,
+                'peak_super' => $supers,
+                'peak_logistics' => $logi,
+                'peak_tackle' => $tackle,
+                'top_doctrines' => $doctrines->all(),
+                'projection' => $primaryProjection,
+                'mobility' => $primaryMobility,
+                'brawl_range' => $primaryBrawl,
+            ];
+        }
+
         return [
             'no_bloc' => false,
             'not_found' => false,
@@ -156,6 +228,9 @@ class OperationsIncidentDossier extends Page
             'fused_strip' => $strip,
             'battle' => $battleSummary,
             'dscan_snapshots' => $dscanSnapshots,
+            'force_compositions' => $forceCompositions,
+            'force_transitions' => $forceTransitions,
+            'force_summary' => $forceSummary,
             'evidence_json' => json_decode($incident->evidence_json ?? '{}', true) ?: [],
         ];
     }

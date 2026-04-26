@@ -1103,6 +1103,9 @@ def run_threat_surface(
         "battle_linkage_score": 0.0, "density_score": 0.0,
         "reliability_score": 0.0, "corridor_score": 0.0,
         "dscan_score": 0.0,
+        "capital_score": 0.0, "logistics_score": 0.0,
+        "doctrine_threat_score": 0.0, "escalation_propensity_score": 0.0,
+        "mobility_votes": defaultdict(int),
     })
 
     # Hostile cluster contributions.
@@ -1195,6 +1198,53 @@ def run_threat_surface(
             sid = int(r["solar_system_id"])
             by_system[sid]["reliability_score"] += float(r["rwr"] or 0)
 
+    # Force-composition contributions: capital + super, logistics
+    # density, doctrine recognition, mobility profile votes.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.primary_system_id AS sid,
+                   SUM(f.estimated_capital_count) AS caps,
+                   SUM(f.estimated_super_count) AS supers,
+                   SUM(f.estimated_logistics_count) AS logi,
+                   SUM(f.estimated_tackle_count) AS tackle,
+                   SUM(f.ship_total) AS ships,
+                   SUM(CASE WHEN f.primary_doctrine_id IS NOT NULL THEN 1 ELSE 0 END) AS doctrine_hits,
+                   SUM(CASE WHEN f.estimated_capital_count > 0 OR f.estimated_super_count > 0 THEN 1 ELSE 0 END) AS escalation_hits
+              FROM operational_force_compositions f
+              JOIN operational_hostile_clusters c ON c.id = f.cluster_id
+             WHERE f.viewer_bloc_id = %s
+               AND f.snapshot_at BETWEEN %s AND %s
+               AND c.primary_system_id IS NOT NULL
+             GROUP BY c.primary_system_id
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["sid"])
+            b = by_system[sid]
+            b["capital_score"] += float(r.get("caps") or 0) * 1.0 + float(r.get("supers") or 0) * 4.0
+            b["logistics_score"] += float(r.get("logi") or 0) * 0.5
+            b["doctrine_threat_score"] += float(r.get("doctrine_hits") or 0) * 1.0
+            b["escalation_propensity_score"] += float(r.get("escalation_hits") or 0) * 2.0
+    # Mobility votes — pull per-composition mobility values to roll up.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.primary_system_id AS sid, f.mobility, COUNT(*) AS n
+              FROM operational_force_compositions f
+              JOIN operational_hostile_clusters c ON c.id = f.cluster_id
+             WHERE f.viewer_bloc_id = %s
+               AND f.snapshot_at BETWEEN %s AND %s
+               AND c.primary_system_id IS NOT NULL
+             GROUP BY c.primary_system_id, f.mobility
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["sid"])
+            by_system[sid]["mobility_votes"][str(r["mobility"])] += int(r["n"])
+
     # Corridor centrality.
     with conn.cursor() as cur:
         cur.execute(
@@ -1226,6 +1276,10 @@ def run_threat_surface(
         "reliability_score": 0.05,
         "corridor_score": 0.05,
         "dscan_score": 0.4,
+        "capital_score": 1.5,
+        "logistics_score": 0.3,
+        "doctrine_threat_score": 0.5,
+        "escalation_propensity_score": 1.0,
     }
     raw_scores = []
     for sid, b in by_system.items():
@@ -1245,10 +1299,17 @@ def run_threat_surface(
             "watch" if threat >= 0.5 else
             "safe"
         )
+        # Mobility profile: highest-vote bucket, or NULL when nothing.
+        mob_votes = b["mobility_votes"]
+        mobility_profile = (
+            max(mob_votes.items(), key=lambda x: x[1])[0]
+            if mob_votes else None
+        )
         evidence = {
             "raw": round(b["raw"], 3),
             "scale": round(scale, 4),
             "components": {k: round(b[k], 3) for k in weights.keys()},
+            "mobility_votes": dict(mob_votes),
         }
         with conn.cursor() as cur:
             cur.execute(
@@ -1258,8 +1319,10 @@ def run_threat_surface(
                    window_end_date, window_days, threat_score,
                    hostile_cluster_score, escalation_score, battle_linkage_score,
                    density_score, reliability_score, corridor_centrality_score,
-                   dscan_score, tier, evidence_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   dscan_score, capital_score, logistics_score,
+                   doctrine_threat_score, escalation_propensity_score,
+                   mobility_profile, tier, evidence_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     solar_system_name = VALUES(solar_system_name),
                     region_id = VALUES(region_id),
@@ -1271,6 +1334,11 @@ def run_threat_surface(
                     reliability_score = VALUES(reliability_score),
                     corridor_centrality_score = VALUES(corridor_centrality_score),
                     dscan_score = VALUES(dscan_score),
+                    capital_score = VALUES(capital_score),
+                    logistics_score = VALUES(logistics_score),
+                    doctrine_threat_score = VALUES(doctrine_threat_score),
+                    escalation_propensity_score = VALUES(escalation_propensity_score),
+                    mobility_profile = VALUES(mobility_profile),
                     tier = VALUES(tier),
                     evidence_json = VALUES(evidence_json),
                     computed_at = NOW()
@@ -1285,6 +1353,11 @@ def run_threat_surface(
                     round(b["reliability_score"], 4),
                     round(b["corridor_score"], 4),
                     round(b["dscan_score"], 4),
+                    round(b["capital_score"], 4),
+                    round(b["logistics_score"], 4),
+                    round(b["doctrine_threat_score"], 4),
+                    round(b["escalation_propensity_score"], 4),
+                    mobility_profile,
                     tier,
                     json.dumps(evidence, default=str),
                 ),

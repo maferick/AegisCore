@@ -35,6 +35,10 @@ from counter_intel.phase4_aggregation import (
     run_response_times as phase4_response_times,
     run_threat_surface as phase4_threat_surface,
 )
+from counter_intel.phase4_force_composition import (
+    run_force_compositions as phase45_force_compositions,
+    run_force_transitions as phase45_force_transitions,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -129,6 +133,14 @@ def main() -> int:
     p4ts.add_argument("--window-end", type=str, default=None)
     p4ts.add_argument("--window-days", type=int, default=30)
 
+    p45fc = sub.add_parser("phase45-force-compositions", help="Phase 4.5A — per-cluster force composition + doctrine match.")
+    p45fc.add_argument("--viewer-bloc-id", type=int, required=True)
+    p45fc.add_argument("--since-hours", type=int, default=8760)
+
+    p45ft = sub.add_parser("phase45-force-transitions", help="Phase 4.5C — sequential dscan deltas inside an incident.")
+    p45ft.add_argument("--viewer-bloc-id", type=int, required=True)
+    p45ft.add_argument("--since-hours", type=int, default=8760)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -170,6 +182,10 @@ def main() -> int:
         return _run_phase4_response_times(args)
     if args.cmd == "phase4-threat-surface":
         return _run_phase4_threat_surface(args)
+    if args.cmd == "phase45-force-compositions":
+        return _run_phase45_force_compositions(args)
+    if args.cmd == "phase45-force-transitions":
+        return _run_phase45_force_transitions(args)
     parser.print_help()
     return 2
 
@@ -349,6 +365,26 @@ def _run_phase4_response_times(args) -> int:
         stats = phase4_response_times(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
                                        window_end=window_end, window_days=int(args.window_days))
     log.info("phase4.4E response-times complete", stats)
+    return 0
+
+
+def _run_phase45_force_compositions(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase45_force_compositions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4.5A force compositions complete", stats)
+    return 0
+
+
+def _run_phase45_force_transitions(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase45_force_transitions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4.5C force transitions complete", stats)
     return 0
 
 

@@ -530,6 +530,15 @@ ci-phase4-response-times:
 ci-phase4-threat-surface:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-threat-surface --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.5 — force composition + doctrine + transitions.
+# Run after ci-phase4-incidents. Compositions before transitions.
+# Args: VIEWER_BLOC=1 CI_ARGS="--since-hours=8760"
+ci-phase45-force-compositions:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase45-force-compositions --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase45-force-transitions:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase45-force-transitions --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in
