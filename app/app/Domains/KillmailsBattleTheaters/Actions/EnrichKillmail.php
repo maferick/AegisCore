@@ -225,6 +225,24 @@ final class EnrichKillmail
 
             $totalQty = $item->quantity_destroyed + $item->quantity_dropped;
 
+            // singleton=2 in killmail items = blueprint COPY (BPC).
+            // BPCs share type_id with the BPO but have a tiny fraction
+            // of BPO market value depending on runs / ME / TE — none
+            // of which the killmail tells us. Pricing them as BPOs
+            // wildly overstates total_value (a single Naglfar BPC is
+            // ~1M ISK, the BPO ~1.85B). zKillboard's convention is to
+            // value BPCs at zero. We follow the same rule and stamp
+            // valuation_source='bpc_zero' so the audit trail is
+            // explicit about why the price is zero.
+            if ((int) $item->singleton === 2) {
+                $item->unit_value = '0.00';
+                $item->total_value = '0.00';
+                $item->valuation_date = $v->dateUsed;
+                $item->valuation_source = 'bpc_zero';
+                $valued++;
+                continue;
+            }
+
             $item->unit_value = $v->unitPrice;
             $item->total_value = bcmul($v->unitPrice, (string) $totalQty, 2);
             $item->valuation_date = $v->dateUsed;

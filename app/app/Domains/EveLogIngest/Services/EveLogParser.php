@@ -35,11 +35,31 @@ final class EveLogParser
 {
     /**
      * Channel name fragments that imply intel-channel handling. Case
-     * insensitive substring match. Operators can extend by adding
-     * environment-specific names later — the spec is intentionally
-     * loose about which channel is "intel".
+     * insensitive substring match. Bloc-specific intel channels are
+     * appended via the EVE_INTEL_CHANNEL_HINTS env var
+     * (comma-separated, lowercased). Default list covers generic
+     * names plus known bloc channels.
+     *
+     * Calibration backlog: move to a per-bloc config table so
+     * leadership can edit without redeploy.
      */
-    private const INTEL_CHANNEL_HINTS = ['intel', 'spy', 'red light', 'cs intel', 'wartime'];
+    private const INTEL_CHANNEL_HINTS = [
+        'intel', 'spy', 'red light', 'cs intel', 'wartime',
+        'wc.vale', 'wc.tr', 'wc.ge', 'wc.vale+tr+ge',
+    ];
+
+    /**
+     * @return list<string>
+     */
+    private static function intelHints(): array
+    {
+        $env = (string) (getenv('EVE_INTEL_CHANNEL_HINTS') ?: '');
+        $extra = array_filter(array_map(
+            fn ($s) => mb_strtolower(trim($s)),
+            explode(',', $env),
+        ), fn ($s) => $s !== '');
+        return array_values(array_unique(array_merge(self::INTEL_CHANNEL_HINTS, $extra)));
+    }
 
     private const TS_REGEX = '/^\[\s*(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2})\s*\]\s*(.*)$/u';
 
@@ -239,7 +259,7 @@ final class EveLogParser
         if ($logType === 'intel') {
             return 'intel_report';
         }
-        foreach (self::INTEL_CHANNEL_HINTS as $hint) {
+        foreach (self::intelHints() as $hint) {
             if ($name !== '' && str_contains($name, $hint)) {
                 return 'intel_report';
             }
@@ -271,7 +291,7 @@ final class EveLogParser
         // Channel-specific overrides win when present.
         if ($channel === 'local') return 'local';
         if ($channel !== '' && str_contains($channel, 'fleet')) return 'fleet';
-        foreach (self::INTEL_CHANNEL_HINTS as $hint) {
+        foreach (self::intelHints() as $hint) {
             if ($channel !== '' && str_contains($channel, $hint)) return 'intel';
         }
         // Folder hints establish a baseline so first-chunk classification
