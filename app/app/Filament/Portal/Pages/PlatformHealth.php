@@ -105,6 +105,15 @@ class PlatformHealth extends Page
             ->orderByDesc('opened_at')
             ->get();
 
+        $topRetryPipelines = DB::table('compute_run_log')
+            ->where('compute_started_at', '>=', now()->subHours(24))
+            ->where('retry_count', '>', 0)
+            ->groupBy('pipeline', 'retry_reason')
+            ->selectRaw("pipeline, retry_reason, COUNT(*) AS retried_runs, SUM(retry_count) AS total_retries, SUM(status='succeeded') AS succeeded_after_retry, SUM(status='failed') AS failed_after_retry")
+            ->orderByDesc('total_retries')
+            ->limit(15)
+            ->get();
+
         // Per-lane aggregates: retry rate + open circuits + last failure.
         $laneRetry = [];
         foreach ($lanes as $l) {
@@ -207,6 +216,7 @@ class PlatformHealth extends Page
             'incident_pulse' => $incidentPulse,
             'open_circuits' => $openCircuits,
             'lane_retry' => $laneRetry,
+            'top_retry_pipelines' => $topRetryPipelines,
         ];
     }
 

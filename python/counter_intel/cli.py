@@ -61,6 +61,9 @@ from counter_intel.phase4_freshness import run_freshness as phase49_freshness
 from counter_intel.phase49a_orchestration import (
     ComputeLog, run_lane_metrics as phase49a_lane_metrics,
 )
+from counter_intel.phase49d_retry import (
+    retry, POLICIES, CircuitOpenError,
+)
 from counter_intel.phase49e_quality_guards import (
     run_quality_guards as phase49e_quality_guards,
 )
@@ -418,10 +421,19 @@ def _run_phase4_timelines(args) -> int:
         with ComputeLog(conn, lane="parser", pipeline="phase4-timelines",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours)}) as r:
-            stats = phase4_timelines(
-                conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since,
-                dry_run=bool(getattr(args, "dry_run", False)),
-            )
+            try:
+                stats = retry(
+                    lambda: phase4_timelines(
+                        conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since,
+                        dry_run=bool(getattr(args, "dry_run", False)),
+                    ),
+                    POLICIES["parser"],
+                    conn=conn, lane="parser", pipeline="phase4-timelines",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4 timelines skipped — circuit open", {})
+                return 0
             r.set_stats(stats or {})
     log.info("phase4 timelines complete", stats)
     return 0
@@ -435,7 +447,16 @@ def _run_phase4_fleet_participation(args) -> int:
         with ComputeLog(conn, lane="operational", pipeline="phase4-fleet-participation",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours)}) as r:
-            stats = phase4_fleet_participation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            try:
+                stats = retry(
+                    lambda: phase4_fleet_participation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="operational", pipeline="phase4-fleet-participation",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4 fleet-participation skipped — circuit open", {})
+                return 0
             r.set_stats(stats or {})
     log.info("phase4 fleet-participation complete", stats)
     return 0
@@ -451,8 +472,17 @@ def _run_phase4_intel_reliability(args) -> int:
         with ComputeLog(conn, lane="operational", pipeline="phase4-intel-reliability",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
-            stats = phase4_intel_reliability(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                             window_end=window_end, window_days=int(args.window_days))
+            try:
+                stats = retry(
+                    lambda: phase4_intel_reliability(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                     window_end=window_end, window_days=int(args.window_days)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="operational", pipeline="phase4-intel-reliability",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4 intel-reliability skipped — circuit open", {})
+                return 0
             r.set_stats(stats or {})
     log.info("phase4 intel-reliability complete", stats)
     return 0
@@ -466,7 +496,16 @@ def _run_phase4_hostile_clusters(args) -> int:
         with ComputeLog(conn, lane="operational", pipeline="phase4-hostile-clusters",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours)}) as r:
-            stats = phase4_hostile_clusters(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            try:
+                stats = retry(
+                    lambda: phase4_hostile_clusters(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="operational", pipeline="phase4-hostile-clusters",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.3A hostile-clusters skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("clusters_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.3A hostile-clusters complete", stats)
@@ -481,7 +520,16 @@ def _run_phase4_incidents(args) -> int:
         with ComputeLog(conn, lane="operational", pipeline="phase4-incidents",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours)}) as r:
-            stats = phase4_incidents(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            try:
+                stats = retry(
+                    lambda: phase4_incidents(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="operational", pipeline="phase4-incidents",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.3B incidents skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("incidents_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.3B incidents complete", stats)
@@ -542,7 +590,16 @@ def _run_phase45_force_compositions(args) -> int:
         with ComputeLog(conn, lane="doctrine", pipeline="phase45-force-compositions",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours)}) as r:
-            stats = phase45_force_compositions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            try:
+                stats = retry(
+                    lambda: phase45_force_compositions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="doctrine", pipeline="phase45-force-compositions",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.5A force compositions skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("compositions_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.5A force compositions complete", stats)
@@ -557,7 +614,16 @@ def _run_phase45_force_transitions(args) -> int:
         with ComputeLog(conn, lane="doctrine", pipeline="phase45-force-transitions",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours)}) as r:
-            stats = phase45_force_transitions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            try:
+                stats = retry(
+                    lambda: phase45_force_transitions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="doctrine", pipeline="phase45-force-transitions",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.5C force transitions skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("transitions_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.5C force transitions complete", stats)
@@ -575,8 +641,17 @@ def _run_phase4_threat_surface(args) -> int:
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"window_end": window_end.isoformat(),
                               "window_days": int(args.window_days)}) as r:
-            stats = phase4_threat_surface(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                           window_end=window_end, window_days=int(args.window_days))
+            try:
+                stats = retry(
+                    lambda: phase4_threat_surface(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                   window_end=window_end, window_days=int(args.window_days)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="operational", pipeline="phase4-threat-surface",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4 threat-surface skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("systems") or 0))
             r.set_stats(stats or {})
     log.info("phase4.4F threat-surface complete", stats)
@@ -615,8 +690,17 @@ def _run_phase46_alliance_profiles(args) -> int:
         with ComputeLog(conn, lane="doctrine", pipeline="phase46-alliance-profiles",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
-            stats = phase46_alliance_profiles(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                              window_end=window_end, window_days=int(args.window_days))
+            try:
+                stats = retry(
+                    lambda: phase46_alliance_profiles(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                      window_end=window_end, window_days=int(args.window_days)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="doctrine", pipeline="phase46-alliance-profiles",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.6A alliance-profiles skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("alliances_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.6A alliance-profiles complete", stats)
@@ -630,8 +714,17 @@ def _run_phase46_coalition_comparisons(args) -> int:
         with ComputeLog(conn, lane="doctrine", pipeline="phase46-coalition-comparisons",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
-            stats = phase46_coalition_comparisons(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                                  window_end=window_end, window_days=int(args.window_days))
+            try:
+                stats = retry(
+                    lambda: phase46_coalition_comparisons(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                          window_end=window_end, window_days=int(args.window_days)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="doctrine", pipeline="phase46-coalition-comparisons",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.6B coalition-comparisons skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("blocs_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.6B coalition-comparisons complete", stats)
@@ -645,8 +738,17 @@ def _run_phase46_doctrine_evolution(args) -> int:
         with ComputeLog(conn, lane="doctrine", pipeline="phase46-doctrine-evolution",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
-            stats = phase46_doctrine_evolution(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                               window_end=window_end, window_days=int(args.window_days))
+            try:
+                stats = retry(
+                    lambda: phase46_doctrine_evolution(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                       window_end=window_end, window_days=int(args.window_days)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="doctrine", pipeline="phase46-doctrine-evolution",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.6C doctrine-evolution skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("events_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.6C doctrine-evolution complete", stats)
@@ -694,8 +796,17 @@ def _run_phase47_daily_digest(args) -> int:
         with ComputeLog(conn, lane="intelligence_generation", pipeline="phase47-daily-digest",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"window": str(args.window), "digest_date": digest_date.isoformat()}) as r:
-            stats = phase47_daily_digest(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                          digest_date=digest_date, window_kind=str(args.window))
+            try:
+                stats = retry(
+                    lambda: phase47_daily_digest(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                  digest_date=digest_date, window_kind=str(args.window)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="intelligence_generation", pipeline="phase47-daily-digest",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.7A daily-digest skipped — circuit open", {})
+                return 0
             r.set_generated_rows(1)
             r.set_stats(stats or {})
     log.info("phase4.7A daily-digest complete", stats)
@@ -712,9 +823,18 @@ def _run_phase47_strategic_alerts(args) -> int:
         with ComputeLog(conn, lane="intelligence_generation", pipeline="phase47-strategic-alerts",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"lookback_days": int(args.lookback_days)}) as r:
-            stats = phase47_strategic_alerts(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                              detection_date=detection_date,
-                                              lookback_days=int(args.lookback_days))
+            try:
+                stats = retry(
+                    lambda: phase47_strategic_alerts(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                      detection_date=detection_date,
+                                                      lookback_days=int(args.lookback_days)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="intelligence_generation", pipeline="phase47-strategic-alerts",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.7B strategic-alerts skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("alerts_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.7B strategic-alerts complete", stats)
@@ -729,8 +849,17 @@ def _run_phase47_incident_narratives(args) -> int:
         with ComputeLog(conn, lane="intelligence_generation", pipeline="phase47-incident-narratives",
                         viewer_bloc_id=args.viewer_bloc_id,
                         args={"since_hours": int(args.since_hours), "limit": int(args.limit)}) as r:
-            stats = phase47_incident_narratives(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                                since_dt=since, limit=int(args.limit))
+            try:
+                stats = retry(
+                    lambda: phase47_incident_narratives(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                        since_dt=since, limit=int(args.limit)),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="intelligence_generation", pipeline="phase47-incident-narratives",
+                    run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase4.7C incident-narratives skipped — circuit open", {})
+                return 0
             r.set_generated_rows(int(stats.get("narratives_written") or 0))
             r.set_stats(stats or {})
     log.info("phase4.7C incident-narratives complete", stats)

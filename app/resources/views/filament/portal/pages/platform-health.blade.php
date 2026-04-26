@@ -191,6 +191,43 @@
                     @endif
                 </div>
 
+                {{-- Top retry pipelines (24h) --}}
+                @if (count($top_retry_pipelines) > 0)
+                    <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
+                        <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Top retry pipelines · 24h</h3>
+                        <table style="width:100%; font-size:0.65rem; color:#cbd5e1; border-collapse:collapse;">
+                            <thead style="color:#7a7a82;">
+                                <tr><th style="text-align:left;">pipeline</th><th style="text-align:left;">reason</th><th style="text-align:right;">retries</th><th style="text-align:right;">runs</th><th style="text-align:right;">success %</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach ($top_retry_pipelines as $r)
+                                    @php
+                                        $total = (int)$r->retried_runs;
+                                        $succ = (int)($r->succeeded_after_retry ?? 0);
+                                        $rate = $total > 0 ? ($succ / $total) : 0;
+                                        $rateCol = $rate >= 0.9 ? '#86efac' : ($rate >= 0.5 ? '#fde68a' : '#fb7185');
+                                        $reasonCol = match($r->retry_reason) {
+                                            'transient' => '#7dd3fc',
+                                            'contention' => '#fdba74',
+                                            'rate_limit' => '#c4b5fd',
+                                            'permanent' => '#fb7185',
+                                            'malformed_input' => '#fb7185',
+                                            default => '#9ca3af',
+                                        };
+                                    @endphp
+                                    <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                        <td style="padding:2px 4px;">{{ $r->pipeline }}</td>
+                                        <td style="padding:2px 4px; color:{{ $reasonCol }};">{{ $r->retry_reason }}</td>
+                                        <td style="padding:2px 4px; text-align:right;">{{ $r->total_retries }}</td>
+                                        <td style="padding:2px 4px; text-align:right;">{{ $r->retried_runs }}</td>
+                                        <td style="padding:2px 4px; text-align:right; color:{{ $rateCol }};">{{ number_format($rate * 100, 0) }}%</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @endif
+
                 {{-- Open circuits --}}
                 @if (count($open_circuits) > 0)
                     <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="border-left:3px solid #fb7185;">

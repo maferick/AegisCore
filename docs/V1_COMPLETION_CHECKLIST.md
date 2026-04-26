@@ -155,6 +155,14 @@ considered closed for v1.
 - ☑ Neo4j thread budget documented (16 Bolt slots) +
   `neo4j_thread_pressure` detector covers ≥80% utilisation +
   RUNBOOK recipe
+- ☑ retry/back-off wired into 13 priority pipelines
+  (timelines / fleet-participation / intel-reliability /
+  hostile-clusters / incidents / force-comps + transitions /
+  threat-surface / alliance-profiles / coalition-comparisons /
+  doctrine-evolution / digest / alerts / narratives) — each
+  uses appropriate POLICIES entry + CircuitOpenError clean-skip
+- ☑ platform-health top-retry-pipelines panel (24h: pipeline,
+  reason, retries, runs, success %)
 - ☑ retry/back-off policy: phase49d_retry.py with RetryClass
   (transient / contention / rate_limit / permanent /
   malformed_input), RetryPolicy + 5 default policies (compute
