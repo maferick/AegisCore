@@ -65,6 +65,20 @@ COMBAT_SPIKE_MIN_EVENTS = _env_int("PHASE4_COMBAT_SPIKE_MIN_EVENTS", 30)
 # destruct lines within the cluster window.
 SELF_DESTRUCT_MIN_LINES = _env_int("PHASE4_SELF_DESTRUCT_MIN_LINES", 3)
 
+# Self-destruct wave dedup — minimum gap between successive wave
+# rows from the same listener+system. Stops a single fleet wipe from
+# emitting 5+ adjacent rows.
+SELF_DESTRUCT_MIN_GAP_MINUTES = _env_int("PHASE4_SELF_DESTRUCT_MIN_GAP_MINUTES", 30)
+
+# Combat spike — minimum distinct line fingerprints within the
+# cluster window. Suppresses overheating-tick repeats.
+COMBAT_SPIKE_MIN_DISTINCT = _env_int("PHASE4_COMBAT_SPIKE_MIN_DISTINCT", 8)
+
+# Disengagement — combat-rate derivative threshold. Fires when the
+# events-per-minute rate drops by at least this fraction over a
+# 10-minute lookahead vs the prior 5-minute window.
+DISENGAGEMENT_DROP_FRACTION = float(os.environ.get("PHASE4_DISENGAGEMENT_DROP_FRACTION", "0.7"))
+
 # Fleet presence: gap > N minutes between speaker's messages closes
 # the window.
 FLEET_SESSION_GAP_MINUTES = _env_int("PHASE4_FLEET_SESSION_GAP_MINUTES", 30)
@@ -116,6 +130,27 @@ class TimelineEvent:
     evidence: dict
     window_start: datetime | None = None
     window_end: datetime | None = None
+    quality: str = "normal"
+    solar_system_id: int | None = None
+    region_id: int | None = None
+
+
+# Phase 4.2C — quality is separate from confidence.
+#   confidence = how much we trust the row exists at all
+#   quality    = how operationally meaningful the row is
+# Example: a high-confidence MOTD line is low quality (noise).
+TIMELINE_QUALITY_BY_TYPE: dict[str, str] = {
+    "fleet_formup": "strong",
+    "hostile_report": "strong",
+    "escalation": "strategic",
+    "combat_spike": "normal",
+    "self_destruct_wave": "strong",
+    "extraction": "strong",
+    "disengagement": "normal",
+    "crash_symptom": "weak",
+    "intel_gap": "normal",
+    "unknown": "noisy",
+}
 
 
 def run_timelines(
@@ -160,12 +195,32 @@ def run_timelines(
         out.extend(_detect_self_destruct_waves(bucket, listener, system))
         out.extend(_detect_disengagement_and_crash(bucket, listener, system))
 
+    # Quality + system context attach.
+    system_id_cache: dict[str, tuple[int | None, int | None]] = {}
+    for ev in out:
+        ev.quality = TIMELINE_QUALITY_BY_TYPE.get(ev.timeline_type, "normal")
+        if ev.solar_system_name:
+            sid_rid = system_id_cache.get(ev.solar_system_name)
+            if sid_rid is None:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, region_id FROM ref_solar_systems WHERE name = %s LIMIT 1",
+                        (ev.solar_system_name,),
+                    )
+                    row = cur.fetchone()
+                sid_rid = (
+                    int(row["id"]) if row else None,
+                    int(row["region_id"]) if row and row.get("region_id") is not None else None,
+                )
+                system_id_cache[ev.solar_system_name] = sid_rid
+            ev.solar_system_id, ev.region_id = sid_rid
+
     if dry_run:
         for ev in out[:50]:
             log.info("[dry-run] timeline", {
                 "type": ev.timeline_type, "ts": str(ev.event_timestamp),
                 "listener": ev.source_listener, "system": ev.solar_system_name,
-                "confidence": ev.confidence, "summary": ev.event_summary,
+                "confidence": ev.confidence, "quality": ev.quality, "summary": ev.event_summary,
             })
         log.info("phase4 timelines dry-run done", {"events_loaded": len(events), "would_write": len(out)})
         return {"events_loaded": len(events), "would_write": len(out), "dry_run": True}
@@ -205,37 +260,58 @@ def _load_events_window(conn, since_dt: datetime) -> list[dict]:
 def _detect_fleet_formups(
     bucket: list[dict], listener: str, system: str | None,
 ) -> list[TimelineEvent]:
-    """Cluster of >= 6 fleet_message events with at least 3 distinct
-    speakers within a 5-minute window, before the first combat event
-    in the same window. Heuristic for "form up here, hold cloaked,
-    align" patterns."""
+    """Cluster of >= 6 fleet_message events from >= 3 distinct
+    speakers within a 5-minute window, AND preceded by ≥ 5 minutes
+    of silence on the same fleet channel.
+
+    Phase 4.2B: pre-cluster-silence gate added so sustained fleet
+    chatter doesn't fire form-up rows every 5 minutes."""
     fleet_msgs = [e for e in bucket if e["event_type"] == "fleet_message"]
     if len(fleet_msgs) < 6:
         return []
     out: list[TimelineEvent] = []
     window: list[dict] = []
-    for m in fleet_msgs:
+    last_fired_at: datetime | None = None
+    silence_required = TIMELINE_CLUSTER_MINUTES * 60  # seconds of pre-cluster silence
+    for idx, m in enumerate(fleet_msgs):
         ts = m["event_timestamp"]
         while window and (ts - window[0]["event_timestamp"]).total_seconds() > TIMELINE_CLUSTER_MINUTES * 60:
             window.pop(0)
         window.append(m)
-        if len(window) >= 6 and len({e["actor_name"] for e in window if e.get("actor_name")}) >= 3:
-            ws = window[0]["event_timestamp"]
-            we = window[-1]["event_timestamp"]
-            speakers = sorted({e["actor_name"] for e in window if e.get("actor_name")})
-            out.append(TimelineEvent(
-                timeline_type="fleet_formup",
-                event_timestamp=ws,
-                window_start=ws, window_end=we,
-                source_listener=listener or None,
-                solar_system_name=system,
-                confidence="medium",
-                event_summary=f"Fleet form-up: {len(window)} messages from {len(speakers)} speakers in {(we - ws).seconds // 60 + 1}m.",
-                evidence={"speakers": speakers, "messages": len(window)},
-            ))
-            # Stop double-firing: clear the window so the next formup
-            # needs to re-build.
+        if len(window) < 6:
+            continue
+        speakers = {e["actor_name"] for e in window if e.get("actor_name")}
+        if len(speakers) < 3:
+            continue
+        ws = window[0]["event_timestamp"]
+        # Pre-cluster silence: previous fleet_message before window
+        # start must be > silence_required seconds earlier (or there's
+        # no previous message at all).
+        prev = None
+        for k in range(idx - len(window), -1, -1):
+            if k < 0 or k >= len(fleet_msgs): continue
+            prev = fleet_msgs[k]
+            break
+        if prev is not None and (ws - prev["event_timestamp"]).total_seconds() < silence_required:
+            continue
+        # Cooldown: don't double-fire on the same listener/system if
+        # we already fired in the last 30min.
+        if last_fired_at is not None and (ts - last_fired_at).total_seconds() < 30 * 60:
             window = []
+            continue
+        we = window[-1]["event_timestamp"]
+        out.append(TimelineEvent(
+            timeline_type="fleet_formup",
+            event_timestamp=ws,
+            window_start=ws, window_end=we,
+            source_listener=listener or None,
+            solar_system_name=system,
+            confidence="medium",
+            event_summary=f"Fleet form-up: {len(window)} messages from {len(speakers)} speakers in {(we - ws).seconds // 60 + 1}m (after silence).",
+            evidence={"speakers": sorted(speakers), "messages": len(window)},
+        ))
+        last_fired_at = we
+        window = []
     return out
 
 
@@ -263,51 +339,78 @@ def _detect_hostile_reports(
 def _detect_combat_spikes_and_escalation(
     bucket: list[dict], listener: str, system: str | None,
 ) -> list[TimelineEvent]:
-    """combat_spike: ≥COMBAT_SPIKE_MIN_EVENTS combat_event lines in a
-    5-min window. escalation: combat_spike that follows a hostile_report
-    within 15min."""
+    """combat_spike: ≥ COMBAT_SPIKE_MIN_EVENTS combat_event lines in
+    a 5-min window AND ≥ COMBAT_SPIKE_MIN_DISTINCT distinct
+    fingerprints (suppresses single-target overheating tick spam) AND
+    a 30-min cooldown between fires.
+
+    escalation: same trigger plus a hostile_report in the previous 15
+    minutes."""
     combat_msgs = [e for e in bucket if e["event_type"] == "combat_event"]
     if len(combat_msgs) < COMBAT_SPIKE_MIN_EVENTS:
         return []
     intel_msgs = [e for e in bucket if e["event_type"] == "intel_report"]
     out: list[TimelineEvent] = []
     window: list[dict] = []
+    last_fired_at: datetime | None = None
+    cooldown = 30 * 60
     for m in combat_msgs:
         ts = m["event_timestamp"]
         while window and (ts - window[0]["event_timestamp"]).total_seconds() > TIMELINE_CLUSTER_MINUTES * 60:
             window.pop(0)
         window.append(m)
-        if len(window) >= COMBAT_SPIKE_MIN_EVENTS:
-            ws = window[0]["event_timestamp"]
-            we = window[-1]["event_timestamp"]
-            preceding_intel = [
-                ir for ir in intel_msgs
-                if (ws - ir["event_timestamp"]).total_seconds() <= 15 * 60
-                and ir["event_timestamp"] <= ws
-            ]
-            if preceding_intel:
-                out.append(TimelineEvent(
-                    timeline_type="escalation",
-                    event_timestamp=ws,
-                    window_start=ws, window_end=we,
-                    source_listener=listener or None,
-                    solar_system_name=system,
-                    confidence="medium",
-                    event_summary=f"Escalation: {len(window)} combat events in {(we - ws).seconds // 60 + 1}m, preceded by {len(preceding_intel)} intel report(s).",
-                    evidence={"combat_n": len(window), "intel_n": len(preceding_intel)},
-                ))
-            else:
-                out.append(TimelineEvent(
-                    timeline_type="combat_spike",
-                    event_timestamp=ws,
-                    window_start=ws, window_end=we,
-                    source_listener=listener or None,
-                    solar_system_name=system,
-                    confidence="medium",
-                    event_summary=f"Combat spike: {len(window)} combat events in {(we - ws).seconds // 60 + 1}m.",
-                    evidence={"combat_n": len(window)},
-                ))
+        if len(window) < COMBAT_SPIKE_MIN_EVENTS:
+            continue
+        # Distinct fingerprints — derive a coarse hash of the message
+        # text so identical-tick repeats don't all count.
+        prints = set()
+        for w in window:
+            try:
+                px = json.loads(w.get("parsed_json") or "{}")
+            except (TypeError, ValueError):
+                px = {}
+            msg = (px.get("message") or "")
+            # Strip HTML-ish markup + numbers — leaves the source/target
+            # tokens intact, dedupes "12 from Bad Guy" + "8 from Bad Guy".
+            fp = re.sub(r"<[^>]+>", " ", msg)
+            fp = re.sub(r"\d+", "N", fp).strip()
+            prints.add(fp[:80])
+        if len(prints) < COMBAT_SPIKE_MIN_DISTINCT:
+            continue
+        if last_fired_at is not None and (ts - last_fired_at).total_seconds() < cooldown:
             window = []
+            continue
+        ws = window[0]["event_timestamp"]
+        we = window[-1]["event_timestamp"]
+        preceding_intel = [
+            ir for ir in intel_msgs
+            if (ws - ir["event_timestamp"]).total_seconds() <= 15 * 60
+            and ir["event_timestamp"] <= ws
+        ]
+        if preceding_intel:
+            out.append(TimelineEvent(
+                timeline_type="escalation",
+                event_timestamp=ws,
+                window_start=ws, window_end=we,
+                source_listener=listener or None,
+                solar_system_name=system,
+                confidence="medium",
+                event_summary=f"Escalation: {len(window)} combat events / {len(prints)} distinct lines in {(we - ws).seconds // 60 + 1}m, preceded by {len(preceding_intel)} intel report(s).",
+                evidence={"combat_n": len(window), "distinct": len(prints), "intel_n": len(preceding_intel)},
+            ))
+        else:
+            out.append(TimelineEvent(
+                timeline_type="combat_spike",
+                event_timestamp=ws,
+                window_start=ws, window_end=we,
+                source_listener=listener or None,
+                solar_system_name=system,
+                confidence="medium",
+                event_summary=f"Combat spike: {len(window)} combat events / {len(prints)} distinct lines in {(we - ws).seconds // 60 + 1}m.",
+                evidence={"combat_n": len(window), "distinct": len(prints)},
+            ))
+        last_fired_at = we
+        window = []
     return out
 
 
@@ -327,6 +430,8 @@ def _detect_self_destruct_waves(
     """
     out: list[TimelineEvent] = []
     sd_window: list[dict] = []
+    last_fired_at: datetime | None = None
+    min_gap = SELF_DESTRUCT_MIN_GAP_MINUTES * 60
     for m in bucket:
         if m["event_type"] != "notify_event":
             continue
@@ -346,6 +451,9 @@ def _detect_self_destruct_waves(
         while sd_window and (ts - sd_window[0]["event_timestamp"]).total_seconds() > TIMELINE_CLUSTER_MINUTES * 60:
             sd_window.pop(0)
         sd_window.append(m)
+        if last_fired_at is not None and (ts - last_fired_at).total_seconds() < min_gap:
+            # In cooldown after a previous wave on this listener/system.
+            continue
         if len(sd_window) >= SELF_DESTRUCT_MIN_LINES:
             ws = sd_window[0]["event_timestamp"]
             we = sd_window[-1]["event_timestamp"]
@@ -366,6 +474,7 @@ def _detect_self_destruct_waves(
                 event_summary=f"Self-destruct wave: {len(sd_window)} (notify) self-destruct lines in {(we - ws).seconds // 60 + 1}m.",
                 evidence={"count": len(sd_window), "samples": samples},
             ))
+            last_fired_at = we
             sd_window = []
     return out
 
@@ -373,46 +482,70 @@ def _detect_self_destruct_waves(
 def _detect_disengagement_and_crash(
     bucket: list[dict], listener: str, system: str | None,
 ) -> list[TimelineEvent]:
-    """disengagement: a combat-heavy listener falls quiet > 5min
-    after a sustained run of combat_events.
+    """disengagement: combat-rate derivative drops sharply.
+    Compute combat_events/min over a sliding 5-min window; fire when
+    a 5-min window's rate drops by >= DISENGAGEMENT_DROP_FRACTION
+    relative to the prior window's rate.
+
     crash_symptom: any single gap > 30min in an otherwise-active
     listener with > 100 events in the last hour."""
     if len(bucket) < 30:
         return []
     out: list[TimelineEvent] = []
+    combat_msgs = [e for e in bucket if e["event_type"] == "combat_event"]
+
+    # Disengagement via rate derivative. Bucket combat events into
+    # 1-minute slots, then walk a 5-min window vs the previous 5-min
+    # window. Fire when rate drops sharply AND prior window had real
+    # density (> 5 events / minute).
+    if len(combat_msgs) >= 30:
+        bucket_by_minute: dict[int, int] = defaultdict(int)
+        for m in combat_msgs:
+            slot = int(m["event_timestamp"].timestamp() // 60)
+            bucket_by_minute[slot] += 1
+        if bucket_by_minute:
+            min_slot = min(bucket_by_minute)
+            max_slot = max(bucket_by_minute)
+            last_fire_slot = -10**9
+            for s in range(min_slot + 5, max_slot - 5):
+                prev_rate = sum(bucket_by_minute.get(s - i, 0) for i in range(1, 6)) / 5.0
+                next_rate = sum(bucket_by_minute.get(s + i, 0) for i in range(0, 5)) / 5.0
+                if prev_rate < 5.0:
+                    continue  # baseline too low, not a real engagement
+                drop = (prev_rate - next_rate) / prev_rate if prev_rate > 0 else 0.0
+                if drop < DISENGAGEMENT_DROP_FRACTION:
+                    continue
+                if s - last_fire_slot < 30:  # 30-minute cooldown
+                    continue
+                last_fire_slot = s
+                ts = datetime.fromtimestamp(s * 60, tz=timezone.utc)
+                out.append(TimelineEvent(
+                    timeline_type="disengagement",
+                    event_timestamp=ts,
+                    source_listener=listener or None,
+                    solar_system_name=system,
+                    confidence="medium",
+                    event_summary=f"Disengagement: combat rate dropped {int(drop*100)}% (prior 5m {prev_rate:.1f}/min → next 5m {next_rate:.1f}/min).",
+                    evidence={"prev_rate": round(prev_rate, 2), "next_rate": round(next_rate, 2), "drop_pct": round(drop * 100, 1)},
+                ))
+
+    # Crash symptom: sustained activity then long gap.
     timestamps = [e["event_timestamp"] for e in bucket]
     for i in range(1, len(timestamps)):
         gap = (timestamps[i] - timestamps[i - 1]).total_seconds()
-        if gap < 5 * 60:
+        if gap < 30 * 60:
             continue
-        # Check density immediately before the gap.
-        cutoff = timestamps[i - 1] - timedelta(minutes=10)
-        prev_combat = [
-            e for e in bucket[: i]
-            if e["event_type"] == "combat_event" and e["event_timestamp"] >= cutoff
-        ]
-        if len(prev_combat) >= 8 and gap < 30 * 60:
+        recent = [e for e in bucket[: i] if e["event_timestamp"] >= timestamps[i - 1] - timedelta(hours=1)]
+        if len(recent) >= 100:
             out.append(TimelineEvent(
-                timeline_type="disengagement",
+                timeline_type="crash_symptom",
                 event_timestamp=timestamps[i - 1],
                 source_listener=listener or None,
                 solar_system_name=system,
                 confidence="low",
-                event_summary=f"Disengagement: {len(prev_combat)} combat events in last 10m then {int(gap // 60)}m silence.",
-                evidence={"prev_combat": len(prev_combat), "gap_seconds": int(gap)},
+                event_summary=f"Possible crash: {len(recent)} events in last hour, then {int(gap // 60)}m silence.",
+                evidence={"recent_events": len(recent), "gap_seconds": int(gap)},
             ))
-        elif gap >= 30 * 60:
-            recent = [e for e in bucket[: i] if e["event_timestamp"] >= timestamps[i - 1] - timedelta(hours=1)]
-            if len(recent) >= 100:
-                out.append(TimelineEvent(
-                    timeline_type="crash_symptom",
-                    event_timestamp=timestamps[i - 1],
-                    source_listener=listener or None,
-                    solar_system_name=system,
-                    confidence="low",
-                    event_summary=f"Possible crash: {len(recent)} events in last hour, then {int(gap // 60)}m silence.",
-                    evidence={"recent_events": len(recent), "gap_seconds": int(gap)},
-                ))
     return out
 
 
@@ -427,20 +560,25 @@ def _persist_timeline(
             INSERT INTO operational_timeline_events
                 (viewer_bloc_id, timeline_type, event_timestamp, event_window_start,
                  event_window_end, source_listener, solar_system_name,
-                 confidence, event_summary, evidence_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 solar_system_id, region_id,
+                 confidence, quality, event_summary, evidence_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 event_window_start = VALUES(event_window_start),
                 event_window_end = VALUES(event_window_end),
                 solar_system_name = VALUES(solar_system_name),
+                solar_system_id = VALUES(solar_system_id),
+                region_id = VALUES(region_id),
                 confidence = VALUES(confidence),
+                quality = VALUES(quality),
                 event_summary = VALUES(event_summary),
                 evidence_json = VALUES(evidence_json)
             """,
             (
                 viewer_bloc_id, ev.timeline_type, ev.event_timestamp,
                 ev.window_start, ev.window_end, ev.source_listener,
-                ev.solar_system_name, ev.confidence, ev.event_summary[:500],
+                ev.solar_system_name, ev.solar_system_id, ev.region_id,
+                ev.confidence, ev.quality, ev.event_summary[:500],
                 json.dumps(ev.evidence, default=str),
             ),
         )

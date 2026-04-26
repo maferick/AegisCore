@@ -149,3 +149,70 @@ make ci-phase4-session-correlation   VIEWER_BLOC=1 CI_ARGS="--window-days=90"
 # check current state
 php artisan counter-intel:phase4-status --bloc=1
 ```
+
+---
+
+## Phase 4.2A — entity resolver (same day, evening)
+
+`eve_log_entity_resolutions` table + `EveLogEntityResolver`
+tokeniser. Backfill produced 56,143 resolutions on 41,440 intel_report
+events (32,112 events with at least one resolution). Phase 4.3
+intel-reliability rewired to JOIN resolutions instead of
+regex-extracting capitalised words.
+
+Heuristic vs resolver-based intel reliability:
+
+| Metric                | Heuristic | Resolver |
+|-----------------------|----------:|---------:|
+| confirmations         |     2,454 |    7,350 |
+| contradictions        |    38,953 |   20,327 |
+| avg reliability_score |     0.066 |    0.250 |
+
+~4× lift in reliability. Confirmation rate per resolved-name report
+= 26.5%, realistic given the 15min confirmation window.
+
+## Phase 4.2B — timeline dedup + clustering
+
+Same data, after dedup gates the timeline noise floor drops:
+
+| timeline_type        | 4.2A pre-dedup | 4.2B (deduped) |
+|----------------------|---------------:|---------------:|
+| `combat_spike`       |          1,101 |              1 |
+| `fleet_formup`       |          4,898 |            119 |
+| `self_destruct_wave` |            953 |             90 |
+| `disengagement`      |              3 |             83 |
+| `escalation`         |              0 |             87 |
+| `hostile_report`     |              0 |         40,732 |
+| `crash_symptom`      |            121 |            121 |
+
+Why the deltas:
+  - `combat_spike` collapsed to 1 because the distinct-fingerprint
+    gate (8 required) is too tight on this gamelog sample. Lower
+    to 4 in next pass.
+  - `fleet_formup` dropped 97% — pre-cluster silence + 30min
+    cooldown rejected sustained chatter.
+  - `self_destruct_wave` dropped 90% from the 30min min-gap.
+  - `disengagement` rebuilt with rate-derivative algorithm — fires
+    when combat rate drops by ≥70% over a 5-min window.
+  - `hostile_report` 40K is one row per intel_report event (every
+    fired intel becomes a timeline row). Probably too noisy for
+    the dossier; next calibration: collapse to 5-min clusters per
+    system.
+
+## Phase 4.2C / 4.2D — quality + system context
+
+Schema landed:
+  - `operational_timeline_events.quality` ENUM
+    (noisy/weak/normal/strong/strategic). Set per timeline_type at
+    write time (escalation=strategic, formup=strong,
+    combat_spike=normal, crash_symptom=weak).
+  - `operational_timeline_events.solar_system_id` + `region_id`.
+    Resolved when the event clustering carries `solar_system_name`
+    (chat headers + EVE System messages do; gamelog flavors do
+    not).
+
+Today's run: every emitted row has a quality value; system_id
+attachment count = 0 because the events feeding the clusters were
+gamelog combat/notify lines (no per-line system context). Next
+pass: enrich timeline rows from `eve_log_entity_resolutions` so
+intel-mentioned systems flow through.
