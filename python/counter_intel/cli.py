@@ -406,10 +406,14 @@ def _run_phase4_timelines(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_timelines(
-            conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since,
-            dry_run=bool(getattr(args, "dry_run", False)),
-        )
+        with ComputeLog(conn, lane="parser", pipeline="phase4-timelines",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase4_timelines(
+                conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since,
+                dry_run=bool(getattr(args, "dry_run", False)),
+            )
+            r.set_stats(stats or {})
     log.info("phase4 timelines complete", stats)
     return 0
 
@@ -419,7 +423,11 @@ def _run_phase4_fleet_participation(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_fleet_participation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="operational", pipeline="phase4-fleet-participation",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase4_fleet_participation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_stats(stats or {})
     log.info("phase4 fleet-participation complete", stats)
     return 0
 
@@ -431,8 +439,12 @@ def _run_phase4_intel_reliability(args) -> int:
         from datetime import timezone, datetime as _dt
         window_end = _dt.now(timezone.utc).date()
     with connection(cfg) as conn:
-        stats = phase4_intel_reliability(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                         window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="operational", pipeline="phase4-intel-reliability",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase4_intel_reliability(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                             window_end=window_end, window_days=int(args.window_days))
+            r.set_stats(stats or {})
     log.info("phase4 intel-reliability complete", stats)
     return 0
 
@@ -442,7 +454,12 @@ def _run_phase4_hostile_clusters(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_hostile_clusters(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="operational", pipeline="phase4-hostile-clusters",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase4_hostile_clusters(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_generated_rows(int(stats.get("clusters_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.3A hostile-clusters complete", stats)
     return 0
 
@@ -452,7 +469,12 @@ def _run_phase4_incidents(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_incidents(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="operational", pipeline="phase4-incidents",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase4_incidents(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_generated_rows(int(stats.get("incidents_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.3B incidents complete", stats)
     return 0
 
@@ -462,7 +484,11 @@ def _run_phase4_system_activity(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_system_activity(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="operational", pipeline="phase4-system-activity",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase4_system_activity(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_stats(stats or {})
     log.info("phase4.3D system-activity complete", stats)
     return 0
 
@@ -472,7 +498,12 @@ def _run_phase4_corridors(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_corridors(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="operational", pipeline="phase4-corridors",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase4_corridors(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_generated_rows(int(stats.get("corridors_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.4C corridors complete", stats)
     return 0
 
@@ -484,8 +515,12 @@ def _run_phase4_response_times(args) -> int:
         from datetime import timezone, datetime as _dt
         window_end = _dt.now(timezone.utc).date()
     with connection(cfg) as conn:
-        stats = phase4_response_times(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                       window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="operational", pipeline="phase4-response-times",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase4_response_times(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                           window_end=window_end, window_days=int(args.window_days))
+            r.set_stats(stats or {})
     log.info("phase4.4E response-times complete", stats)
     return 0
 
@@ -495,7 +530,12 @@ def _run_phase45_force_compositions(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase45_force_compositions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="doctrine", pipeline="phase45-force-compositions",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase45_force_compositions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_generated_rows(int(stats.get("compositions_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.5A force compositions complete", stats)
     return 0
 
@@ -505,7 +545,12 @@ def _run_phase45_force_transitions(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase45_force_transitions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        with ComputeLog(conn, lane="doctrine", pipeline="phase45-force-transitions",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours)}) as r:
+            stats = phase45_force_transitions(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+            r.set_generated_rows(int(stats.get("transitions_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.5C force transitions complete", stats)
     return 0
 
@@ -536,8 +581,12 @@ def _run_phase4_session_correlation(args) -> int:
         from datetime import timezone, datetime as _dt
         window_end = _dt.now(timezone.utc).date()
     with connection(cfg) as conn:
-        stats = phase4_session_correlation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                           window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="graph", pipeline="phase4-session-correlation",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase4_session_correlation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                               window_end=window_end, window_days=int(args.window_days))
+            r.set_stats(stats or {})
     log.info("phase4 session-correlation complete", stats)
     return 0
 
@@ -554,8 +603,13 @@ def _run_phase46_alliance_profiles(args) -> int:
     cfg = Config.from_env()
     window_end = _resolve_window_end(args)
     with connection(cfg) as conn:
-        stats = phase46_alliance_profiles(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                          window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="doctrine", pipeline="phase46-alliance-profiles",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase46_alliance_profiles(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                              window_end=window_end, window_days=int(args.window_days))
+            r.set_generated_rows(int(stats.get("alliances_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.6A alliance-profiles complete", stats)
     return 0
 
@@ -564,8 +618,13 @@ def _run_phase46_coalition_comparisons(args) -> int:
     cfg = Config.from_env()
     window_end = _resolve_window_end(args)
     with connection(cfg) as conn:
-        stats = phase46_coalition_comparisons(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                              window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="doctrine", pipeline="phase46-coalition-comparisons",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase46_coalition_comparisons(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                  window_end=window_end, window_days=int(args.window_days))
+            r.set_generated_rows(int(stats.get("blocs_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.6B coalition-comparisons complete", stats)
     return 0
 
@@ -574,8 +633,13 @@ def _run_phase46_doctrine_evolution(args) -> int:
     cfg = Config.from_env()
     window_end = _resolve_window_end(args)
     with connection(cfg) as conn:
-        stats = phase46_doctrine_evolution(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                           window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="doctrine", pipeline="phase46-doctrine-evolution",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase46_doctrine_evolution(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                               window_end=window_end, window_days=int(args.window_days))
+            r.set_generated_rows(int(stats.get("events_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.6C doctrine-evolution complete", stats)
     return 0
 
@@ -583,7 +647,11 @@ def _run_phase46_doctrine_evolution(args) -> int:
 def _run_phase46_route_pressure(args) -> int:
     cfg = Config.from_env()
     with connection(cfg) as conn:
-        stats = phase46_route_pressure(conn, cfg, viewer_bloc_id=args.viewer_bloc_id)
+        with ComputeLog(conn, lane="operational", pipeline="phase46-route-pressure",
+                        viewer_bloc_id=args.viewer_bloc_id) as r:
+            stats = phase46_route_pressure(conn, cfg, viewer_bloc_id=args.viewer_bloc_id)
+            r.set_generated_rows(int(stats.get("corridors_classified") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.6D route-pressure complete", stats)
     return 0
 
@@ -592,8 +660,13 @@ def _run_phase46_operator_fingerprints(args) -> int:
     cfg = Config.from_env()
     window_end = _resolve_window_end(args)
     with connection(cfg) as conn:
-        stats = phase46_operator_fingerprints(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                              window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="doctrine", pipeline="phase46-operator-fingerprints",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase46_operator_fingerprints(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                  window_end=window_end, window_days=int(args.window_days))
+            r.set_generated_rows(int(stats.get("operators_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.6E operator-fingerprints complete", stats)
     return 0
 
@@ -686,8 +759,13 @@ def _run_phase48_enrich_digest_trust(args) -> int:
     cfg = Config.from_env()
     digest_date = _resolve_date(args.digest_date)
     with connection(cfg) as conn:
-        stats = phase48_enrich_digest_trust(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                             digest_date=digest_date)
+        with ComputeLog(conn, lane="governance", pipeline="phase48-enrich-digest-trust",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"digest_date": digest_date.isoformat() if digest_date else None}) as r:
+            stats = phase48_enrich_digest_trust(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                 digest_date=digest_date)
+            r.set_generated_rows(int(stats.get("digests_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.8B enrich-digest-trust complete", stats)
     return 0
 
@@ -697,8 +775,13 @@ def _run_phase48_enrich_narrative_sources(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase48_enrich_narrative_sources(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                                  since_dt=since, limit=int(args.limit))
+        with ComputeLog(conn, lane="governance", pipeline="phase48-enrich-narrative-sources",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours), "limit": int(args.limit)}) as r:
+            stats = phase48_enrich_narrative_sources(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                      since_dt=since, limit=int(args.limit))
+            r.set_generated_rows(int(stats.get("narratives_traced") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.8C enrich-narrative-sources complete", stats)
     return 0
 

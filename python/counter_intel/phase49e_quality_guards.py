@@ -58,7 +58,7 @@ def run_quality_guards(
         counts["stale_compute_chain"] += _detect_stale_compute_chain(conn, bloc_id)
 
     # Cross-cutting (no bloc scope).
-    counts["parser_drift"] = _detect_parser_drift(conn)
+    counts["parser_drift_split"] = _detect_parser_drift(conn)
     counts["unknown_event_spike"] = _detect_unknown_event_spike(conn)
 
     conn.commit()
@@ -301,12 +301,16 @@ def _detect_stale_compute_chain(conn, bloc_id) -> int:
 
 
 def _detect_parser_drift(conn) -> int:
-    """Cross-cutting: trigger when daily eve_log_parse_errors count
-    exceeds 5% of total parsed events for the day."""
+    """Cross-cutting: split into current_parser_drift (open errors)
+    vs historical_parser_backlog (already retried/dismissed).
+
+    Only `current_parser_drift` is allowed to escalate beyond
+    `info` — historical backlog is informational because operators
+    have already triaged it.
+    """
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=24)
 
-    # Tables exist (eve_log_events, eve_log_parse_errors). Skip if either missing.
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -315,26 +319,49 @@ def _detect_parser_drift(conn) -> int:
             )
             total = int((cur.fetchone() or {}).get("n") or 0)
             cur.execute(
-                "SELECT COUNT(*) AS n FROM eve_log_parse_errors WHERE created_at >= %s",
+                "SELECT COUNT(*) AS n FROM eve_log_parse_errors "
+                "WHERE created_at >= %s AND status = 'open'",
                 (start,),
             )
-            errors = int((cur.fetchone() or {}).get("n") or 0)
+            open_errors = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM eve_log_parse_errors "
+                "WHERE created_at >= %s AND status IN ('retried','dismissed','reparsed_ok')",
+                (start,),
+            )
+            historical = int((cur.fetchone() or {}).get("n") or 0)
     except pymysql.err.ProgrammingError:
         return 0
-    if total < 100:
-        return 0
-    rate = errors / total
-    if rate < 0.05:
-        return 0
-    severity = "critical" if rate >= 0.20 else "elevated" if rate >= 0.10 else "warning"
-    return _persist_event(
-        conn, None, "parser_drift", severity,
-        start, end,
-        f"Parser drift: {rate:.1%} parse-error rate ({errors}/{total} in 24h)",
-        "Above 5% means an upstream EVE chat/log change broke a regex. Replay errors via eve-log:retry-parse-errors after fixing.",
-        errors, total,
-        {"errors": errors, "total": total, "rate": round(rate, 4)},
-    )
+
+    written = 0
+
+    # Current drift — only `open` errors. Floor 100 events.
+    if total >= 100:
+        rate = open_errors / total if total else 0.0
+        if rate >= 0.05:
+            severity = "critical" if rate >= 0.20 else "elevated" if rate >= 0.10 else "warning"
+            written += _persist_event(
+                conn, None, "current_parser_drift", severity,
+                start, end,
+                f"Current parser drift: {rate:.1%} open-error rate ({open_errors}/{total} in 24h)",
+                "Above 5% open-error rate means an upstream EVE chat/log change broke a regex. Status='open' parse errors haven't been retried — investigate before more accumulate.",
+                open_errors, total,
+                {"open_errors": open_errors, "total_events": total, "rate": round(rate, 4)},
+            )
+
+    # Historical backlog — informational. Triggers when retried/
+    # dismissed/reparsed_ok rows in 24h exceed 10× successful events
+    # (signals a recent bulk replay rather than ongoing drift).
+    if total >= 100 and historical >= 10 * total:
+        written += _persist_event(
+            conn, None, "historical_parser_backlog", "info",
+            start, end,
+            f"Historical parser backlog visible: {historical} retried/dismissed errors in 24h",
+            f"{historical} previously-failed parse rows now in retried/dismissed/reparsed_ok status. Backlog already triaged — informational only.",
+            historical, total,
+            {"historical": historical, "total_events": total},
+        )
+    return written
 
 
 def _detect_unknown_event_spike(conn) -> int:

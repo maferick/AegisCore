@@ -36,6 +36,7 @@ help:
 	@echo ""
 	@echo "  make sde-check              run the SDE version-drift check now (inline)"
 	@echo "  make sde-import             download CCP's SDE and load all ref_* tables (one-shot)"
+	@echo "  make sde-auto-update        check + import-if-bumped wrapper (host cron friendly)"
 	@echo "  make neo4j-sync-universe    project ref_* universe topology into Neo4j (one-shot)"
 	@echo "  make market-poll            pull order-book snapshots into market_orders (one-shot)"
 	@echo "  make market-import          import EVE Ref daily market-history CSVs (one-shot)"
@@ -238,6 +239,20 @@ horizon-publish:
 # Scheduled version runs daily at 08:00 UTC via the `scheduler` container.
 sde-check:
 	$(COMPOSE) exec php-fpm php artisan reference:check-sde-version --sync
+
+# Auto-update wrapper — refresh the check, then run sde-import if a bump
+# is available and the previous import is older than 23h.
+# Designed for host cron (NOT the scheduler container — needs docker
+# socket). Recommended cron entry:
+#   30 8 * * * /opt/AegisCore/scripts/sde-auto-update.sh \
+#       >> /opt/AegisCore/scripts/log/sde-auto-update.log 2>&1
+#
+# Override env vars:
+#   AEGIS_SDE_AUTO_IMPORT=0   dry-run (check + report only)
+#   AEGIS_SDE_FORCE=1         bypass 23h throttle
+#   AEGIS_SDE_SKIP_NEO4J=1    skip neo4j-sync-universe step
+sde-auto-update:
+	@bash scripts/sde-auto-update.sh
 
 # Download CCP's SDE JSONL zip and load all ref_* tables in one transaction.
 # One-shot container — the `tools` profile keeps it out of `docker compose up`.

@@ -9,6 +9,7 @@
                 'healthy' => '#86efac', 'degraded' => '#fde68a',
                 'backlogged' => '#fdba74', 'starved' => '#fb923c',
                 'failed' => '#fb7185',
+                'not_instrumented' => '#7a7a82',
             ];
             $surfaceStateColors = [
                 'healthy' => '#86efac', 'degraded' => '#fde68a',
@@ -60,17 +61,24 @@
                             </thead>
                             <tbody>
                                 @foreach ($lanes as $l)
-                                    @php $col = $laneStateColors[$l->lane_state] ?? '#9ca3af'; @endphp
-                                    <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                    @php
+                                        $col = $laneStateColors[$l->lane_state] ?? '#9ca3af';
+                                        $notInstrumented = ($l->lane_state === 'not_instrumented');
+                                    @endphp
+                                    <tr style="border-top:1px solid rgba(255,255,255,0.05);{{ $notInstrumented ? ' opacity:0.55;' : '' }}">
                                         <td style="padding:3px 4px;"><strong>{{ str_replace('_', ' ', $l->lane) }}</strong></td>
-                                        <td style="padding:3px 4px; color:{{ $col }};">{{ $l->lane_state }}</td>
-                                        <td style="padding:3px 4px; text-align:right; color:{{ $l->running_jobs > 0 ? '#7dd3fc' : '#7a7a82' }};">{{ $l->running_jobs }}</td>
-                                        <td style="padding:3px 4px; text-align:right;">{{ $l->succeeded_24h }}</td>
-                                        <td style="padding:3px 4px; text-align:right; color:{{ $l->failed_24h > 0 ? '#fb7185' : '#7a7a82' }};">{{ $l->failed_24h }}</td>
-                                        <td style="padding:3px 4px; text-align:right;">{{ $l->avg_duration_ms ?? '—' }}</td>
-                                        <td style="padding:3px 4px; text-align:right;">{{ $l->p95_duration_ms ?? '—' }}</td>
-                                        <td style="padding:3px 4px; text-align:right;">{{ $l->oldest_pending_seconds ? floor($l->oldest_pending_seconds / 60).'m' : '—' }}</td>
-                                        <td style="padding:3px 4px; text-align:right;">{{ number_format((float) $l->throughput_per_hour, 2) }}</td>
+                                        <td style="padding:3px 4px; color:{{ $col }};">{{ str_replace('_', ' ', $l->lane_state) }}</td>
+                                        @if ($notInstrumented)
+                                            <td colspan="7" style="padding:3px 4px; text-align:left; color:#7a7a82; font-style:italic;">no instrumented pipelines reporting · expected for ingest/parser/graph until ComputeLog wraps the relevant CLI entries</td>
+                                        @else
+                                            <td style="padding:3px 4px; text-align:right; color:{{ $l->running_jobs > 0 ? '#7dd3fc' : '#7a7a82' }};">{{ $l->running_jobs }}</td>
+                                            <td style="padding:3px 4px; text-align:right;">{{ $l->succeeded_24h }}</td>
+                                            <td style="padding:3px 4px; text-align:right; color:{{ $l->failed_24h > 0 ? '#fb7185' : '#7a7a82' }};">{{ $l->failed_24h }}</td>
+                                            <td style="padding:3px 4px; text-align:right;">{{ $l->avg_duration_ms ?? '—' }}</td>
+                                            <td style="padding:3px 4px; text-align:right;">{{ $l->p95_duration_ms ?? '—' }}</td>
+                                            <td style="padding:3px 4px; text-align:right;">{{ $l->oldest_pending_seconds ? floor($l->oldest_pending_seconds / 60).'m' : '—' }}</td>
+                                            <td style="padding:3px 4px; text-align:right;">{{ number_format((float) $l->throughput_per_hour, 2) }}</td>
+                                        @endif
                                     </tr>
                                 @endforeach
                             </tbody>

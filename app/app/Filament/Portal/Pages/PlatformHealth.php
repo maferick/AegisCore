@@ -77,6 +77,21 @@ class PlatformHealth extends Page
             ->orderBy('lane')
             ->get();
 
+        // Mark lanes with zero historical compute_run_log entries as
+        // 'not_instrumented' so the dashboard doesn't report them as
+        // healthy when really there's nothing reporting in.
+        $totalRunsByLane = DB::table('compute_run_log')
+            ->groupBy('lane')
+            ->selectRaw('lane, COUNT(*) AS n')
+            ->pluck('n', 'lane')
+            ->all();
+        foreach ($lanes as $l) {
+            $l->total_runs = (int) ($totalRunsByLane[$l->lane] ?? 0);
+            if ($l->total_runs === 0) {
+                $l->lane_state = 'not_instrumented';
+            }
+        }
+
         $recentRuns = DB::table('compute_run_log')
             ->where(function ($q) use ($blocId) {
                 $q->whereNull('viewer_bloc_id')->orWhere('viewer_bloc_id', $blocId);
