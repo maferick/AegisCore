@@ -35,7 +35,7 @@ final class CharacterGraphInsightService
      */
     public function flightCrew(int $cid, int $limit = 8): array
     {
-        return $this->safeCache("ci.insight.fc.{$cid}.v4.{$limit}", function () use ($cid, $limit): array {
+        $r = $this->safeCache("ci.insight.fc.{$cid}.v4.{$limit}", function () use ($cid, $limit): array {
             $c = $this->client();
             if ($c === null) return [];
             // For "who does this pilot fly with?" the honest signal is
@@ -56,6 +56,10 @@ final class CharacterGraphInsightService
             $rows = $this->hydrateFlightCrew($res);
             return $this->tagRelationship($cid, $rows);
         });
+        // safeCache returns null on Neo4j errors (transient thread-pool
+        // exhaustion, network blips, etc.). Strict array return type
+        // means we coerce null → [] for the dossier consumers.
+        return is_array($r) ? $r : [];
     }
 
     /**
@@ -229,7 +233,7 @@ final class CharacterGraphInsightService
      */
     public function archEnemies(int $cid, int $limit = 8): array
     {
-        return $this->safeCache("ci.insight.ae.{$cid}.v3.{$limit}", function () use ($cid, $limit): array {
+        $r = $this->safeCache("ci.insight.ae.{$cid}.v3.{$limit}", function () use ($cid, $limit): array {
             // Killmail-level top victims is the primary signal here —
             // more consistent than Neo4j CI_FOUGHT_AGAINST, which only
             // fires when the same pair repeats across 2+ sessions at
@@ -267,6 +271,9 @@ final class CharacterGraphInsightService
             }
             return $this->tagRelationship($cid, $out);
         });
+        // safeCache may return null on cache or query exceptions —
+        // strict array return contract.
+        return is_array($r) ? $r : [];
     }
 
     /**
