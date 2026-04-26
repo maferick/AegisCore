@@ -559,6 +559,17 @@ ci-phase46-route-pressure:
 ci-phase46-operator-fingerprints:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase46-operator-fingerprints --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.7 — analyst workflow + intelligence production.
+# Args: VIEWER_BLOC=1 CI_ARGS="--digest-date 2026-04-26 --window last_7d"
+ci-phase47-daily-digest:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase47-daily-digest --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase47-strategic-alerts:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase47-strategic-alerts --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase47-incident-narratives:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase47-incident-narratives --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

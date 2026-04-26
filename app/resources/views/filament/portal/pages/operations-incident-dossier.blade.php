@@ -59,6 +59,12 @@
                 @endif
             </div>
             <div style="margin-top:0.5rem; font-size:0.78rem; color:#cbd5e1;">{{ $incident->timeline_summary }}</div>
+            @if (! empty($narrative_md))
+                <div style="margin-top:0.6rem; padding:0.5rem 0.75rem; background:rgba(167,139,250,0.06); border-left:3px solid #a78bfa; border-radius:4px;">
+                    <div style="font-size:0.55rem; color:#a78bfa; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.25rem;">Narrative</div>
+                    <div style="font-size:0.78rem; color:#e5e5e7; line-height:1.5;">{!! \Illuminate\Support\Str::of($narrative_md)->markdown() !!}</div>
+                </div>
+            @endif
             <div style="margin-top:0.4rem; display:flex; gap:0.4rem; flex-wrap:wrap; font-size:0.65rem; color:#7a7a82;">
                 <span><strong style="color:#cbd5e1;">{{ $incident->start_at }}</strong> → {{ $incident->end_at }}</span>
                 <span>·</span>

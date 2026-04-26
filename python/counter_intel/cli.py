@@ -46,6 +46,11 @@ from counter_intel.phase4_coalition import (
     run_route_pressure as phase46_route_pressure,
     run_operator_fingerprints as phase46_operator_fingerprints,
 )
+from counter_intel.phase4_workflow import (
+    run_daily_digest as phase47_daily_digest,
+    run_strategic_alerts as phase47_strategic_alerts,
+    run_incident_narratives as phase47_incident_narratives,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -171,6 +176,23 @@ def main() -> int:
     p46of.add_argument("--window-end", type=str, default=None)
     p46of.add_argument("--window-days", type=int, default=30)
 
+    p47dd = sub.add_parser("phase47-daily-digest", help="Phase 4.7A — daily operational digest.")
+    p47dd.add_argument("--viewer-bloc-id", type=int, required=True)
+    p47dd.add_argument("--digest-date", type=str, default=None,
+                       help="YYYY-MM-DD (default: today UTC)")
+    p47dd.add_argument("--window", type=str, default="last_24h",
+                       choices=["today", "last_24h", "last_7d"])
+
+    p47sa = sub.add_parser("phase47-strategic-alerts", help="Phase 4.7B — strategic alerts evaluator.")
+    p47sa.add_argument("--viewer-bloc-id", type=int, required=True)
+    p47sa.add_argument("--detection-date", type=str, default=None)
+    p47sa.add_argument("--lookback-days", type=int, default=7)
+
+    p47in = sub.add_parser("phase47-incident-narratives", help="Phase 4.7C — incident narrative generator.")
+    p47in.add_argument("--viewer-bloc-id", type=int, required=True)
+    p47in.add_argument("--since-hours", type=int, default=168)
+    p47in.add_argument("--limit", type=int, default=500)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -226,6 +248,12 @@ def main() -> int:
         return _run_phase46_route_pressure(args)
     if args.cmd == "phase46-operator-fingerprints":
         return _run_phase46_operator_fingerprints(args)
+    if args.cmd == "phase47-daily-digest":
+        return _run_phase47_daily_digest(args)
+    if args.cmd == "phase47-strategic-alerts":
+        return _run_phase47_strategic_alerts(args)
+    if args.cmd == "phase47-incident-narratives":
+        return _run_phase47_incident_narratives(args)
     parser.print_help()
     return 2
 
@@ -507,4 +535,46 @@ def _run_phase46_operator_fingerprints(args) -> int:
         stats = phase46_operator_fingerprints(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
                                               window_end=window_end, window_days=int(args.window_days))
     log.info("phase4.6E operator-fingerprints complete", stats)
+    return 0
+
+
+def _resolve_date(arg_value):
+    return date.fromisoformat(arg_value) if arg_value else None
+
+
+def _run_phase47_daily_digest(args) -> int:
+    cfg = Config.from_env()
+    digest_date = _resolve_date(args.digest_date)
+    if digest_date is None:
+        from datetime import timezone, datetime as _dt
+        digest_date = _dt.now(timezone.utc).date()
+    with connection(cfg) as conn:
+        stats = phase47_daily_digest(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                      digest_date=digest_date, window_kind=str(args.window))
+    log.info("phase4.7A daily-digest complete", stats)
+    return 0
+
+
+def _run_phase47_strategic_alerts(args) -> int:
+    cfg = Config.from_env()
+    detection_date = _resolve_date(args.detection_date)
+    if detection_date is None:
+        from datetime import timezone, datetime as _dt
+        detection_date = _dt.now(timezone.utc).date()
+    with connection(cfg) as conn:
+        stats = phase47_strategic_alerts(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                          detection_date=detection_date,
+                                          lookback_days=int(args.lookback_days))
+    log.info("phase4.7B strategic-alerts complete", stats)
+    return 0
+
+
+def _run_phase47_incident_narratives(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase47_incident_narratives(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                            since_dt=since, limit=int(args.limit))
+    log.info("phase4.7C incident-narratives complete", stats)
     return 0

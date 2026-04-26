@@ -136,4 +136,12 @@ Route::middleware('auth')->group(function () {
     Route::get('/portal/characters/{cid}/activity-map', [\App\Http\Controllers\Portal\CharacterActivityMapController::class, 'show'])
         ->whereNumber('cid')
         ->name('portal.characters.activity-map');
+
+    // Phase 4.7F — shareable intelligence export viewer. Token-keyed
+    // so authors can share a token with bloc peers without forwarding
+    // the page URL. Bloc-scoped: viewer must belong to the same bloc
+    // the artifact was created in.
+    Route::get('/portal/intel/share/{token}', [\App\Http\Controllers\Portal\IntelExportShareController::class, 'show'])
+        ->where('token', '[A-Za-z0-9]{40}')
+        ->name('portal.intel.share');
 });

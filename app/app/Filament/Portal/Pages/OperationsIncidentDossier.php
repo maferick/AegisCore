@@ -217,6 +217,12 @@ class OperationsIncidentDossier extends Page
             ];
         }
 
+        $narrative = DB::table('incident_narratives')
+            ->where('incident_id', $this->incidentId)
+            ->where('viewer_bloc_id', $blocId)
+            ->orderByDesc('updated_at')
+            ->value('narrative_md');
+
         return [
             'no_bloc' => false,
             'not_found' => false,
@@ -231,6 +237,7 @@ class OperationsIncidentDossier extends Page
             'force_compositions' => $forceCompositions,
             'force_transitions' => $forceTransitions,
             'force_summary' => $forceSummary,
+            'narrative_md' => $narrative,
             'evidence_json' => json_decode($incident->evidence_json ?? '{}', true) ?: [],
         ];
     }
