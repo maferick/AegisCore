@@ -27,6 +27,9 @@ from counter_intel.phase4 import (
     run_intel_reliability as phase4_intel_reliability,
     run_session_correlation as phase4_session_correlation,
 )
+from counter_intel.phase4_aggregation import (
+    run_hostile_clusters as phase4_hostile_clusters,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -95,6 +98,10 @@ def main() -> int:
     p4s.add_argument("--window-end", type=str, default=None)
     p4s.add_argument("--window-days", type=int, default=30)
 
+    p4hc = sub.add_parser("phase4-hostile-clusters", help="Phase 4.3A — operational hostile-contact clusters.")
+    p4hc.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4hc.add_argument("--since-hours", type=int, default=8760)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -124,6 +131,8 @@ def main() -> int:
         return _run_phase4_intel_reliability(args)
     if args.cmd == "phase4-session-correlation":
         return _run_phase4_session_correlation(args)
+    if args.cmd == "phase4-hostile-clusters":
+        return _run_phase4_hostile_clusters(args)
     parser.print_help()
     return 2
 
@@ -250,6 +259,16 @@ def _run_phase4_intel_reliability(args) -> int:
         stats = phase4_intel_reliability(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
                                          window_end=window_end, window_days=int(args.window_days))
     log.info("phase4 intel-reliability complete", stats)
+    return 0
+
+
+def _run_phase4_hostile_clusters(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase4_hostile_clusters(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4.3A hostile-clusters complete", stats)
     return 0
 
 
