@@ -122,6 +122,7 @@ final class CounterIntelDossierService
         $declaredAllyId = $affiliation['current']['alliance_id'] ?? null;
         $friendlyAllies = $this->friendlyAllianceIds($viewerBlocId);
         $phase1 = $this->phase1Signals($feature, $anomaly, $declaredAllyId, $friendlyAllies);
+        $this->recordRenderDiagnostic($characterId, $viewerBlocId, $phase1);
 
         return [
             'not_found' => false,
@@ -596,6 +597,49 @@ final class CounterIntelDossierService
             $base .= ' Includes a hostile-relative signal (community/asymmetric).';
         }
         return $base;
+    }
+
+    /**
+     * Persist one diagnostic row per (character, bloc, day). Multiple
+     * renders during the same UTC day update the same row so the
+     * audit table stays bounded. Failures here do not block the
+     * dossier render — they're logged and swallowed.
+     *
+     * @param  array<string, mixed>  $phase1
+     */
+    private function recordRenderDiagnostic(int $characterId, int $viewerBlocId, array $phase1): void
+    {
+        try {
+            DB::table('ci_render_diagnostics')->updateOrInsert(
+                [
+                    'character_id' => $characterId,
+                    'viewer_bloc_id' => $viewerBlocId,
+                    'rendered_on' => now()->toDateString(),
+                ],
+                [
+                    'rendered_at' => now(),
+                    'rendered_band' => (string) ($phase1['band'] ?? 'clean'),
+                    'raw_band' => (string) ($phase1['raw_band'] ?? $phase1['band'] ?? 'clean'),
+                    'confidence' => (string) ($phase1['confidence'] ?? 'medium'),
+                    'flag_count' => (int) ($phase1['flag_count'] ?? 0),
+                    'note_count' => (int) ($phase1['note_count'] ?? 0),
+                    'total_countable' => (int) ($phase1['total_countable'] ?? 0),
+                    'has_hostile_relative' => (int) (bool) ($phase1['has_hostile_relative'] ?? false),
+                    'demoted' => (int) (bool) ($phase1['demoted'] ?? false),
+                    'declared_in_bloc' => (int) (bool) ($phase1['declared_in_bloc'] ?? false),
+                    'rendered_signals_json' => json_encode($phase1['signals'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'sample_sizes_json' => json_encode($phase1['sample_sizes'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'confidence_factors_json' => json_encode($phase1['confidence_factors'] ?? [], JSON_UNESCAPED_UNICODE),
+                    'evidence_summary' => mb_substr((string) ($phase1['evidence_summary'] ?? ''), 0, 500),
+                ],
+            );
+        } catch (\Throwable $e) {
+            \Log::warning('ci_render_diagnostics write failed', [
+                'character_id' => $characterId,
+                'viewer_bloc_id' => $viewerBlocId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
