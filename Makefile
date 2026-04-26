@@ -476,6 +476,12 @@ ci-phase2-triangulation:
 ci-phase2-baseline:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-baseline --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 2.5 — k-NN cohort feature extension (TZ centroid).
+# Run after ci-features. See docs/adr/0008-ci-knn-cohort-extension.md.
+# Args: CI_ARGS="--window-end=2026-04-19" or "--force"
+ci-phase2-cohort-features:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-cohort-features $(CI_ARGS)
+
 # Bloc Intelligence — alliance-pair behavior extractor (viewer-agnostic).
 # Args: BI_ARGS="--window-end=2026-04-18"
 bloc-intel-extract:

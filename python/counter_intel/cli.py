@@ -20,6 +20,7 @@ from counter_intel.graph_features import compute as compute_graph_features
 from counter_intel.phase1 import run_bloc_agnostic as phase1_agnostic, run_bloc_relative as phase1_relative
 from counter_intel.phase2_triangulation import run as phase2_triangulation
 from counter_intel.phase2_baseline import run as phase2_baseline
+from counter_intel.phase2_cohort_features import run as phase2_cohort_features
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -65,6 +66,10 @@ def main() -> int:
     p2b.add_argument("--viewer-bloc-id", type=int, required=True)
     p2b.add_argument("--window-end", type=str, default=None)
 
+    p2c = sub.add_parser("phase2-cohort-features", help="Phase 2.5 k-NN cohort extension: tz_centroid_sin/cos from hour_histogram.")
+    p2c.add_argument("--window-end", type=str, default=None)
+    p2c.add_argument("--force", action="store_true", help="recompute rows even when already filled")
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -84,6 +89,8 @@ def main() -> int:
         return _run_phase2_triangulation(args)
     if args.cmd == "phase2-baseline":
         return _run_phase2_baseline(args)
+    if args.cmd == "phase2-cohort-features":
+        return _run_phase2_cohort_features(args)
     parser.print_help()
     return 2
 
@@ -165,4 +172,13 @@ def _run_phase2_baseline(args) -> int:
     with connection(cfg) as conn:
         stats = phase2_baseline(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, window_end=window_end)
     log.info("phase2 baseline complete", stats)
+    return 0
+
+
+def _run_phase2_cohort_features(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    with connection(cfg) as conn:
+        stats = phase2_cohort_features(conn, cfg, window_end=window_end, force=bool(getattr(args, "force", False)))
+    log.info("phase2 cohort-features complete", stats)
     return 0
