@@ -61,8 +61,77 @@
             <div style="margin-top:0.5rem; font-size:0.78rem; color:#cbd5e1;">{{ $incident->timeline_summary }}</div>
             @if (! empty($narrative_md))
                 <div style="margin-top:0.6rem; padding:0.5rem 0.75rem; background:rgba(167,139,250,0.06); border-left:3px solid #a78bfa; border-radius:4px;">
-                    <div style="font-size:0.55rem; color:#a78bfa; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.25rem;">Narrative</div>
+                    <div style="display:flex; gap:0.4rem; align-items:center; margin-bottom:0.25rem;">
+                        <span style="font-size:0.55rem; color:#a78bfa; text-transform:uppercase; letter-spacing:0.08em;">Narrative</span>
+                        @if (isset($narrative_confidence))
+                            @php
+                                $nc = (float) $narrative_confidence;
+                                $ncTier = $nc >= 0.75 ? 'high' : ($nc >= 0.5 ? 'medium' : ($nc >= 0.25 ? 'low' : 'insufficient'));
+                                $ncCol = ['high' => '#86efac', 'medium' => '#7dd3fc', 'low' => '#fde68a', 'insufficient' => '#fca5a5'][$ncTier];
+                            @endphp
+                            <span style="font-size:0.55rem; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:{{ $ncCol }}; text-transform:uppercase; letter-spacing:0.06em;">conf {{ $ncTier }} · {{ number_format($nc, 2) }}</span>
+                        @endif
+                        <span style="margin-left:auto; font-size:0.55rem; color:#7a7a82; font-style:italic;">summary, not certainty</span>
+                    </div>
                     <div style="font-size:0.78rem; color:#e5e5e7; line-height:1.5;">{!! \Illuminate\Support\Str::of($narrative_md)->markdown() !!}</div>
+                    @if (! empty($narrative_sources))
+                        <details style="margin-top:0.4rem;">
+                            <summary style="font-size:0.55rem; color:#7dd3fc; cursor:pointer;">why did the system say this?</summary>
+                            <div style="margin-top:0.3rem; font-size:0.65rem; color:#cbd5e1; line-height:1.5;">
+                                <div>incidents: {{ count($narrative_sources['incidents']) }} · clusters: {{ count($narrative_sources['clusters']) }} · dscan snapshots: {{ count($narrative_sources['dscans']) }} · timeline events: {{ count($narrative_sources['timeline']) }}@if($narrative_sources['battle_id']) · battle #{{ $narrative_sources['battle_id'] }}@endif</div>
+                                @if (count($narrative_sources['clusters']) > 0)
+                                    <div style="margin-top:0.3rem; color:#7a7a82;">contributing clusters:
+                                        @foreach (array_slice($narrative_sources['clusters'], 0, 12) as $cid)
+                                            <span style="margin-right:0.3rem; color:#9ca3af;">#{{ $cid }}</span>
+                                        @endforeach
+                                    </div>
+                                @endif
+                                @if (count($narrative_sources['dscans']) > 0)
+                                    <div style="margin-top:0.2rem; color:#7a7a82;">dscan snapshots:
+                                        @foreach (array_slice($narrative_sources['dscans'], 0, 8) as $sid)
+                                            <a href="https://dscan.info/v/{{ $sid }}" target="_blank" rel="noopener" style="margin-right:0.3rem; color:#fdba74; text-decoration:none;">{{ \Illuminate\Support\Str::limit($sid, 12, '') }}</a>
+                                        @endforeach
+                                    </div>
+                                @endif
+                            </div>
+                        </details>
+                    @endif
+                </div>
+            @endif
+
+            {{-- Feedback widget + verified items --}}
+            <div style="margin-top:0.6rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; font-size:0.6rem;">
+                <span style="color:#7a7a82;">analyst feedback:</span>
+                @php $fb = $feedback_histogram ?? []; @endphp
+                @foreach ([
+                    'useful' => '#86efac',
+                    'strategic' => '#fdba74',
+                    'misleading' => '#fca5a5',
+                    'noisy' => '#fde68a',
+                    'duplicate' => '#9ca3af',
+                    'incorrect_escalation' => '#fb7185',
+                    'incorrect_doctrine' => '#f9a8d4',
+                    'incorrect_linkage' => '#a78bfa',
+                ] as $kind => $col)
+                    @php $cnt = $fb[$kind] ?? 0; @endphp
+                    <button wire:click="recordFeedback('{{ $kind }}')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:{{ $col }}; border:1px solid rgba(255,255,255,0.08); cursor:pointer;">
+                        {{ str_replace('_', ' ', $kind) }} @if ($cnt > 0)<span style="opacity:0.6;">({{ $cnt }})</span>@endif
+                    </button>
+                @endforeach
+                <button wire:click="pinIncident" style="margin-left:0.4rem; font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(125,211,252,0.10); color:#7dd3fc; border:none; cursor:pointer;">📌 pin to verified</button>
+            </div>
+
+            @if (! empty($verified_items) && count($verified_items) > 0)
+                <div style="margin-top:0.4rem; padding:0.3rem 0.5rem; background:rgba(134,239,172,0.06); border-left:3px solid #86efac; border-radius:4px;">
+                    <span style="font-size:0.55rem; color:#86efac; text-transform:uppercase; letter-spacing:0.08em;">Human-verified · {{ count($verified_items) }} item(s)</span>
+                    @foreach ($verified_items as $vi)
+                        <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.15rem;">
+                            <strong>{{ $vi->title }}</strong> · {{ $vi->item_kind }} · {{ $vi->strategic_significance }}
+                            @if ($vi->verified_at)
+                                <span style="color:#7a7a82;"> · verified {{ $vi->verified_at }}</span>
+                            @endif
+                        </div>
+                    @endforeach
                 </div>
             @endif
             <div style="margin-top:0.4rem; display:flex; gap:0.4rem; flex-wrap:wrap; font-size:0.65rem; color:#7a7a82;">

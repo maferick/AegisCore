@@ -111,6 +111,9 @@ class IntelligenceDigest extends Page
             'emerging_operators' => $decode($digest->emerging_operators_json),
             'response_anomalies' => $decode($digest->response_anomalies_json),
             'top_threats' => $decode($digest->top_threat_systems_json),
+            'section_confidence' => $decode($digest->section_confidence_json),
+            'evidence_summary' => $decode($digest->evidence_summary_json),
+            'source_reliability' => $decode($digest->source_reliability_json),
             'available_dates' => $availableDates,
             'generated_at' => $digest->generated_at,
         ];

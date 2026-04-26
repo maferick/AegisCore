@@ -217,11 +217,27 @@ class OperationsIncidentDossier extends Page
             ];
         }
 
-        $narrative = DB::table('incident_narratives')
+        $narrativeRow = DB::table('incident_narratives')
             ->where('incident_id', $this->incidentId)
             ->where('viewer_bloc_id', $blocId)
             ->orderByDesc('updated_at')
-            ->value('narrative_md');
+            ->first();
+
+        $verifiedItems = DB::table('verified_intelligence_items')
+            ->where('viewer_bloc_id', $blocId)
+            ->where('related_incident_id', $this->incidentId)
+            ->orderByDesc('pinned')
+            ->orderByDesc('created_at')
+            ->get();
+
+        $feedbackHistogram = DB::table('intel_feedback_events')
+            ->where('viewer_bloc_id', $blocId)
+            ->where('surface', 'incident')
+            ->where('surface_ref_id', $this->incidentId)
+            ->groupBy('feedback_kind')
+            ->selectRaw('feedback_kind, COUNT(*) as n')
+            ->pluck('n', 'feedback_kind')
+            ->all();
 
         return [
             'no_bloc' => false,
@@ -237,9 +253,68 @@ class OperationsIncidentDossier extends Page
             'force_compositions' => $forceCompositions,
             'force_transitions' => $forceTransitions,
             'force_summary' => $forceSummary,
-            'narrative_md' => $narrative,
+            'narrative' => $narrativeRow,
+            'narrative_md' => $narrativeRow->narrative_md ?? null,
+            'narrative_confidence' => $narrativeRow->narrative_confidence ?? null,
+            'narrative_sources' => $narrativeRow ? [
+                'incidents' => json_decode($narrativeRow->source_incident_ids_json ?? '[]', true) ?: [],
+                'clusters' => json_decode($narrativeRow->source_cluster_ids_json ?? '[]', true) ?: [],
+                'dscans' => json_decode($narrativeRow->source_dscan_snapshot_ids_json ?? '[]', true) ?: [],
+                'timeline' => json_decode($narrativeRow->source_timeline_event_ids_json ?? '[]', true) ?: [],
+                'battle_id' => $narrativeRow->source_battle_id,
+            ] : null,
+            'verified_items' => $verifiedItems,
+            'feedback_histogram' => $feedbackHistogram,
             'evidence_json' => json_decode($incident->evidence_json ?? '{}', true) ?: [],
         ];
+    }
+
+    public function recordFeedback(string $kind): void
+    {
+        $allowed = ['useful', 'misleading', 'noisy', 'duplicate', 'strategic',
+                    'incorrect_escalation', 'incorrect_doctrine', 'incorrect_linkage'];
+        if (! in_array($kind, $allowed, true)) return;
+
+        $blocId = $this->resolveViewerBlocId();
+        if ($blocId === null) return;
+
+        DB::table('intel_feedback_events')->insert([
+            'viewer_bloc_id' => $blocId,
+            'surface' => 'incident',
+            'surface_ref_id' => $this->incidentId,
+            'feedback_kind' => $kind,
+            'analyst_user_id' => Auth::id(),
+            'created_at' => now(),
+        ]);
+    }
+
+    public function pinIncident(): void
+    {
+        $blocId = $this->resolveViewerBlocId();
+        if ($blocId === null) return;
+        $existing = DB::table('verified_intelligence_items')
+            ->where('viewer_bloc_id', $blocId)
+            ->where('related_incident_id', $this->incidentId)
+            ->where('item_kind', 'pinned_incident')
+            ->first();
+        if ($existing) {
+            DB::table('verified_intelligence_items')
+                ->where('id', $existing->id)
+                ->update(['pinned' => 1, 'verified_by_user_id' => Auth::id(), 'verified_at' => now()]);
+            return;
+        }
+        DB::table('verified_intelligence_items')->insert([
+            'viewer_bloc_id' => $blocId,
+            'item_kind' => 'pinned_incident',
+            'title' => 'Pinned incident #' . $this->incidentId,
+            'related_incident_id' => $this->incidentId,
+            'pinned' => 1,
+            'strategic_significance' => 'medium',
+            'created_by_user_id' => Auth::id(),
+            'verified_by_user_id' => Auth::id(),
+            'verified_at' => now(),
+            'created_at' => now(),
+        ]);
     }
 
     private function resolveViewerBlocId(): ?int

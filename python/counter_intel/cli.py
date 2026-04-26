@@ -51,6 +51,12 @@ from counter_intel.phase4_workflow import (
     run_strategic_alerts as phase47_strategic_alerts,
     run_incident_narratives as phase47_incident_narratives,
 )
+from counter_intel.phase4_governance import (
+    run_alert_suppression as phase48_alert_suppression,
+    run_trust_metrics as phase48_trust_metrics,
+    run_enrich_digest_trust as phase48_enrich_digest_trust,
+    run_enrich_narrative_sources as phase48_enrich_narrative_sources,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -193,6 +199,23 @@ def main() -> int:
     p47in.add_argument("--since-hours", type=int, default=168)
     p47in.add_argument("--limit", type=int, default=500)
 
+    p48as = sub.add_parser("phase48-alert-suppression", help="Phase 4.8E — apply suppression rules + heuristics.")
+    p48as.add_argument("--viewer-bloc-id", type=int, required=True)
+
+    p48tm = sub.add_parser("phase48-trust-metrics", help="Phase 4.8G — per-surface trust metrics.")
+    p48tm.add_argument("--viewer-bloc-id", type=int, required=True)
+    p48tm.add_argument("--window-end", type=str, default=None)
+    p48tm.add_argument("--window-days", type=int, default=30)
+
+    p48dt = sub.add_parser("phase48-enrich-digest-trust", help="Phase 4.8B — annotate digests with confidence/evidence.")
+    p48dt.add_argument("--viewer-bloc-id", type=int, required=True)
+    p48dt.add_argument("--digest-date", type=str, default=None)
+
+    p48nt = sub.add_parser("phase48-enrich-narrative-sources", help="Phase 4.8C — populate narrative source pointers.")
+    p48nt.add_argument("--viewer-bloc-id", type=int, required=True)
+    p48nt.add_argument("--since-hours", type=int, default=720)
+    p48nt.add_argument("--limit", type=int, default=2000)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -254,6 +277,14 @@ def main() -> int:
         return _run_phase47_strategic_alerts(args)
     if args.cmd == "phase47-incident-narratives":
         return _run_phase47_incident_narratives(args)
+    if args.cmd == "phase48-alert-suppression":
+        return _run_phase48_alert_suppression(args)
+    if args.cmd == "phase48-trust-metrics":
+        return _run_phase48_trust_metrics(args)
+    if args.cmd == "phase48-enrich-digest-trust":
+        return _run_phase48_enrich_digest_trust(args)
+    if args.cmd == "phase48-enrich-narrative-sources":
+        return _run_phase48_enrich_narrative_sources(args)
     parser.print_help()
     return 2
 
@@ -577,4 +608,43 @@ def _run_phase47_incident_narratives(args) -> int:
         stats = phase47_incident_narratives(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
                                             since_dt=since, limit=int(args.limit))
     log.info("phase4.7C incident-narratives complete", stats)
+    return 0
+
+
+def _run_phase48_alert_suppression(args) -> int:
+    cfg = Config.from_env()
+    with connection(cfg) as conn:
+        stats = phase48_alert_suppression(conn, cfg, viewer_bloc_id=args.viewer_bloc_id)
+    log.info("phase4.8E alert-suppression complete", stats)
+    return 0
+
+
+def _run_phase48_trust_metrics(args) -> int:
+    cfg = Config.from_env()
+    window_end = _resolve_window_end(args)
+    with connection(cfg) as conn:
+        stats = phase48_trust_metrics(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                       window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.8G trust-metrics complete", stats)
+    return 0
+
+
+def _run_phase48_enrich_digest_trust(args) -> int:
+    cfg = Config.from_env()
+    digest_date = _resolve_date(args.digest_date)
+    with connection(cfg) as conn:
+        stats = phase48_enrich_digest_trust(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                             digest_date=digest_date)
+    log.info("phase4.8B enrich-digest-trust complete", stats)
+    return 0
+
+
+def _run_phase48_enrich_narrative_sources(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase48_enrich_narrative_sources(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                  since_dt=since, limit=int(args.limit))
+    log.info("phase4.8C enrich-narrative-sources complete", stats)
     return 0

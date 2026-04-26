@@ -570,6 +570,20 @@ ci-phase47-strategic-alerts:
 ci-phase47-incident-narratives:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase47-incident-narratives --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.8 — governance + trust + analyst controls.
+# Args: VIEWER_BLOC=1 CI_ARGS="--window-days 30"
+ci-phase48-alert-suppression:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase48-alert-suppression --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase48-trust-metrics:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase48-trust-metrics --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase48-enrich-digest-trust:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase48-enrich-digest-trust --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase48-enrich-narrative-sources:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase48-enrich-narrative-sources --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

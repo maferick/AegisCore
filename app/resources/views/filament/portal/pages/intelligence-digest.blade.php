@@ -35,6 +35,42 @@
                 <pre style="margin-top:0.5rem; padding:0.5rem 0.75rem; background:rgba(255,255,255,0.03); border-radius:4px; font-size:0.7rem; color:#e5e5e7;">make ci-phase47-daily-digest VIEWER_BLOC={{ $bloc_id }} CI_ARGS="--window {{ $window }}"</pre>
             </div>
         @else
+            @php
+                $confTierColor = function (?string $tier): string {
+                    return match($tier) {
+                        'high' => '#86efac',
+                        'medium' => '#7dd3fc',
+                        'low' => '#fde68a',
+                        'insufficient' => '#fca5a5',
+                        default => '#9ca3af',
+                    };
+                };
+                $confBadge = function (string $sectionKey) use ($section_confidence, $confTierColor) {
+                    $c = $section_confidence[$sectionKey] ?? null;
+                    if (! is_array($c)) return '';
+                    $tier = $c['tier'] ?? '—';
+                    $score = $c['score'] ?? 0.0;
+                    $col = $confTierColor($tier);
+                    return '<span style="font-size:0.55rem; color:'.$col.'; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); text-transform:uppercase; letter-spacing:0.06em;">conf '.$tier.' · '.number_format((float) $score, 2).'</span>';
+                };
+            @endphp
+
+            {{-- Source reliability strip --}}
+            @if (! empty($source_reliability))
+                <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3" style="border-left:3px solid #c4b5fd;">
+                    <div style="display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap; font-size:0.65rem; color:#cbd5e1;">
+                        <span style="font-size:0.55rem; color:#c4b5fd; text-transform:uppercase; letter-spacing:0.08em;">Source reliability</span>
+                        @if (isset($source_reliability['avg_reporter_reliability']))
+                            <span>avg reporter reliability: <strong>{{ number_format((float) $source_reliability['avg_reporter_reliability'], 3) }}</strong></span>
+                        @endif
+                        @if (isset($source_reliability['reporter_count']))
+                            <span>reporters: <strong>{{ $source_reliability['reporter_count'] }}</strong></span>
+                        @endif
+                        <span style="margin-left:auto; color:#7a7a82; font-style:italic;">narratives are summaries, not certainty — verify before acting</span>
+                    </div>
+                </div>
+            @endif
+
             {{-- Top metric strip --}}
             <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-bottom:0.75rem;">
                 @php
@@ -65,7 +101,7 @@
                     {{-- Coalition movement --}}
                     @if (count($coalition_movement) > 0)
                         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Coalition movement</h3>
+                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem; display:flex; gap:0.4rem; align-items:center;">Coalition movement {!! $confBadge('coalition_movement') !!}</h3>
                             <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
                                 <thead style="color:#7a7a82;">
                                     <tr><th style="text-align:left; padding:2px 4px;">bloc</th><th style="text-align:right; padding:2px 4px;">incidents</th><th style="text-align:right; padding:2px 4px;">esc</th><th style="text-align:right; padding:2px 4px;">avg dscan</th></tr>
@@ -87,7 +123,7 @@
                     {{-- Doctrine evolution --}}
                     @if (count($doctrine_evolution) > 0)
                         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Doctrine evolution</h3>
+                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem; display:flex; gap:0.4rem; align-items:center;">Doctrine evolution {!! $confBadge('doctrine_evolution') !!}</h3>
                             <div style="display:grid; gap:0.25rem;">
                                 @foreach ($doctrine_evolution as $d)
                                     @php $col = match($d['event_type']) { 'adoption' => '#86efac', 'abandonment' => '#fca5a5', 'sudden_increase' => '#fdba74', 'sudden_decrease' => '#fde68a', 'capital_emergence' => '#fb7185', default => '#9ca3af' }; @endphp
@@ -107,7 +143,7 @@
                     {{-- New corridors --}}
                     @if (count($new_corridors) > 0)
                         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">New corridors</h3>
+                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem; display:flex; gap:0.4rem; align-items:center;">New corridors {!! $confBadge('new_corridors') !!}</h3>
                             <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
                                 <thead style="color:#7a7a82;">
                                     <tr><th style="text-align:left;">route</th><th style="text-align:right;">tx</th><th style="text-align:right;">chars</th><th style="text-align:left;">class</th></tr>
@@ -131,7 +167,7 @@
                     {{-- Top threat systems --}}
                     @if (count($top_threats) > 0)
                         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Top threat systems</h3>
+                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem; display:flex; gap:0.4rem; align-items:center;">Top threat systems {!! $confBadge('top_incidents') !!}</h3>
                             <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
                                 <thead style="color:#7a7a82;">
                                     <tr><th style="text-align:left;">system</th><th style="text-align:left;">tier</th><th style="text-align:right;">score</th><th style="text-align:right;">cap</th><th style="text-align:right;">doc</th><th style="text-align:left;">mob</th></tr>
@@ -156,7 +192,7 @@
                     {{-- Unusual compositions --}}
                     @if (count($unusual_compositions) > 0)
                         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Unusual force compositions</h3>
+                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem; display:flex; gap:0.4rem; align-items:center;">Unusual force compositions {!! $confBadge('unusual_compositions') !!}</h3>
                             <div style="display:grid; gap:0.25rem;">
                                 @foreach ($unusual_compositions as $f)
                                     <div style="font-size:0.7rem; padding:0.3rem 0.4rem; background:rgba(255,255,255,0.02); border-radius:4px;">
@@ -180,7 +216,7 @@
                     {{-- Emerging operators --}}
                     @if (count($emerging_operators) > 0)
                         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Emerging operators</h3>
+                            <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem; display:flex; gap:0.4rem; align-items:center;">Emerging operators {!! $confBadge('emerging_operators') !!}</h3>
                             <div style="display:grid; gap:0.2rem;">
                                 @foreach ($emerging_operators as $o)
                                     <a href="/portal/characters/lookup?cid={{ $o['character_id'] }}" style="display:flex; gap:0.4rem; align-items:center; padding:0.25rem 0.4rem; background:rgba(255,255,255,0.02); border-radius:4px; text-decoration:none; color:#e5e5e7; font-size:0.7rem;">

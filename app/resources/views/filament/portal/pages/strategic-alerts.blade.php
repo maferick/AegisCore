@@ -22,12 +22,15 @@
         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
             <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; font-size:0.7rem;">
                 <span style="color:#7a7a82;">status:</span>
-                @foreach (['open', 'all', 'dismissed'] as $s)
-                    @php $active = $s === $status; $count = $totals[$s === 'all' ? 'open' : $s] ?? 0; @endphp
+                @foreach (['open', 'validated', 'suppressed', 'dismissed', 'all'] as $s)
+                    @php
+                        $active = $s === $status;
+                        $count = match($s) { 'open' => $totals['open'] ?? 0, 'dismissed' => $totals['dismissed'] ?? 0, default => null };
+                    @endphp
                     <a href="?status={{ $s }}@if($kind)&kind={{ $kind }}@endif"
                        style="padding:3px 8px; border-radius:4px; text-decoration:none;
                               background:{{ $active ? 'rgba(125,211,252,0.15)' : 'rgba(255,255,255,0.04)' }};
-                              color:{{ $active ? '#7dd3fc' : '#9ca3af' }};">{{ $s }} <span style="opacity:0.6;">{{ $s === 'all' ? '' : '('.$count.')' }}</span></a>
+                              color:{{ $active ? '#7dd3fc' : '#9ca3af' }};">{{ $s }} @if($count !== null)<span style="opacity:0.6;">({{ $count }})</span>@endif</a>
                 @endforeach
 
                 <span style="margin-left:0.6rem; color:#7a7a82;">kind:</span>
@@ -48,33 +51,71 @@
                 @foreach ($alerts as $a)
                     @php
                         $col = $sevColors[$a->severity] ?? '#9ca3af';
-                        $isAcked = $a->acknowledged_at !== null;
                         $isDismissed = $a->dismissed_at !== null;
-                        $opacity = $isDismissed ? '0.5' : '1';
+                        $statusColors = [
+                            'new' => '#9ca3af', 'acknowledged' => '#7dd3fc',
+                            'validated' => '#86efac', 'suppressed' => '#fde68a',
+                            'false_positive' => '#fca5a5', 'archived' => '#7a7a82',
+                        ];
+                        $statusCol = $statusColors[$a->analyst_status] ?? '#9ca3af';
+                        $opacity = ($a->analyst_status === 'archived' || $a->analyst_status === 'suppressed') ? '0.55' : '1';
                     @endphp
                     <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
                          style="border-left:4px solid {{ $col }}; opacity:{{ $opacity }};">
                         <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
                             <span style="font-size:0.55rem; color:{{ $col }}; text-transform:uppercase; letter-spacing:0.08em; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04);">{{ $a->severity }}</span>
                             <span style="font-size:0.55rem; color:#a5b4fc; text-transform:uppercase; letter-spacing:0.08em;">{{ $kindLabels[$a->alert_kind] ?? $a->alert_kind }}</span>
+                            <span style="font-size:0.55rem; color:{{ $statusCol }}; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); text-transform:uppercase;">{{ str_replace('_', ' ', $a->analyst_status) }}</span>
                             <span style="font-size:0.85rem; color:#e5e5e7; flex:1;">{{ $a->title }}</span>
                             <span style="font-size:0.6rem; color:#7a7a82;">{{ $a->detected_at }}</span>
-                            <div style="display:flex; gap:0.25rem;">
-                                @if (! $isAcked && ! $isDismissed)
-                                    <button wire:click="ack({{ $a->id }})" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(125,211,252,0.10); color:#7dd3fc; border:none; cursor:pointer;">ack</button>
-                                @elseif ($isAcked && ! $isDismissed)
-                                    <span style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(134,239,172,0.10); color:#86efac;">acked</span>
-                                @endif
-                                @if (! $isDismissed)
-                                    <button wire:click="dismiss({{ $a->id }})" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(252,165,165,0.10); color:#fca5a5; border:none; cursor:pointer;">dismiss</button>
-                                @else
-                                    <span style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:#7a7a82;">dismissed</span>
-                                @endif
-                            </div>
                         </div>
                         @if ($a->summary)
                             <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.3rem;">{{ $a->summary }}</div>
                         @endif
+
+                        {{-- Lifecycle action row --}}
+                        <div style="display:flex; gap:0.25rem; margin-top:0.4rem; flex-wrap:wrap;">
+                            @if ($a->analyst_status !== 'validated')
+                                <button wire:click="setStatus({{ $a->id }}, 'validated')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(134,239,172,0.10); color:#86efac; border:none; cursor:pointer;">validate</button>
+                            @endif
+                            @if (in_array($a->analyst_status, ['new', 'suppressed']))
+                                <button wire:click="setStatus({{ $a->id }}, 'acknowledged')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(125,211,252,0.10); color:#7dd3fc; border:none; cursor:pointer;">acknowledge</button>
+                            @endif
+                            @if ($a->analyst_status !== 'suppressed')
+                                <button wire:click="setStatus({{ $a->id }}, 'suppressed')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(253,230,138,0.10); color:#fde68a; border:none; cursor:pointer;">suppress 7d</button>
+                            @endif
+                            @if ($a->analyst_status !== 'false_positive')
+                                <button wire:click="setStatus({{ $a->id }}, 'false_positive')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(252,165,165,0.10); color:#fca5a5; border:none; cursor:pointer;">false positive</button>
+                            @endif
+                            @if (! $isDismissed)
+                                <button wire:click="dismiss({{ $a->id }})" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:#9ca3af; border:none; cursor:pointer;">archive</button>
+                            @endif
+                        </div>
+
+                        {{-- Suppression metadata row --}}
+                        @if ($a->suppression_reason || $a->reviewed_by_user_id)
+                            <div style="margin-top:0.3rem; font-size:0.55rem; color:#7a7a82;">
+                                @if ($a->suppression_reason)
+                                    <span>suppressed: {{ $a->suppression_reason }}</span>
+                                    @if ($a->suppressed_until)
+                                        <span> · until {{ $a->suppressed_until }}</span>
+                                    @endif
+                                @endif
+                                @if ($a->reviewed_at)
+                                    <span style="margin-left:0.5rem;">reviewed: {{ $a->reviewed_at }}</span>
+                                @endif
+                            </div>
+                        @endif
+
+                        {{-- Analyst notes (inline editor) --}}
+                        <details style="margin-top:0.3rem;">
+                            <summary style="font-size:0.55rem; color:#7dd3fc; cursor:pointer;">analyst notes{{ $a->analyst_notes ? ' (set)' : '' }}</summary>
+                            <form onsubmit="event.preventDefault(); $wire.saveNotes({{ $a->id }}, this.elements['notes'].value)" style="margin-top:0.3rem;">
+                                <textarea name="notes" rows="2" style="width:100%; padding:0.3rem 0.5rem; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.10); border-radius:4px; color:#e5e5e7; font-size:0.7rem;">{{ $a->analyst_notes }}</textarea>
+                                <button type="submit" style="margin-top:0.2rem; font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(125,211,252,0.10); color:#7dd3fc; border:none; cursor:pointer;">save notes</button>
+                            </form>
+                        </details>
+
                         <div style="display:flex; gap:0.5rem; margin-top:0.3rem; font-size:0.6rem; color:#7a7a82;">
                             @if ($a->primary_system_name)
                                 <span>system: <a href="/portal/operations/heatmap?system={{ $a->primary_system_name }}" style="color:#86efac; text-decoration:none;">{{ $a->primary_system_name }}</a></span>

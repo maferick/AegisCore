@@ -38,7 +38,7 @@ class StrategicAlerts extends Page
     public function mount(): void
     {
         $status = (string) request()->query('status', 'open');
-        if (! in_array($status, ['open', 'all', 'dismissed'], true)) {
+        if (! in_array($status, ['open', 'all', 'dismissed', 'suppressed', 'validated'], true)) {
             $status = 'open';
         }
         $this->statusFilter = $status;
@@ -56,6 +56,9 @@ class StrategicAlerts extends Page
             ->update([
                 'acknowledged_at' => now(),
                 'acknowledged_by_user_id' => Auth::id(),
+                'analyst_status' => 'acknowledged',
+                'reviewed_by_user_id' => Auth::id(),
+                'reviewed_at' => now(),
             ]);
     }
 
@@ -69,6 +72,72 @@ class StrategicAlerts extends Page
             ->update([
                 'dismissed_at' => now(),
                 'dismissed_by_user_id' => Auth::id(),
+                'analyst_status' => 'archived',
+            ]);
+    }
+
+    public function setStatus(int $alertId, string $status): void
+    {
+        $allowed = ['new', 'acknowledged', 'validated', 'suppressed', 'false_positive', 'archived'];
+        if (! in_array($status, $allowed, true)) return;
+        $blocId = $this->resolveViewerBlocId();
+        if ($blocId === null) return;
+
+        $updates = [
+            'analyst_status' => $status,
+            'reviewed_by_user_id' => Auth::id(),
+            'reviewed_at' => now(),
+        ];
+        if ($status === 'validated') {
+            $updates['acknowledged_at'] = now();
+            $updates['acknowledged_by_user_id'] = Auth::id();
+        }
+        if ($status === 'false_positive') {
+            $updates['false_positive'] = 1;
+        }
+        if ($status === 'suppressed') {
+            $updates['suppressed_until'] = now()->addDays(7);
+            $updates['suppression_reason'] = 'analyst suppressed for 7 days';
+        }
+        if ($status === 'archived') {
+            $updates['dismissed_at'] = now();
+            $updates['dismissed_by_user_id'] = Auth::id();
+        }
+        DB::table('strategic_alerts')
+            ->where('id', $alertId)
+            ->where('viewer_bloc_id', $blocId)
+            ->update($updates);
+
+        // Record analyst feedback for trust metrics.
+        $feedbackKind = match ($status) {
+            'validated' => 'useful',
+            'false_positive' => 'misleading',
+            'suppressed' => 'noisy',
+            default => null,
+        };
+        if ($feedbackKind !== null) {
+            DB::table('intel_feedback_events')->insert([
+                'viewer_bloc_id' => $blocId,
+                'surface' => 'alert',
+                'surface_ref_id' => $alertId,
+                'feedback_kind' => $feedbackKind,
+                'analyst_user_id' => Auth::id(),
+                'created_at' => now(),
+            ]);
+        }
+    }
+
+    public function saveNotes(int $alertId, string $notes): void
+    {
+        $blocId = $this->resolveViewerBlocId();
+        if ($blocId === null) return;
+        DB::table('strategic_alerts')
+            ->where('id', $alertId)
+            ->where('viewer_bloc_id', $blocId)
+            ->update([
+                'analyst_notes' => mb_substr($notes, 0, 4000),
+                'reviewed_by_user_id' => Auth::id(),
+                'reviewed_at' => now(),
             ]);
     }
 
@@ -82,9 +151,14 @@ class StrategicAlerts extends Page
 
         $q = DB::table('strategic_alerts')->where('viewer_bloc_id', $blocId);
         if ($this->statusFilter === 'open') {
-            $q->whereNull('dismissed_at');
+            $q->whereNull('dismissed_at')
+              ->whereNotIn('analyst_status', ['suppressed', 'false_positive', 'archived']);
         } elseif ($this->statusFilter === 'dismissed') {
             $q->whereNotNull('dismissed_at');
+        } elseif ($this->statusFilter === 'suppressed') {
+            $q->whereIn('analyst_status', ['suppressed']);
+        } elseif ($this->statusFilter === 'validated') {
+            $q->where('analyst_status', 'validated');
         }
         if ($this->kindFilter !== '') {
             $q->where('alert_kind', $this->kindFilter);
