@@ -648,12 +648,22 @@ def run_intel_reliability(
     log.info("phase4 intel reliability starting",
              {"viewer_bloc_id": viewer_bloc_id, "window_end": window_end.isoformat()})
 
+    # Pull intel reports + their resolved character entities in one
+    # join. Heuristic name extraction (v1) is replaced by Phase 4.2A
+    # eve_log_entity_resolutions which uses canonical
+    # esi_entity_names lookups with confidence scoring.
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT e.id, e.event_timestamp, e.actor_name, e.channel_name,
-                   e.parsed_json
+            SELECT e.id, e.event_timestamp, e.actor_name,
+                   r.resolved_entity_id AS hostile_cid,
+                   r.resolved_entity_name AS hostile_name,
+                   r.resolution_confidence AS hostile_conf
               FROM eve_log_events e
+              LEFT JOIN eve_log_entity_resolutions r
+                ON r.eve_log_event_id = e.id
+               AND r.resolved_entity_type = 'character'
+               AND r.resolution_confidence IN ('medium','high')
               WHERE e.event_type = 'intel_report'
                 AND e.event_timestamp BETWEEN %s AND %s
                 AND e.actor_name IS NOT NULL
@@ -661,30 +671,37 @@ def run_intel_reliability(
             """,
             (window_start, window_end_dt),
         )
-        reports = list(cur.fetchall())
-    if not reports:
+        rows = list(cur.fetchall())
+    if not rows:
         return {"reports": 0, "profiles_written": 0}
 
-    by_reporter: dict[str, list[dict]] = defaultdict(list)
-    for r in reports:
-        by_reporter[r["actor_name"]].append(r)
+    # Group by (reporter, event_id) → set of hostile cids.
+    reporter_events: dict[str, dict[int, dict]] = defaultdict(dict)
+    for r in rows:
+        actor = r["actor_name"]
+        eid = int(r["id"])
+        if eid not in reporter_events[actor]:
+            reporter_events[actor][eid] = {
+                "event_timestamp": r["event_timestamp"],
+                "hostiles": set(),
+            }
+        if r["hostile_cid"] is not None:
+            reporter_events[actor][eid]["hostiles"].add(int(r["hostile_cid"]))
 
     written = 0
-    for reporter, reps in by_reporter.items():
+    for reporter, by_event in reporter_events.items():
         confirmations = 0
         contradictions = 0
         latencies: list[int] = []
-        for r in reps:
-            named = _extract_hostile_names_from_intel(r.get("parsed_json"))
-            if not named:
-                contradictions += 1
+        for eid, ev in by_event.items():
+            hostiles = ev["hostiles"]
+            if not hostiles:
+                # No resolved hostile name in this report — skip (was
+                # over-counted as contradiction in v1).
                 continue
-            window_close = r["event_timestamp"] + timedelta(minutes=INTEL_CONFIRM_WINDOW_MINUTES)
+            window_close = ev["event_timestamp"] + timedelta(minutes=INTEL_CONFIRM_WINDOW_MINUTES)
             confirmed_any = False
-            for hostile in named:
-                cid = _resolve_character_id(conn, hostile)
-                if cid is None:
-                    continue
+            for cid in hostiles:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
@@ -695,17 +712,19 @@ def run_intel_reliability(
                         ) m JOIN killmails k ON k.killmail_id = m.killmail_id
                         WHERE k.killed_at BETWEEN %s AND %s
                         """,
-                        (cid, cid, r["event_timestamp"], window_close),
+                        (cid, cid, ev["event_timestamp"], window_close),
                     )
                     row = cur.fetchone() or {}
                     first_seen = row.get("first_seen")
                 if first_seen is not None:
                     confirmed_any = True
-                    latencies.append(int((first_seen - r["event_timestamp"]).total_seconds()))
+                    latencies.append(int((first_seen - ev["event_timestamp"]).total_seconds()))
             if confirmed_any:
                 confirmations += 1
             else:
                 contradictions += 1
+        # Total reports = events with at least one resolved hostile.
+        reps = [(eid, ev) for eid, ev in by_event.items() if ev["hostiles"]]
 
         reports_n = len(reps)
         false_alarm = round(contradictions / reports_n, 4) if reports_n > 0 else None
@@ -717,6 +736,10 @@ def run_intel_reliability(
             else "low" if reports_n >= 3
             else "insufficient"
         )
+        if reports_n == 0:
+            # Reporter sent intel events but none resolved to a real
+            # character — skip writing a profile (avoids zero rows).
+            continue
 
         evidence = {
             "confirmations": confirmations,
@@ -757,8 +780,10 @@ def run_intel_reliability(
             )
         written += 1
     conn.commit()
-    log.info("phase4 intel reliability done", {"reports": len(reports), "profiles_written": written})
-    return {"reports": len(reports), "profiles_written": written}
+    total_reports = sum(len([1 for ev in by_event.values() if ev["hostiles"]])
+                         for by_event in reporter_events.values())
+    log.info("phase4 intel reliability done", {"reports": total_reports, "profiles_written": written})
+    return {"reports": total_reports, "profiles_written": written}
 
 
 def _extract_hostile_names_from_intel(parsed_json: str | None) -> list[str]:

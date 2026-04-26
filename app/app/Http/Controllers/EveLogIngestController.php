@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Domains\EveLogIngest\Services\EveLogEntityResolver;
 use App\Domains\EveLogIngest\Services\EveLogParser;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,7 +25,7 @@ use Illuminate\Support\Facades\Log;
  */
 class EveLogIngestController extends Controller
 {
-    public function chunk(Request $request, EveLogParser $parser): JsonResponse
+    public function chunk(Request $request, EveLogParser $parser, EveLogEntityResolver $resolver): JsonResponse
     {
         // 1. Bearer auth.
         $auth = $request->header('Authorization');
@@ -185,7 +186,7 @@ class EveLogIngestController extends Controller
         //    metadata, parse + persist events.
         $accepted = $effectiveOffsetEnd;
         try {
-            DB::transaction(function () use ($parser, $data, $file, $logType, $now, $contentBytes, $parserText, $accepted, $client): void {
+            DB::transaction(function () use ($parser, $resolver, $data, $file, $logType, $now, $contentBytes, $parserText, $accepted, $client): void {
                 // Update header fields if uploader supplied richer metadata
                 // and the file row is still missing them.
                 $headerUpdates = [];
@@ -293,6 +294,42 @@ class EveLogIngestController extends Controller
                     if ($errorRows !== []) {
                         foreach (array_chunk($errorRows, 500) as $batch) {
                             DB::table('eve_log_parse_errors')->insert($batch);
+                        }
+                    }
+                    // Resolve entities (system codes + character /
+                    // corp / alliance names) for chat-class events.
+                    // Chunk-by-chunk since the unique key (event_id,
+                    // token, type) needs the freshly-inserted ids.
+                    $resolveTypes = ['intel_report', 'fleet_message', 'local_message', 'chat_message'];
+                    $resolvable = array_filter($events, fn ($e) => in_array($e['event_type'] ?? '', $resolveTypes, true));
+                    if ($resolvable) {
+                        $offsets = array_values(array_filter(array_map(fn ($e) => $e['line_offset'] ?? null, $resolvable)));
+                        $idMap = [];
+                        if ($offsets) {
+                            $idRows = DB::table('eve_log_events')
+                                ->where('eve_log_file_id', $file->id)
+                                ->whereIn('line_offset', $offsets)
+                                ->select('id', 'line_offset')
+                                ->get();
+                            foreach ($idRows as $idRow) {
+                                $idMap[(int) $idRow->line_offset] = (int) $idRow->id;
+                            }
+                        }
+                        foreach ($resolvable as $e) {
+                            $offset = $e['line_offset'] ?? null;
+                            $eventId = $offset !== null ? ($idMap[(int) $offset] ?? null) : null;
+                            if ($eventId === null) continue;
+                            $payload = $e['parsed_json'] ?? null;
+                            $msg = '';
+                            if (is_string($payload)) {
+                                $decoded = json_decode($payload, true);
+                                if (is_array($decoded)) $msg = (string) ($decoded['message'] ?? '');
+                            }
+                            if ($msg === '') continue;
+                            $resolutions = $resolver->resolve($msg);
+                            if ($resolutions !== []) {
+                                $resolver->persist($eventId, $resolutions);
+                            }
                         }
                     }
                 }
