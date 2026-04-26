@@ -31,6 +31,9 @@ from counter_intel.phase4_aggregation import (
     run_hostile_clusters as phase4_hostile_clusters,
     run_incidents as phase4_incidents,
     run_system_activity as phase4_system_activity,
+    run_corridors as phase4_corridors,
+    run_response_times as phase4_response_times,
+    run_threat_surface as phase4_threat_surface,
 )
 from counter_intel.log import get
 
@@ -112,6 +115,20 @@ def main() -> int:
     p4sa.add_argument("--viewer-bloc-id", type=int, required=True)
     p4sa.add_argument("--since-hours", type=int, default=8760)
 
+    p4cor = sub.add_parser("phase4-corridors", help="Phase 4.4C — recurring hostile travel-lane inference.")
+    p4cor.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4cor.add_argument("--since-hours", type=int, default=8760)
+
+    p4rt = sub.add_parser("phase4-response-times", help="Phase 4.4E — operational tempo medians per system.")
+    p4rt.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4rt.add_argument("--window-end", type=str, default=None)
+    p4rt.add_argument("--window-days", type=int, default=30)
+
+    p4ts = sub.add_parser("phase4-threat-surface", help="Phase 4.4F — composite per-system threat score.")
+    p4ts.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4ts.add_argument("--window-end", type=str, default=None)
+    p4ts.add_argument("--window-days", type=int, default=30)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -147,6 +164,12 @@ def main() -> int:
         return _run_phase4_incidents(args)
     if args.cmd == "phase4-system-activity":
         return _run_phase4_system_activity(args)
+    if args.cmd == "phase4-corridors":
+        return _run_phase4_corridors(args)
+    if args.cmd == "phase4-response-times":
+        return _run_phase4_response_times(args)
+    if args.cmd == "phase4-threat-surface":
+        return _run_phase4_threat_surface(args)
     parser.print_help()
     return 2
 
@@ -303,6 +326,42 @@ def _run_phase4_system_activity(args) -> int:
     with connection(cfg) as conn:
         stats = phase4_system_activity(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
     log.info("phase4.3D system-activity complete", stats)
+    return 0
+
+
+def _run_phase4_corridors(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase4_corridors(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4.4C corridors complete", stats)
+    return 0
+
+
+def _run_phase4_response_times(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    if window_end is None:
+        from datetime import timezone, datetime as _dt
+        window_end = _dt.now(timezone.utc).date()
+    with connection(cfg) as conn:
+        stats = phase4_response_times(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                       window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.4E response-times complete", stats)
+    return 0
+
+
+def _run_phase4_threat_surface(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    if window_end is None:
+        from datetime import timezone, datetime as _dt
+        window_end = _dt.now(timezone.utc).date()
+    with connection(cfg) as conn:
+        stats = phase4_threat_surface(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                       window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.4F threat-surface complete", stats)
     return 0
 
 

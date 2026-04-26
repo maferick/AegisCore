@@ -518,6 +518,18 @@ ci-phase4-incidents:
 ci-phase4-system-activity:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-system-activity --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.4C/E/F — strategic operational analytics.
+# Run after ci-phase4-system-activity. Threat surface depends on
+# corridors so order is corridors → response-times → threat-surface.
+ci-phase4-corridors:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-corridors --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase4-response-times:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-response-times --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase4-threat-surface:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-threat-surface --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

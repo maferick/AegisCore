@@ -704,6 +704,516 @@ def run_system_activity(
     return {"rows_written": written}
 
 
+def run_corridors(
+    conn: pymysql.connections.Connection,
+    cfg: Config,
+    viewer_bloc_id: int,
+    since_dt: datetime,
+) -> dict:
+    """Phase 4.4C — infer hostile travel lanes from cluster sequences.
+
+    For each (system_a, system_b) pair where a hostile cluster in
+    system_a is followed by a cluster in system_b within
+    CORRIDOR_TRANSITION_GAP_SECONDS AND the two clusters share at
+    least one named character, increment the corridor's
+    transition_count + record the average transit time.
+
+    No EVE topology join — corridors are inferred from observed
+    traffic, not declared adjacency. This catches Ansiblex / wormhole
+    traffic the topology graph wouldn't show."""
+    transition_gap = _env_int("PHASE4_CORRIDOR_TRANSITION_GAP_SEC", 30 * 60)
+    log.info("phase4.4C corridors starting", {"viewer_bloc_id": viewer_bloc_id, "since": since_dt.isoformat()})
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, primary_system_id, primary_system_name, primary_region_id,
+                   start_at, end_at, involved_character_ids_json
+              FROM operational_hostile_clusters
+             WHERE viewer_bloc_id = %s
+               AND start_at >= %s
+             ORDER BY start_at
+            """,
+            (viewer_bloc_id, since_dt),
+        )
+        clusters = list(cur.fetchall())
+    if not clusters:
+        return {"clusters": 0, "corridors_written": 0}
+
+    # Decode character sets per cluster.
+    for c in clusters:
+        try:
+            c["chars"] = set(int(x) for x in (json.loads(c.get("involved_character_ids_json") or "[]") or []))
+        except (TypeError, ValueError):
+            c["chars"] = set()
+
+    # Pairwise sweep: for each cluster, look ahead for clusters in
+    # different systems whose start is within transition_gap seconds.
+    corridor_acc: dict[tuple[int, int], dict] = defaultdict(lambda: {
+        "count": 0,
+        "characters": set(),
+        "transit_seconds": [],
+        "from_name": None, "from_region": None,
+        "to_name": None, "to_region": None,
+        "first": None, "last": None,
+    })
+
+    n = len(clusters)
+    for i, c_from in enumerate(clusters):
+        if c_from["primary_system_id"] is None:
+            continue
+        from_sid = int(c_from["primary_system_id"])
+        from_chars = c_from["chars"]
+        if not from_chars:
+            continue
+        # Look ahead until we exceed the gap.
+        end_ts = c_from["end_at"]
+        for j in range(i + 1, n):
+            c_to = clusters[j]
+            if c_to["primary_system_id"] is None:
+                continue
+            to_sid = int(c_to["primary_system_id"])
+            if to_sid == from_sid:
+                continue
+            gap = (c_to["start_at"] - end_ts).total_seconds()
+            if gap < 0:
+                continue
+            if gap > transition_gap:
+                break
+            shared = from_chars & c_to["chars"]
+            if not shared:
+                continue
+            key = (from_sid, to_sid)
+            acc = corridor_acc[key]
+            acc["count"] += 1
+            acc["characters"].update(shared)
+            acc["transit_seconds"].append(int(gap))
+            acc["from_name"] = c_from["primary_system_name"]
+            acc["from_region"] = int(c_from["primary_region_id"]) if c_from["primary_region_id"] else None
+            acc["to_name"] = c_to["primary_system_name"]
+            acc["to_region"] = int(c_to["primary_region_id"]) if c_to["primary_region_id"] else None
+            if acc["first"] is None or c_from["start_at"] < acc["first"]:
+                acc["first"] = c_from["start_at"]
+            if acc["last"] is None or c_to["start_at"] > acc["last"]:
+                acc["last"] = c_to["start_at"]
+
+    written = 0
+    for (from_sid, to_sid), acc in corridor_acc.items():
+        n_chars = len(acc["characters"])
+        avg_transit = (
+            int(sum(acc["transit_seconds"]) / len(acc["transit_seconds"]))
+            if acc["transit_seconds"] else None
+        )
+        confidence = (
+            "high" if acc["count"] >= 10 and n_chars >= 5 else
+            "medium" if acc["count"] >= 4 and n_chars >= 3 else
+            "low" if acc["count"] >= 2 else
+            "insufficient"
+        )
+        evidence = {
+            "transition_count": acc["count"],
+            "distinct_characters": n_chars,
+            "transit_seconds_samples": acc["transit_seconds"][:10],
+        }
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO operational_corridors
+                  (viewer_bloc_id, from_system_id, to_system_id,
+                   from_system_name, to_system_name,
+                   from_region_id, to_region_id,
+                   transition_count, distinct_characters, avg_transition_seconds,
+                   first_seen_at, last_seen_at, confidence, evidence_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    from_system_name = VALUES(from_system_name),
+                    to_system_name = VALUES(to_system_name),
+                    from_region_id = VALUES(from_region_id),
+                    to_region_id = VALUES(to_region_id),
+                    transition_count = VALUES(transition_count),
+                    distinct_characters = VALUES(distinct_characters),
+                    avg_transition_seconds = VALUES(avg_transition_seconds),
+                    first_seen_at = VALUES(first_seen_at),
+                    last_seen_at = VALUES(last_seen_at),
+                    confidence = VALUES(confidence),
+                    evidence_json = VALUES(evidence_json),
+                    computed_at = NOW()
+                """,
+                (
+                    viewer_bloc_id, from_sid, to_sid,
+                    acc["from_name"], acc["to_name"],
+                    acc["from_region"], acc["to_region"],
+                    acc["count"], n_chars, avg_transit,
+                    acc["first"], acc["last"], confidence,
+                    json.dumps(evidence, default=str),
+                ),
+            )
+        written += 1
+    conn.commit()
+    log.info("phase4.4C corridors done", {"clusters": len(clusters), "corridors_written": written})
+    return {"clusters": len(clusters), "corridors_written": written}
+
+
+def run_response_times(
+    conn: pymysql.connections.Connection,
+    cfg: Config,
+    viewer_bloc_id: int,
+    window_end: date,
+    window_days: int = 30,
+) -> dict:
+    """Phase 4.4E — operational tempo per system per window.
+
+    intel_to_combat: time from first hostile_report (intel) to next
+        combat_spike OR escalation in same primary_system within 30min.
+    formup_to_engage: time from fleet_formup to next combat_spike or
+        escalation in same primary_system within 30min.
+    engage_to_disengage: time from combat_spike or escalation to
+        disengagement in same primary_system within 30min.
+
+    Median rather than mean (resilient to single outlier responses).
+    """
+    import statistics as _stats
+    window_start = datetime.combine(window_end - timedelta(days=window_days - 1), datetime.min.time(), tzinfo=timezone.utc)
+    window_end_dt = datetime.combine(window_end, datetime.max.time(), tzinfo=timezone.utc)
+    log.info("phase4.4E response-times starting", {"viewer_bloc_id": viewer_bloc_id, "window_end": window_end.isoformat()})
+
+    # Pull events with system_id (skip rows where system unknown).
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT timeline_type, event_timestamp, solar_system_id, region_id, solar_system_name
+              FROM operational_timeline_events
+             WHERE viewer_bloc_id = %s
+               AND event_timestamp BETWEEN %s AND %s
+               AND solar_system_id IS NOT NULL
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        timeline_rows = list(cur.fetchall())
+
+    # Hostile clusters as the "intel" anchor (more accurate than raw
+    # hostile_report which fires once per intel event).
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT primary_system_id, primary_system_name, primary_region_id, start_at
+              FROM operational_hostile_clusters
+             WHERE viewer_bloc_id = %s
+               AND start_at BETWEEN %s AND %s
+               AND primary_system_id IS NOT NULL
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        cluster_rows = list(cur.fetchall())
+
+    by_system: dict[int, dict] = defaultdict(lambda: {
+        "intel": [], "formup": [], "engage": [], "disengage": [],
+        "name": None, "region": None,
+    })
+    for c in cluster_rows:
+        sid = int(c["primary_system_id"])
+        b = by_system[sid]
+        b["intel"].append(c["start_at"])
+        b["name"] = c["primary_system_name"]
+        if c["primary_region_id"] is not None:
+            b["region"] = int(c["primary_region_id"])
+    for t in timeline_rows:
+        sid = int(t["solar_system_id"])
+        b = by_system[sid]
+        if b["name"] is None and t["solar_system_name"]:
+            b["name"] = t["solar_system_name"]
+        if b["region"] is None and t["region_id"] is not None:
+            b["region"] = int(t["region_id"])
+        tt = t["timeline_type"]
+        ts = t["event_timestamp"]
+        if tt == "fleet_formup":
+            b["formup"].append(ts)
+        elif tt in ("combat_spike", "escalation"):
+            b["engage"].append(ts)
+        elif tt == "disengagement":
+            b["disengage"].append(ts)
+
+    written = 0
+    for sid, b in by_system.items():
+        i2c = _pair_medians(b["intel"], b["engage"])
+        f2e = _pair_medians(b["formup"], b["engage"])
+        e2d = _pair_medians(b["engage"], b["disengage"])
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO system_response_times
+                  (viewer_bloc_id, solar_system_id, solar_system_name, region_id,
+                   window_end_date, window_days,
+                   intel_to_combat_count, intel_to_combat_median_seconds,
+                   formup_to_engage_count, formup_to_engage_median_seconds,
+                   engage_to_disengage_count, engage_to_disengage_median_seconds)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    solar_system_name = VALUES(solar_system_name),
+                    region_id = VALUES(region_id),
+                    intel_to_combat_count = VALUES(intel_to_combat_count),
+                    intel_to_combat_median_seconds = VALUES(intel_to_combat_median_seconds),
+                    formup_to_engage_count = VALUES(formup_to_engage_count),
+                    formup_to_engage_median_seconds = VALUES(formup_to_engage_median_seconds),
+                    engage_to_disengage_count = VALUES(engage_to_disengage_count),
+                    engage_to_disengage_median_seconds = VALUES(engage_to_disengage_median_seconds),
+                    computed_at = NOW()
+                """,
+                (
+                    viewer_bloc_id, sid, b["name"], b["region"],
+                    window_end, window_days,
+                    i2c[0], i2c[1], f2e[0], f2e[1], e2d[0], e2d[1],
+                ),
+            )
+        written += 1
+    conn.commit()
+    log.info("phase4.4E response-times done", {"systems": written})
+    return {"systems": written}
+
+
+def _pair_medians(starts: list[datetime], ends: list[datetime]) -> tuple[int, int | None]:
+    """For each start, find the next end within 30min; collect the
+    deltas in seconds; return (count, median or None)."""
+    import statistics as _stats
+    if not starts or not ends:
+        return (0, None)
+    ends_sorted = sorted(ends)
+    deltas: list[int] = []
+    for s in starts:
+        for e in ends_sorted:
+            d = (e - s).total_seconds()
+            if d < 0:
+                continue
+            if d > 30 * 60:
+                break
+            deltas.append(int(d))
+            break
+    if not deltas:
+        return (0, None)
+    return (len(deltas), int(_stats.median(deltas)))
+
+
+def run_threat_surface(
+    conn: pymysql.connections.Connection,
+    cfg: Config,
+    viewer_bloc_id: int,
+    window_end: date,
+    window_days: int = 30,
+) -> dict:
+    """Phase 4.4F — composite per-system threat score.
+
+    Inputs (all rolled across `window_days` ending at `window_end`):
+      hostile_cluster_score   = sum of cluster quality weights
+                                (noisy=0.25, weak=0.5, normal=1,
+                                strong=2, strategic=4)
+      escalation_score        = count of escalation timelines × 2
+      battle_linkage_score    = count of incidents linked to a battle
+      density_score           = total operational signal count
+      reliability_score       = sum of reliability_weighted_reports
+                                from system_operational_activity
+      corridor_centrality_score = transit_count of corridors that
+                                  start OR end at this system
+
+    Composite threat_score = weighted sum, normalised so the top
+    system in the window scores ~10. Tier breakdown:
+      strategic   threat_score >= 7
+      hot         threat_score >= 4
+      contested   threat_score >= 2
+      watch       threat_score >= 0.5
+      safe        below
+    """
+    window_start = datetime.combine(window_end - timedelta(days=window_days - 1), datetime.min.time(), tzinfo=timezone.utc)
+    window_end_dt = datetime.combine(window_end, datetime.max.time(), tzinfo=timezone.utc)
+    log.info("phase4.4F threat-surface starting", {"viewer_bloc_id": viewer_bloc_id, "window_end": window_end.isoformat()})
+
+    quality_weights = {"noisy": 0.25, "weak": 0.5, "normal": 1.0, "strong": 2.0, "strategic": 4.0}
+
+    by_system: dict[int, dict] = defaultdict(lambda: {
+        "name": None, "region": None,
+        "cluster_score": 0.0, "escalation_score": 0.0,
+        "battle_linkage_score": 0.0, "density_score": 0.0,
+        "reliability_score": 0.0, "corridor_score": 0.0,
+    })
+
+    # Hostile cluster contributions.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT primary_system_id, primary_system_name, primary_region_id,
+                   quality, COUNT(*) AS n
+              FROM operational_hostile_clusters
+             WHERE viewer_bloc_id = %s
+               AND start_at BETWEEN %s AND %s
+               AND primary_system_id IS NOT NULL
+             GROUP BY primary_system_id, primary_system_name, primary_region_id, quality
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["primary_system_id"])
+            b = by_system[sid]
+            b["name"] = r["primary_system_name"]
+            b["region"] = int(r["primary_region_id"]) if r["primary_region_id"] else None
+            w = quality_weights.get(str(r["quality"]), 1.0)
+            b["cluster_score"] += w * int(r["n"])
+            b["density_score"] += int(r["n"])
+
+    # Escalation + density timeline contributions.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT solar_system_id, region_id, solar_system_name, timeline_type, COUNT(*) AS n
+              FROM operational_timeline_events
+             WHERE viewer_bloc_id = %s
+               AND event_timestamp BETWEEN %s AND %s
+               AND solar_system_id IS NOT NULL
+             GROUP BY solar_system_id, region_id, solar_system_name, timeline_type
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["solar_system_id"])
+            b = by_system[sid]
+            if b["name"] is None and r["solar_system_name"]:
+                b["name"] = r["solar_system_name"]
+            if b["region"] is None and r["region_id"] is not None:
+                b["region"] = int(r["region_id"])
+            n = int(r["n"])
+            b["density_score"] += n
+            if r["timeline_type"] == "escalation":
+                b["escalation_score"] += n * 2.0
+
+    # Battle linkage from operational_incidents.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT primary_system_id, COUNT(*) AS n
+              FROM operational_incidents
+             WHERE viewer_bloc_id = %s
+               AND start_at BETWEEN %s AND %s
+               AND primary_system_id IS NOT NULL
+               AND battle_id IS NOT NULL
+             GROUP BY primary_system_id
+            """,
+            (viewer_bloc_id, window_start, window_end_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["primary_system_id"])
+            by_system[sid]["battle_linkage_score"] += float(r["n"])
+
+    # Reliability-weighted reports from system_operational_activity.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT solar_system_id, SUM(reliability_weighted_reports) AS rwr
+              FROM system_operational_activity
+             WHERE viewer_bloc_id = %s
+               AND activity_date BETWEEN %s AND %s
+             GROUP BY solar_system_id
+            """,
+            (viewer_bloc_id, window_start.date(), window_end),
+        )
+        for r in cur.fetchall():
+            sid = int(r["solar_system_id"])
+            by_system[sid]["reliability_score"] += float(r["rwr"] or 0)
+
+    # Corridor centrality.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT from_system_id AS sid, SUM(transition_count) AS n FROM operational_corridors
+             WHERE viewer_bloc_id = %s GROUP BY from_system_id
+            UNION ALL
+            SELECT to_system_id AS sid, SUM(transition_count) AS n FROM operational_corridors
+             WHERE viewer_bloc_id = %s GROUP BY to_system_id
+            """,
+            (viewer_bloc_id, viewer_bloc_id),
+        )
+        for r in cur.fetchall():
+            sid = int(r["sid"])
+            by_system[sid]["corridor_score"] += float(r["n"] or 0)
+
+    if not by_system:
+        log.info("phase4.4F threat-surface no data", {})
+        return {"systems": 0}
+
+    # Composite weighted score. Normalise on the top observed value
+    # so the highest system lands near ~10 — this gives the tier
+    # thresholds operational meaning across blocs of different size.
+    weights = {
+        "cluster_score": 1.0,
+        "escalation_score": 1.5,
+        "battle_linkage_score": 1.0,
+        "density_score": 0.05,
+        "reliability_score": 0.05,
+        "corridor_score": 0.05,
+    }
+    raw_scores = []
+    for sid, b in by_system.items():
+        s = sum(b[k] * w for k, w in weights.items())
+        b["raw"] = s
+        raw_scores.append(s)
+    max_raw = max(raw_scores) if raw_scores else 1.0
+    scale = 10.0 / max(max_raw, 1.0)
+
+    written = 0
+    for sid, b in by_system.items():
+        threat = round(b["raw"] * scale, 4)
+        tier = (
+            "strategic" if threat >= 7 else
+            "hot" if threat >= 4 else
+            "contested" if threat >= 2 else
+            "watch" if threat >= 0.5 else
+            "safe"
+        )
+        evidence = {
+            "raw": round(b["raw"], 3),
+            "scale": round(scale, 4),
+            "components": {k: round(b[k], 3) for k in weights.keys()},
+        }
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO system_threat_surface
+                  (viewer_bloc_id, solar_system_id, solar_system_name, region_id,
+                   window_end_date, window_days, threat_score,
+                   hostile_cluster_score, escalation_score, battle_linkage_score,
+                   density_score, reliability_score, corridor_centrality_score,
+                   tier, evidence_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    solar_system_name = VALUES(solar_system_name),
+                    region_id = VALUES(region_id),
+                    threat_score = VALUES(threat_score),
+                    hostile_cluster_score = VALUES(hostile_cluster_score),
+                    escalation_score = VALUES(escalation_score),
+                    battle_linkage_score = VALUES(battle_linkage_score),
+                    density_score = VALUES(density_score),
+                    reliability_score = VALUES(reliability_score),
+                    corridor_centrality_score = VALUES(corridor_centrality_score),
+                    tier = VALUES(tier),
+                    evidence_json = VALUES(evidence_json),
+                    computed_at = NOW()
+                """,
+                (
+                    viewer_bloc_id, sid, b["name"], b["region"],
+                    window_end, window_days, threat,
+                    round(b["cluster_score"], 4),
+                    round(b["escalation_score"], 4),
+                    round(b["battle_linkage_score"], 4),
+                    round(b["density_score"], 4),
+                    round(b["reliability_score"], 4),
+                    round(b["corridor_score"], 4),
+                    tier,
+                    json.dumps(evidence, default=str),
+                ),
+            )
+        written += 1
+    conn.commit()
+    log.info("phase4.4F threat-surface done", {"systems": written})
+    return {"systems": written}
+
+
 def _link_battle(
     conn: pymysql.connections.Connection,
     inc: _IncidentAcc,
