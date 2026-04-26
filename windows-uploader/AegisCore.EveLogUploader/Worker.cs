@@ -157,24 +157,24 @@ public sealed class Worker : BackgroundService
         var sliceLen = (int)(sliceEnd - sliceStart);
         if (sliceLen <= 0) return;
 
-        byte[] buffer;
+        byte[] rawBytes;
         try
         {
             // FileShare.ReadWrite + Delete so EVE keeps writing freely.
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
             fs.Seek(sliceStart, SeekOrigin.Begin);
-            buffer = new byte[sliceLen];
+            rawBytes = new byte[sliceLen];
             var read = 0;
             while (read < sliceLen)
             {
-                var got = await fs.ReadAsync(buffer.AsMemory(read, sliceLen - read), ct);
+                var got = await fs.ReadAsync(rawBytes.AsMemory(read, sliceLen - read), ct);
                 if (got == 0) break;
                 read += got;
             }
             if (read < sliceLen)
             {
-                Array.Resize(ref buffer, read);
+                Array.Resize(ref rawBytes, read);
                 sliceEnd = sliceStart + read;
             }
         }
@@ -185,15 +185,15 @@ public sealed class Worker : BackgroundService
             return;
         }
 
-        // Decode UTF-8 (with BOM stripped) for sha256/content. EVE
-        // logs are UTF-8 in modern clients; fall back to permissive
-        // decode if needed.
-        var content = StripUtf8Bom(Encoding.UTF8.GetString(buffer));
-        // Re-encode normalised bytes — these are what we hash and ship.
-        var bytes = Encoding.UTF8.GetBytes(content);
-        // Recalculate end offset based on normalised byte count.
-        sliceEnd = sliceStart + bytes.Length;
-        var sha256 = ToHex(SHA256.HashData(bytes));
+        // Wire-safe transport: ship the RAW bytes from disk as base64.
+        // Avoids the UTF-8 ↔ UTF-16 ↔ JSON round-trip that was losing
+        // 2 bytes per chunk (every JSON-string normalisation step has
+        // a chance to mutate control chars / surrogates / BOM markers).
+        // Server decodes base64 → identical bytes → identical sha256.
+        // Server's parser handles BOM + line normalisation downstream.
+        sliceEnd = sliceStart + rawBytes.Length;
+        var sha256 = ToHex(SHA256.HashData(rawBytes));
+        var contentB64 = Convert.ToBase64String(rawBytes);
 
         var payload = new ChunkPayload
         {
@@ -205,7 +205,7 @@ public sealed class Worker : BackgroundService
             OffsetStart = sliceStart,
             OffsetEnd = sliceEnd,
             ChunkSha256 = sha256,
-            Content = content,
+            ContentB64 = contentB64,
             LocalModifiedAt = info.LastWriteTimeUtc.ToString("o"),
         };
 

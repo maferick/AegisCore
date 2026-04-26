@@ -92,7 +92,9 @@ public sealed class ChunkPayload
     [JsonPropertyName("offset_start")] public long OffsetStart { get; set; }
     [JsonPropertyName("offset_end")] public long OffsetEnd { get; set; }
     [JsonPropertyName("chunk_sha256")] public string ChunkSha256 { get; set; } = "";
-    [JsonPropertyName("content")] public string Content { get; set; } = "";
+    // Wire format: base64 of the raw bytes from disk. Avoids JSON
+    // string round-trip losing chars on UTF-16 / control / BOM data.
+    [JsonPropertyName("content_b64")] public string ContentB64 { get; set; } = "";
     [JsonPropertyName("local_modified_at")] public string? LocalModifiedAt { get; set; }
     [JsonPropertyName("folder_hint")] public string? FolderHint { get; set; }
 }

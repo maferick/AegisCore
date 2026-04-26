@@ -41,7 +41,9 @@ class EveLogIngestController extends Controller
             return response()->json(['status' => 'error', 'message' => 'invalid token'], 401);
         }
 
-        // 2. Payload validation.
+        // 2. Payload validation. Accept either content_b64 (preferred,
+        // raw bytes base64-encoded — wire-safe for UTF-16 / control
+        // chars / BOM) or content (legacy plain string).
         $data = $request->validate([
             'client_id' => 'required|string|max:64',
             'source_path_hash' => 'required|string|size:64',
@@ -54,10 +56,17 @@ class EveLogIngestController extends Controller
             'offset_start' => 'required|integer|min:0',
             'offset_end' => 'required|integer|min:0',
             'chunk_sha256' => 'required|string|size:64',
-            'content' => 'required|string',
+            'content' => 'nullable|string',
+            'content_b64' => 'nullable|string',
             'local_modified_at' => 'nullable|date',
             'folder_hint' => 'nullable|string|max:255',
         ]);
+        if (empty($data['content']) && empty($data['content_b64'])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'either content or content_b64 is required',
+            ], 422);
+        }
 
         if ($data['client_id'] !== (string) $client->client_id) {
             return response()->json(['status' => 'error', 'message' => 'token/client_id mismatch'], 401);
@@ -80,17 +89,23 @@ class EveLogIngestController extends Controller
                 'updated_at' => now(),
             ]);
 
-        // 3. Hash check + content-length policy.
-        // We trust the actual byte length of `content` over the
-        // payload's offset_end. JSON round-trip on the .NET side can
-        // produce a small (typically ≤ a few bytes) drift between the
-        // C# byte count (Encoding.UTF8.GetBytes) and the wire JSON
-        // string length the server reads after json_decode (e.g.
-        // surrogate / BOM normalisation). The chunk_sha256 still
-        // anchors integrity — we hash exactly what we received and
-        // anchor continuity on bytes-received, not on what the client
-        // claims the offset_end is.
-        $contentBytes = $data['content'];
+        // 3. Decode + hash check. Prefer content_b64 — base64 is the
+        // only wire-safe path for raw log bytes (handles UTF-16 BOM,
+        // control chars, surrogate halves without JSON normalisation
+        // mutating them). Plain `content` stays for legacy/manual test
+        // clients.
+        if (! empty($data['content_b64'])) {
+            $decoded = base64_decode((string) $data['content_b64'], true);
+            if ($decoded === false) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'content_b64 is not valid base64',
+                ], 422);
+            }
+            $contentBytes = $decoded;
+        } else {
+            $contentBytes = (string) $data['content'];
+        }
         $sha = hash('sha256', $contentBytes);
         if (strcasecmp($sha, $data['chunk_sha256']) !== 0) {
             return response()->json([
@@ -99,9 +114,18 @@ class EveLogIngestController extends Controller
                 'expected_sha256' => mb_strtolower($data['chunk_sha256']),
                 'got_sha256' => $sha,
                 'got_length' => strlen($contentBytes),
+                'transport' => empty($data['content_b64']) ? 'plain' : 'base64',
             ], 422);
         }
         $effectiveOffsetEnd = (int) $data['offset_start'] + strlen($contentBytes);
+
+        // Encoding normalisation. EVE chat logs on Windows can be
+        // UTF-16 LE (older builds) or UTF-8 (modern builds), with or
+        // without BOM. Detect by leading BOM bytes and convert to
+        // UTF-8 before parsing. The on-the-wire bytes (and the sha256
+        // we just verified) stay UTF-16 — only the parser-side string
+        // is normalised.
+        $parserText = $this->normaliseToUtf8($contentBytes);
 
         // 4. Resolve / create the file record.
         $now = now();
@@ -185,7 +209,7 @@ class EveLogIngestController extends Controller
 
                 // Header detection on the very first chunk.
                 if ((int) $data['offset_start'] === 0) {
-                    $hdr = $parser->parseHeader($contentBytes);
+                    $hdr = $parser->parseHeader($parserText);
                     foreach (['listener', 'channel_name', 'channel_id', 'session_started_at'] as $k) {
                         if (! empty($hdr[$k]) && empty($file->$k) && empty($headerUpdates[$k] ?? null)) {
                             $headerUpdates[$k] = $hdr[$k];
@@ -196,7 +220,7 @@ class EveLogIngestController extends Controller
                 $effectiveChannel = $headerUpdates['channel_name'] ?? $file->channel_name ?? ($data['channel_name'] ?? null);
 
                 $events = $parser->parseEvents(
-                    $contentBytes,
+                    $parserText,
                     $headerUpdates['log_type'] ?? ($file->log_type ?? $logType),
                     $effectiveChannel,
                     (int) $data['offset_start'],
@@ -282,5 +306,31 @@ class EveLogIngestController extends Controller
         }
 
         return response()->json(['status' => 'ok', 'accepted_offset' => $accepted]);
+    }
+
+    /**
+     * Detect the chunk's text encoding from leading BOM bytes and
+     * return a UTF-8 string suitable for the parser. Falls back to
+     * the raw bytes interpreted as UTF-8 when no BOM is present.
+     *
+     * Detection covers:
+     *   FF FE        — UTF-16 LE BOM
+     *   FE FF        — UTF-16 BE BOM
+     *   EF BB BF     — UTF-8 BOM (passed through; parser strips on its own)
+     *   none         — assume UTF-8 (modern EVE)
+     */
+    private function normaliseToUtf8(string $bytes): string
+    {
+        $len = strlen($bytes);
+        if ($len === 0) return '';
+        if ($len >= 2 && $bytes[0] === "\xFF" && $bytes[1] === "\xFE") {
+            $converted = @mb_convert_encoding(substr($bytes, 2), 'UTF-8', 'UTF-16LE');
+            return $converted !== false ? $converted : $bytes;
+        }
+        if ($len >= 2 && $bytes[0] === "\xFE" && $bytes[1] === "\xFF") {
+            $converted = @mb_convert_encoding(substr($bytes, 2), 'UTF-8', 'UTF-16BE');
+            return $converted !== false ? $converted : $bytes;
+        }
+        return $bytes;
     }
 }
