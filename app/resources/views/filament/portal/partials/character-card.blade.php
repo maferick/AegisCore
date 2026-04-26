@@ -640,6 +640,16 @@
                         </div>
                     @endif
 
+                    {{-- Bloc-scoped watchlist button. Embedded Livewire
+                         component manages a single ci_watchlist_entries
+                         row for this (character, bloc) pair. --}}
+                    @if (! empty($c['viewer_bloc_id']))
+                        <livewire:counter-intel-watchlist-button
+                            :character-id="$c['character_id']"
+                            :viewer-bloc-id="$c['viewer_bloc_id']"
+                            :key="'wl-' . $c['character_id']" />
+                    @endif
+
                     {{-- Existing per-bloc anomaly band, ring members, combat anomaly + cohort context.
                          These pre-date Phase 1 but live in the same review surface, so we keep them
                          here so the operator sees one unified Counter-Intel view rather than two. --}}
