@@ -117,6 +117,29 @@ class CounterIntelDashboard extends Page
         // Signal-type counts (last 24h) — which reasons fire most.
         $reasonCounts = $this->computeReasonCounts($blocId);
 
+        // Phase 4 — recent operational timeline (last 24h).
+        $recentTimeline = DB::table('operational_timeline_events')
+            ->where('viewer_bloc_id', $blocId)
+            ->where('event_timestamp', '>=', now()->subDay())
+            ->orderByDesc('event_timestamp')
+            ->limit(20)
+            ->get([
+                'timeline_type', 'event_timestamp', 'source_listener',
+                'solar_system_name', 'event_summary', 'confidence',
+            ]);
+
+        // Active fleet windows in the last 6h.
+        $activeFleets = DB::table('fleet_presence_windows')
+            ->where('viewer_bloc_id', $blocId)
+            ->where('end_at', '>=', now()->subHours(6))
+            ->orderByDesc('end_at')
+            ->limit(20)
+            ->get([
+                'character_name', 'fleet_channel', 'start_at', 'end_at',
+                'duration_minutes', 'derived_role', 'killmail_count',
+                'spoken_messages', 'confidence',
+            ]);
+
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $blocId,
@@ -127,6 +150,8 @@ class CounterIntelDashboard extends Page
             'watchlist_counts' => $watchlistCounts,
             'top_triangles' => $topTriangles,
             'reason_counts' => $reasonCounts,
+            'recent_timeline' => $recentTimeline,
+            'active_fleets' => $activeFleets,
         ];
     }
 

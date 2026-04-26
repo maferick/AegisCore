@@ -173,6 +173,90 @@
             </div>
         </div>
 
+        {{-- Phase 4 — operational timeline + active fleets --}}
+        @if (! empty($recent_timeline) || ! empty($active_fleets))
+            <div style="display:grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap:1rem; margin-bottom:1rem;">
+                <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
+                    <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0 0 0.5rem;">
+                        Operational timeline · last 24h
+                        <span style="text-transform:none; letter-spacing:0; color:#6b7280; font-style:italic; font-weight:400;">
+                            — log-derived events from uploaded streams
+                        </span>
+                    </h3>
+                    @if (count($recent_timeline) === 0)
+                        <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">No timeline events yet — uploader telemetry pending.</p>
+                    @else
+                        <div style="display:grid; gap:0.3rem; max-height:400px; overflow:auto;">
+                            @foreach ($recent_timeline as $te)
+                                @php
+                                    $tColors = [
+                                        'fleet_formup' => '#86efac',
+                                        'hostile_report' => '#fca5a5',
+                                        'escalation' => '#fda4af',
+                                        'combat_spike' => '#fdba74',
+                                        'self_destruct_wave' => '#c084fc',
+                                        'extraction' => '#a5b4fc',
+                                        'disengagement' => '#fde68a',
+                                        'crash_symptom' => '#9ca3af',
+                                        'intel_gap' => '#fb923c',
+                                        'unknown' => '#6b7280',
+                                    ];
+                                    $tColor = $tColors[$te->timeline_type] ?? '#9ca3af';
+                                @endphp
+                                <div style="padding:0.4rem 0.55rem; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:5px; font-size:0.72rem;">
+                                    <div style="display:flex; gap:0.4rem; align-items:center; margin-bottom:0.15rem;">
+                                        <span style="font-size:0.55rem; color:{{ $tColor }}; text-transform:uppercase; letter-spacing:0.06em;">{{ str_replace('_', ' ', $te->timeline_type) }}</span>
+                                        @if ($te->solar_system_name)
+                                            <span style="font-size:0.6rem; color:#86efac;">{{ $te->solar_system_name }}</span>
+                                        @endif
+                                        @if ($te->source_listener)
+                                            <span style="font-size:0.6rem; color:#9ca3af;">via {{ $te->source_listener }}</span>
+                                        @endif
+                                        <span style="font-size:0.55rem; color:#7a7a82; margin-left:auto;">{{ \Carbon\Carbon::parse($te->event_timestamp)->diffForHumans() }} · {{ $te->confidence }}</span>
+                                    </div>
+                                    <div style="color:#cbd5e1;">{{ $te->event_summary }}</div>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+
+                <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
+                    <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0 0 0.5rem;">
+                        Recent fleet windows
+                    </h3>
+                    @if (count($active_fleets) === 0)
+                        <p style="font-size:0.78rem; color:#7a7a82; font-style:italic;">No fleet windows in last 6h.</p>
+                    @else
+                        <div style="display:grid; gap:0.3rem; max-height:400px; overflow:auto;">
+                            @foreach ($active_fleets as $fw)
+                                @php
+                                    $roleColors = [
+                                        'fleet_lurker' => '#fde68a',
+                                        'passive_observer' => '#fdba74',
+                                        'active_combatant' => '#86efac',
+                                        'logistics_presence' => '#a5b4fc',
+                                        'scout_presence' => '#7dd3fc',
+                                        'unknown' => '#9ca3af',
+                                    ];
+                                    $rc = $roleColors[$fw->derived_role] ?? '#9ca3af';
+                                @endphp
+                                <div style="padding:0.35rem 0.55rem; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:5px; font-size:0.7rem;">
+                                    <div style="display:flex; gap:0.3rem; align-items:center;">
+                                        <span style="color:#e5e5e7; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $fw->character_name }}</span>
+                                        <span style="font-size:0.55rem; color:{{ $rc }}; text-transform:uppercase; letter-spacing:0.06em;">{{ str_replace('_', ' ', $fw->derived_role) }}</span>
+                                    </div>
+                                    <div style="font-size:0.6rem; color:#7a7a82;">
+                                        {{ $fw->duration_minutes }}m · {{ $fw->spoken_messages }} msgs · {{ $fw->killmail_count }} km
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+            </div>
+        @endif
+
         {{-- Reason distribution --}}
         @if (! empty($reason_counts))
             <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">

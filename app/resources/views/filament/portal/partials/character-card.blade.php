@@ -640,6 +640,78 @@
                         </div>
                     @endif
 
+                    {{-- Phase 4 — log-derived operational analytics. --}}
+                    @php $p4 = $ci['phase4_signals'] ?? null; @endphp
+                    @if ($p4)
+                        <div style="margin-top:1rem; padding-top:0.8rem; border-top:1px dashed rgba(255,255,255,0.06);">
+                            <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                                <h4 style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.10em; color:#7a7a82; margin:0;">
+                                    Phase 4 · operational evidence
+                                </h4>
+                                <span title="Phase 4 signals come from uploaded EVE log streams. Always rendered as supporting evidence, never as a flag."
+                                      style="font-size:0.5rem; padding:1px 6px; border-radius:3px; text-transform:uppercase; letter-spacing:0.06em;
+                                             background:rgba(99,102,241,0.10); color:#c7d2fe; cursor:help;">
+                                    log-derived · advisory
+                                </span>
+                            </div>
+
+                            @if ($p4['intel_reliability'])
+                                @php $ir = $p4['intel_reliability']; @endphp
+                                <div style="font-size:0.78rem; color:#cbd5e1; padding:0.5rem 0.7rem; background:rgba(99,102,241,0.04); border:1px solid rgba(99,102,241,0.20); border-radius:5px; margin-bottom:0.4rem;">
+                                    <span style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">intel reliability · {{ $ir['confidence'] }} (n={{ $ir['sample_size'] }})</span><br>
+                                    {{ $ir['text'] }}
+                                </div>
+                            @endif
+
+                            @if ($p4['fleet_lurker'])
+                                @php $fl = $p4['fleet_lurker']; @endphp
+                                <div style="font-size:0.78rem; color:#fde68a; padding:0.5rem 0.7rem; background:rgba(234,179,8,0.06); border:1px solid rgba(234,179,8,0.25); border-radius:5px; margin-bottom:0.4rem;">
+                                    <span style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82;">fleet lurker · {{ $fl['confidence'] }} (n={{ $fl['sample_size'] }})</span><br>
+                                    {{ $fl['text'] }}
+                                </div>
+                            @endif
+
+                            @if (! empty($p4['recent_timeline']))
+                                <details style="margin-top:0.4rem;">
+                                    <summary style="cursor:pointer; font-size:0.65rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.08em;">
+                                        Recent operational timeline · {{ count($p4['recent_timeline']) }} event(s)
+                                    </summary>
+                                    <ul style="margin-top:0.4rem; padding-left:1rem; font-size:0.72rem; color:#cbd5e1;">
+                                        @foreach ($p4['recent_timeline'] as $te)
+                                            <li style="margin-bottom:0.2rem;">
+                                                <span style="color:#7a7a82; font-family:ui-monospace,monospace; font-size:0.65rem;">{{ $te['event_timestamp'] }}</span>
+                                                <span style="color:#fdba74; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.04em; margin:0 0.3rem;">{{ str_replace('_', ' ', $te['timeline_type']) }}</span>
+                                                @if ($te['solar_system_name'])
+                                                    <span style="color:#86efac; font-size:0.65rem;">{{ $te['solar_system_name'] }}</span>
+                                                @endif
+                                                <div style="color:#cbd5e1; margin-left:1rem;">{{ $te['event_summary'] }}</div>
+                                            </li>
+                                        @endforeach
+                                    </ul>
+                                </details>
+                            @endif
+
+                            @if (! empty($p4['session_correlations']))
+                                <details style="margin-top:0.4rem;">
+                                    <summary style="cursor:pointer; font-size:0.65rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.08em;">
+                                        Session correlations · top {{ count($p4['session_correlations']) }}
+                                        <span style="text-transform:none; letter-spacing:0; color:#6b7280; font-style:italic; font-weight:400;">— supporting only, never identity proof</span>
+                                    </summary>
+                                    <table style="width:100%; margin-top:0.4rem; font-size:0.7rem;">
+                                        @foreach ($p4['session_correlations'] as $sc)
+                                            <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                                                <td style="padding:0.25rem 0.4rem; color:#cbd5e1;">{{ $sc['peer'] }}</td>
+                                                <td style="padding:0.25rem 0.4rem; color:#9ca3af; text-align:right;">{{ number_format($sc['shared_minutes']) }}m shared</td>
+                                                <td style="padding:0.25rem 0.4rem; color:#fdba74; text-align:right;">{{ number_format($sc['score'], 2) }}</td>
+                                                <td style="padding:0.25rem 0.4rem; color:#7a7a82; font-size:0.55rem; text-transform:uppercase;">{{ $sc['confidence'] }}</td>
+                                            </tr>
+                                        @endforeach
+                                    </table>
+                                </details>
+                            @endif
+                        </div>
+                    @endif
+
                     {{-- Bloc-scoped watchlist button. Embedded Livewire
                          component manages a single ci_watchlist_entries
                          row for this (character, bloc) pair. --}}

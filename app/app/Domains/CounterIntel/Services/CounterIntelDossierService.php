@@ -123,6 +123,7 @@ final class CounterIntelDossierService
         $friendlyAllies = $this->friendlyAllianceIds($viewerBlocId);
         $phase1 = $this->phase1Signals($feature, $anomaly, $declaredAllyId, $friendlyAllies);
         $this->recordRenderDiagnostic($characterId, $viewerBlocId, $phase1);
+        $phase4 = $this->phase4Signals($characterId, $name, $viewerBlocId);
 
         return [
             'not_found' => false,
@@ -141,6 +142,152 @@ final class CounterIntelDossierService
             'coordinated_joins' => $coJoins,
             'combat_anomaly' => $combat,
             'phase1_signals' => $phase1,
+            'phase4_signals' => $phase4,
+        ];
+    }
+
+    /**
+     * Phase 4 — log-derived operational analytics rendered as
+     * supporting evidence on the dossier card. Returns null when no
+     * Phase 4 data is materialised yet (uploader not deployed).
+     *
+     * Privacy rule per ADR-0009: NEVER echo raw_line or chat content.
+     * Use derived counts + structured event_summary strings only.
+     *
+     * @return array{
+     *   intel_reliability: ?array<string,mixed>,
+     *   fleet_lurker: ?array<string,mixed>,
+     *   recent_timeline: list<array<string,mixed>>,
+     *   session_correlations: list<array<string,mixed>>,
+     * }|null
+     */
+    private function phase4Signals(int $characterId, string $characterName, int $viewerBlocId): ?array
+    {
+        $intel = DB::table('intel_reliability_profiles')
+            ->where('viewer_bloc_id', $viewerBlocId)
+            ->where('character_name', $characterName)
+            ->orderByDesc('window_end_date')
+            ->first();
+        $intelEvidence = null;
+        if ($intel !== null && (int) $intel->reports_submitted >= 3) {
+            $rate = $intel->reliability_score !== null ? (float) $intel->reliability_score : null;
+            $intelEvidence = [
+                'reason_code' => 'intel_reliability',
+                'severity' => 'note', // never flag — supporting only per spec
+                'text' => sprintf(
+                    'Intel reports: %d submitted, %d confirmed, %d contradicted%s%s.',
+                    (int) $intel->reports_submitted,
+                    (int) $intel->confirmations,
+                    (int) $intel->contradictions,
+                    $rate !== null ? sprintf(' (reliability %d%%)', (int) round($rate * 100)) : '',
+                    $intel->avg_report_latency_seconds !== null
+                        ? sprintf(', avg latency %ds', (int) $intel->avg_report_latency_seconds)
+                        : '',
+                ),
+                'confidence' => (string) $intel->confidence,
+                'sample_size' => (int) $intel->reports_submitted,
+                'raw' => [
+                    'reports_submitted' => (int) $intel->reports_submitted,
+                    'confirmations' => (int) $intel->confirmations,
+                    'contradictions' => (int) $intel->contradictions,
+                    'false_alarm_rate' => $intel->false_alarm_rate,
+                    'avg_latency_seconds' => $intel->avg_report_latency_seconds,
+                    'reliability_score' => $rate,
+                ],
+            ];
+        }
+
+        // Fleet lurker — recent windows where speaker was in fleet but
+        // killmail count is 0 across the window.
+        $lurkerRows = DB::table('fleet_presence_windows')
+            ->where('viewer_bloc_id', $viewerBlocId)
+            ->where('character_name', $characterName)
+            ->where('start_at', '>=', now()->subDays(30))
+            ->orderByDesc('start_at')
+            ->limit(50)
+            ->get();
+        $lurkerEvidence = null;
+        if ($lurkerRows->isNotEmpty()) {
+            $totalWindows = $lurkerRows->count();
+            $lurkerWindows = $lurkerRows->where('derived_role', 'fleet_lurker')->count();
+            $passiveWindows = $lurkerRows->where('derived_role', 'passive_observer')->count();
+            $activeWindows = $lurkerRows->where('derived_role', 'active_combatant')->count();
+            $logiWindows = $lurkerRows->where('derived_role', 'logistics_presence')->count();
+            $scoutWindows = $lurkerRows->where('derived_role', 'scout_presence')->count();
+            // Only render as note when the lurker proportion is high
+            // AND the pilot has a meaningful sample of fleet windows.
+            // Logi/scout exempt (they speak but rarely on KMs).
+            $exempt = $logiWindows + $scoutWindows;
+            $effective = $totalWindows - $exempt;
+            if ($effective >= 5 && $lurkerWindows / max(1, $effective) >= 0.6) {
+                $lurkerEvidence = [
+                    'reason_code' => 'fleet_lurker',
+                    'severity' => 'note',
+                    'text' => sprintf(
+                        'Fleet lurker pattern: %d of %d non-logi/scout fleet windows had no killmail attendance.',
+                        $lurkerWindows, $effective,
+                    ),
+                    'confidence' => $effective >= 20 ? 'medium' : 'low',
+                    'sample_size' => $effective,
+                    'raw' => [
+                        'total_windows' => $totalWindows,
+                        'lurker_windows' => $lurkerWindows,
+                        'passive_windows' => $passiveWindows,
+                        'active_windows' => $activeWindows,
+                        'logi_windows' => $logiWindows,
+                        'scout_windows' => $scoutWindows,
+                    ],
+                ];
+            }
+        }
+
+        // Recent timeline events that mention this character as
+        // source_listener OR happened in a system the pilot was active
+        // in. Limited to last 7 days for relevance.
+        $timelineRows = DB::table('operational_timeline_events')
+            ->where('viewer_bloc_id', $viewerBlocId)
+            ->where('source_listener', $characterName)
+            ->where('event_timestamp', '>=', now()->subDays(7))
+            ->orderByDesc('event_timestamp')
+            ->limit(15)
+            ->get()
+            ->map(fn ($r) => [
+                'timeline_type' => $r->timeline_type,
+                'event_timestamp' => (string) $r->event_timestamp,
+                'solar_system_name' => $r->solar_system_name,
+                'event_summary' => $r->event_summary,
+                'confidence' => $r->confidence,
+            ])
+            ->all();
+
+        // Session correlations — pairs where this character is on
+        // either side. Render as a supporting list (never flag).
+        $correlations = DB::select(<<<'SQL'
+            SELECT character_a, character_b, shared_overlap_minutes,
+                   correlation_score, sample_size_a, sample_size_b, confidence
+              FROM session_correlation_edges
+             WHERE viewer_bloc_id = ?
+               AND (character_a = ? OR character_b = ?)
+             ORDER BY correlation_score DESC, shared_overlap_minutes DESC
+             LIMIT 5
+        SQL, [$viewerBlocId, $characterName, $characterName]);
+        $correlations = array_map(fn ($r) => [
+            'peer' => $r->character_a === $characterName ? $r->character_b : $r->character_a,
+            'shared_minutes' => (int) $r->shared_overlap_minutes,
+            'score' => (float) ($r->correlation_score ?? 0),
+            'confidence' => $r->confidence,
+        ], $correlations);
+
+        if ($intelEvidence === null && $lurkerEvidence === null && $timelineRows === [] && $correlations === []) {
+            return null;
+        }
+
+        return [
+            'intel_reliability' => $intelEvidence,
+            'fleet_lurker' => $lurkerEvidence,
+            'recent_timeline' => $timelineRows,
+            'session_correlations' => $correlations,
+            'caveat' => 'Phase 4 signals are advisory; never treated as proof.',
         ];
     }
 
