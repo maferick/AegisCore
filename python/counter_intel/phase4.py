@@ -86,6 +86,7 @@ def run_timelines(
     cfg: Config,
     viewer_bloc_id: int,
     since_dt: datetime,
+    dry_run: bool = False,
 ) -> dict:
     """Pattern-match log events into timeline_type rows.
 
@@ -121,6 +122,16 @@ def run_timelines(
         out.extend(_detect_combat_spikes_and_escalation(bucket, listener, system))
         out.extend(_detect_self_destruct_waves(bucket, listener, system))
         out.extend(_detect_disengagement_and_crash(bucket, listener, system))
+
+    if dry_run:
+        for ev in out[:50]:
+            log.info("[dry-run] timeline", {
+                "type": ev.timeline_type, "ts": str(ev.event_timestamp),
+                "listener": ev.source_listener, "system": ev.solar_system_name,
+                "confidence": ev.confidence, "summary": ev.event_summary,
+            })
+        log.info("phase4 timelines dry-run done", {"events_loaded": len(events), "would_write": len(out)})
+        return {"events_loaded": len(events), "would_write": len(out), "dry_run": True}
 
     written = 0
     for ev in out:

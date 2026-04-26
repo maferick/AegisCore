@@ -79,6 +79,7 @@ def main() -> int:
     p4t = sub.add_parser("phase4-timelines", help="Phase 4.1 — operational timeline events from log streams.")
     p4t.add_argument("--viewer-bloc-id", type=int, required=True)
     p4t.add_argument("--since-hours", type=int, default=168, help="how many hours back to scan (default 7d)")
+    p4t.add_argument("--dry-run", action="store_true", help="compute + log rows but do not persist")
 
     p4f = sub.add_parser("phase4-fleet-participation", help="Phase 4.2 — per-character fleet presence windows.")
     p4f.add_argument("--viewer-bloc-id", type=int, required=True)
@@ -221,7 +222,10 @@ def _run_phase4_timelines(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase4_timelines(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+        stats = phase4_timelines(
+            conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since,
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
     log.info("phase4 timelines complete", stats)
     return 0
 
