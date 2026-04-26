@@ -398,6 +398,52 @@ final class CounterIntelDossierService
             }
         }
 
+        // §1.3 Hostile triangulation — recurring 3+ hostile cluster.
+        if ($anomaly !== null && (int) ($anomaly->hostile_triangle_count ?? 0) >= 1) {
+            $tri = DB::table('ci_hostile_triangulation')
+                ->where('character_id', (int) ($anomaly->character_id ?? 0))
+                ->where('viewer_bloc_id', (int) ($anomaly->viewer_bloc_id ?? 0))
+                ->where('window_end_date', $anomaly->window_end_date ?? null)
+                ->first();
+            if ($tri !== null) {
+                $members = json_decode((string) $tri->member_ids_json, true) ?: [];
+                $names = [];
+                if ($members) {
+                    $rows = DB::table('esi_entity_names')
+                        ->whereIn('entity_id', array_map('intval', $members))
+                        ->where('category', 'character')
+                        ->pluck('name', 'entity_id')
+                        ->all();
+                    foreach ($members as $mid) {
+                        $names[] = $rows[$mid] ?? "#{$mid}";
+                    }
+                }
+                $size = (int) $tri->triangle_size;
+                $sharedDays = (int) $tri->shared_battle_days;
+                $weight = (float) $tri->weight;
+                $strong = $size >= 4 || ($size >= 3 && $sharedDays >= 4);
+                $signals[] = [
+                    'key' => 'hostile_triangulation',
+                    'reason_code' => 'hostile_triangulation',
+                    'severity' => $strong ? 'flag' : 'note',
+                    'text' => sprintf(
+                        'Recurring hostile cluster: %d pilots (%s) opposite this character on %d+ shared battle days.',
+                        $size,
+                        implode(', ', array_slice($names, 0, 5)) . (count($names) > 5 ? '…' : ''),
+                        $sharedDays,
+                    ),
+                    'confidence' => $sharedDays >= 5 ? 'high' : ($sharedDays >= 3 ? 'medium' : 'low'),
+                    'sample_size' => $sharedDays,
+                    'raw' => [
+                        'triangle_size' => $size,
+                        'shared_battle_days' => $sharedDays,
+                        'weight' => $weight,
+                        'member_character_ids' => array_map('intval', $members),
+                    ],
+                ];
+            }
+        }
+
         // §4.3 Community vs declared. Suppressed when the pilot's
         // declared alliance is NOT in the viewer bloc's friendly set —
         // for known-hostile members, "graph community is mostly hostile"
