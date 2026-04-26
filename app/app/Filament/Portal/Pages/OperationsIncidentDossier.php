@@ -129,6 +129,22 @@ class OperationsIncidentDossier extends Page
                 ->first();
         }
 
+        // dscan snapshot details — for clusters that referenced one.
+        $dscanSnapshots = [];
+        $allSnapshotIds = [];
+        foreach ($clusters as $c) {
+            $ids = json_decode($c->dscan_snapshot_ids_json ?? '[]', true) ?: [];
+            foreach ($ids as $sid) $allSnapshotIds[(string) $sid] = true;
+        }
+        if ($allSnapshotIds) {
+            $dscanSnapshots = DB::table('eve_log_dscan_snapshots')
+                ->whereIn('snapshot_id', array_keys($allSnapshotIds))
+                ->select('snapshot_id', 'url', 'fetch_status',
+                    'ship_count', 'top_ship_summary', 'last_seen_at')
+                ->orderByDesc('ship_count')
+                ->get();
+        }
+
         return [
             'no_bloc' => false,
             'not_found' => false,
@@ -139,6 +155,7 @@ class OperationsIncidentDossier extends Page
             'top_hostiles' => $topHostiles,
             'fused_strip' => $strip,
             'battle' => $battleSummary,
+            'dscan_snapshots' => $dscanSnapshots,
             'evidence_json' => json_decode($incident->evidence_json ?? '{}', true) ?: [],
         ];
     }

@@ -67,6 +67,15 @@
                     <span>·</span>
                 @endif
                 <span>signals: {{ implode(', ', $signal_types) }}</span>
+                @if ($incident->has_dscan)
+                    <span>·</span>
+                    <span style="color:#fdba74;">
+                        dscan ✓
+                        @if ($incident->dscan_total_ships)
+                            ({{ number_format((int) $incident->dscan_total_ships) }} ships)
+                        @endif
+                    </span>
+                @endif
             </div>
         </div>
 
@@ -147,6 +156,32 @@
                         {{ count($clusters) }} hostile cluster(s) · {{ count($timeline_events) }} timeline event(s)
                     </div>
                 </div>
+
+                {{-- dscan snapshots referenced by this incident --}}
+                @if (! empty($dscan_snapshots) && count($dscan_snapshots) > 0)
+                    <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
+                        <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">
+                            dscan snapshots · {{ count($dscan_snapshots) }}
+                        </h3>
+                        <div style="display:grid; gap:0.3rem; max-height:280px; overflow:auto;">
+                            @foreach ($dscan_snapshots as $d)
+                                <div style="padding:0.4rem 0.55rem; background:rgba(253,186,116,0.05); border:1px solid rgba(253,186,116,0.20); border-radius:5px; font-size:0.7rem;">
+                                    <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">
+                                        @if ($d->ship_count)
+                                            <span style="color:#fdba74; font-weight:600;">{{ number_format((int) $d->ship_count) }} ships</span>
+                                        @else
+                                            <span style="color:#9ca3af; font-style:italic;">{{ $d->fetch_status }}</span>
+                                        @endif
+                                        <a href="{{ $d->url }}" target="_blank" rel="noopener" style="font-size:0.55rem; color:#7dd3fc; margin-left:auto; text-decoration:none;">view →</a>
+                                    </div>
+                                    @if ($d->top_ship_summary)
+                                        <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.15rem;">{{ $d->top_ship_summary }}</div>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
             </div>
         </div>
     @endif

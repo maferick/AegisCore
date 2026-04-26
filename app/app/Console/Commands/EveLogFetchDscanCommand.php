@@ -45,7 +45,7 @@ class EveLogFetchDscanCommand extends Command
         $sleepSec = max(1, (int) ceil(60 / $ratePerMin));
 
         $rows = DB::table('eve_log_dscan_snapshots')
-            ->where('fetch_status', 'pending')
+            ->whereIn('fetch_status', ['pending'])
             ->where('fetch_attempts', '<', $maxAttempts)
             ->orderBy('last_seen_at')
             ->limit($limit)
@@ -61,31 +61,19 @@ class EveLogFetchDscanCommand extends Command
         $ok = 0;
         $fail = 0;
         foreach ($rows as $r) {
-            $apiUrl = "{$apiBase}/api/scans/{$r->snapshot_id}";
+            // dscan.info serves a viewer HTML page at /v/{id}; there's
+            // no public JSON API. We parse the HTML for the embedded
+            // ship list. Cloudflare-fronted; Cloudflare returns 200
+            // even for revoked snapshots, which then render an empty
+            // ship list — the parser treats zero-ship results as
+            // expired rather than success.
+            $url = "{$apiBase}/v/{$r->snapshot_id}";
             try {
                 $res = Http::timeout(20)
-                    ->withHeaders(['User-Agent' => 'AegisCore-CounterIntel/1.0'])
-                    ->get($apiUrl);
+                    ->withHeaders(['User-Agent' => 'AegisCore-CounterIntel/1.0 (+admin contact via portal)'])
+                    ->get($url);
                 $now = now();
-                if ($res->successful()) {
-                    $body = $res->json();
-                    $shipCount = is_array($body) ? count((array) ($body['ships'] ?? $body['contents'] ?? $body)) : null;
-                    $shipTypes = self::summariseShipTypes($body);
-                    DB::table('eve_log_dscan_snapshots')
-                        ->where('id', $r->id)
-                        ->update([
-                            'fetch_status' => 'success',
-                            'http_status' => $res->status(),
-                            'ship_count' => $shipCount,
-                            'ship_types_json' => $shipTypes ? json_encode($shipTypes, JSON_UNESCAPED_UNICODE) : null,
-                            'top_ship_summary' => $shipTypes ? mb_substr(self::topShipSummary($shipTypes), 0, 500) : null,
-                            'raw_json' => mb_substr((string) $res->body(), 0, 1024 * 64),
-                            'fetch_attempts' => DB::raw('fetch_attempts + 1'),
-                            'last_fetched_at' => $now,
-                            'error' => null,
-                        ]);
-                    $ok++;
-                } else {
+                if (! $res->successful()) {
                     $status = $res->status();
                     DB::table('eve_log_dscan_snapshots')
                         ->where('id', $r->id)
@@ -97,7 +85,47 @@ class EveLogFetchDscanCommand extends Command
                             'last_fetched_at' => $now,
                         ]);
                     $fail++;
+                    sleep($sleepSec);
+                    continue;
                 }
+                $html = (string) $res->body();
+                $shipMap = self::parseShipsFromHtml($html);
+                $shipCount = (int) array_sum($shipMap);
+                $totalBadge = self::parseTotalShipsBadge($html);
+                if ($totalBadge !== null && $totalBadge !== $shipCount) {
+                    // Dscan badge claims a total that differs from the
+                    // li sum — store the badge as authoritative since
+                    // it matches dscan's own count.
+                    $shipCount = $totalBadge;
+                }
+                if ($shipCount === 0) {
+                    DB::table('eve_log_dscan_snapshots')
+                        ->where('id', $r->id)
+                        ->update([
+                            'fetch_status' => 'expired',
+                            'http_status' => $res->status(),
+                            'error' => 'no ships found in dscan viewer',
+                            'fetch_attempts' => DB::raw('fetch_attempts + 1'),
+                            'last_fetched_at' => $now,
+                        ]);
+                    $fail++;
+                    sleep($sleepSec);
+                    continue;
+                }
+                DB::table('eve_log_dscan_snapshots')
+                    ->where('id', $r->id)
+                    ->update([
+                        'fetch_status' => 'success',
+                        'http_status' => $res->status(),
+                        'ship_count' => $shipCount,
+                        'ship_types_json' => json_encode($shipMap, JSON_UNESCAPED_UNICODE),
+                        'top_ship_summary' => mb_substr(self::topShipSummary($shipMap), 0, 500),
+                        'raw_json' => null, // we don't store the full HTML — too heavy and not useful
+                        'fetch_attempts' => DB::raw('fetch_attempts + 1'),
+                        'last_fetched_at' => $now,
+                        'error' => null,
+                    ]);
+                $ok++;
             } catch (\Throwable $e) {
                 DB::table('eve_log_dscan_snapshots')
                     ->where('id', $r->id)
@@ -122,33 +150,58 @@ class EveLogFetchDscanCommand extends Command
     }
 
     /**
-     * Best-effort ship-type → count rollup. dscan.info v1 API shape
-     * varies per snapshot; we accept either {ships: [{type:..., count:..}]}
-     * or a flat {contents: [...]} list of types.
+     * Parse the dscan.info HTML viewer's ships block. Each item
+     * appears as:
+     *
+     *   <li class="list-group-item shipclass\d+" data-sclid="\d+">
+     *     <span class="badge label label-default">{count}</span>
+     *     <b>{ship_type_name}</b>
+     *
+     * Returns a {ship_type_name: count} dict ordered by count DESC.
      *
      * @return array<string, int>
      */
-    private static function summariseShipTypes($body): array
+    public static function parseShipsFromHtml(string $html): array
     {
-        if (! is_array($body)) return [];
+        // Constrain matching to the <ul ... id="ships"> block to avoid
+        // catching the shipclasses rollup section.
+        if (preg_match('/<ul[^>]+id="ships"[^>]*>(.*?)<\/ul>/su', $html, $section)) {
+            $block = $section[1];
+        } else {
+            $block = $html; // fallback — match anywhere
+        }
         $out = [];
-        $list = $body['ships'] ?? $body['contents'] ?? null;
-        if (is_array($list)) {
-            foreach ($list as $row) {
-                $type = null;
-                $count = 1;
-                if (is_array($row)) {
-                    $type = $row['type'] ?? $row['typeName'] ?? $row['name'] ?? null;
-                    $count = (int) ($row['count'] ?? 1);
-                } elseif (is_string($row)) {
-                    $type = $row;
-                }
-                if (! $type) continue;
-                $out[$type] = ($out[$type] ?? 0) + max(1, $count);
+        if (preg_match_all(
+            '/<li[^>]*class="list-group-item\s+shipclass\d+"[^>]*data-sclid="\d+"[^>]*>\s*<span[^>]*class="badge[^"]*"[^>]*>(\d+)<\/span>\s*<b>([^<]+)<\/b>/s',
+            $block,
+            $matches,
+            PREG_SET_ORDER,
+        )) {
+            foreach ($matches as $m) {
+                $count = (int) $m[1];
+                $name = trim((string) $m[2]);
+                if ($name === '') continue;
+                $out[$name] = ($out[$name] ?? 0) + $count;
             }
         }
         arsort($out);
         return $out;
+    }
+
+    /**
+     * The dscan viewer's "Ships" panel header carries a total badge
+     * like `<span class="badge label label-primary">154</span>`.
+     */
+    public static function parseTotalShipsBadge(string $html): ?int
+    {
+        if (preg_match(
+            '/<h3[^>]*class="panel-title"[^>]*>\s*Ships\s*<span[^>]*class="badge[^"]*"[^>]*>(\d+)<\/span>/s',
+            $html,
+            $m,
+        )) {
+            return (int) $m[1];
+        }
+        return null;
     }
 
     /** @param  array<string, int>  $types */

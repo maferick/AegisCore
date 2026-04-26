@@ -65,6 +65,8 @@ class _ClusterAcc:
     reporters: set[str] = field(default_factory=set)
     report_count: int = 0
     sample_event_ids: list[int] = field(default_factory=list)
+    dscan_snapshot_ids: set[str] = field(default_factory=set)
+    dscan_total_ships: int = 0
 
 
 def run_hostile_clusters(
@@ -78,12 +80,13 @@ def run_hostile_clusters(
     log.info("phase4.3A hostile clusters starting", {"viewer_bloc_id": viewer_bloc_id, "since": since_dt.isoformat()})
 
     # Pull every intel_report + its system + character resolutions in
-    # one ordered scan. We aggregate in Python because the windowing
-    # is per-(primary_system, time_proximity), not pure SQL-friendly.
+    # one ordered scan. Plus dscan snapshot id from event row so the
+    # cluster can carry has_dscan + total ship counts.
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT e.id AS event_id, e.event_timestamp, e.actor_name,
+                   e.parsed_json,
                    sys.resolved_entity_id AS sys_id,
                    sys.resolved_entity_name AS sys_name,
                    chr.resolved_entity_id AS chr_id,
@@ -104,6 +107,15 @@ def run_hostile_clusters(
             (since_dt,),
         )
         rows = list(cur.fetchall())
+
+    # Pre-load dscan snapshot ship counts for any snapshot referenced
+    # in the events. Cheap key→count map.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT snapshot_id, COALESCE(ship_count, 0) AS ship_count "
+            "FROM eve_log_dscan_snapshots WHERE fetch_status='success'"
+        )
+        dscan_ships: dict[str, int] = {str(r["snapshot_id"]): int(r["ship_count"]) for r in cur.fetchall()}
     if not rows:
         log.info("phase4.3A no rows", {})
         return {"events": 0, "clusters_written": 0}
@@ -126,7 +138,8 @@ def run_hostile_clusters(
                 )
 
     # Bucket events by event_id so multi-system / multi-char rows fold
-    # back into one event with sets of ids.
+    # back into one event with sets of ids. Also extract dscan_id from
+    # parsed_json once per event.
     events: dict[int, dict] = {}
     for r in rows:
         eid = int(r["event_id"])
@@ -136,7 +149,14 @@ def run_hostile_clusters(
                 "actor_name": r["actor_name"],
                 "systems": [],
                 "characters": {},
+                "dscan_id": None,
             }
+            try:
+                pj = json.loads(r.get("parsed_json") or "{}")
+                if isinstance(pj, dict) and pj.get("dscan_id"):
+                    events[eid]["dscan_id"] = str(pj["dscan_id"])
+            except (TypeError, ValueError):
+                pass
         if r["sys_id"]:
             sid = int(r["sys_id"])
             sname = str(r["sys_name"])
@@ -176,6 +196,11 @@ def run_hostile_clusters(
         cur_cluster.report_count += 1
         if len(cur_cluster.sample_event_ids) < 10:
             cur_cluster.sample_event_ids.append(eid)
+        if ev.get("dscan_id"):
+            sid = ev["dscan_id"]
+            if sid not in cur_cluster.dscan_snapshot_ids:
+                cur_cluster.dscan_snapshot_ids.add(sid)
+                cur_cluster.dscan_total_ships += dscan_ships.get(sid, 0)
     closed.extend(active.values())
 
     # Persist.
@@ -192,6 +217,8 @@ def run_hostile_clusters(
         )
         # Quality scaling — single reporter / 1 report = noisy, mass
         # cluster with multi-reporter + many characters = strategic.
+        # dscan presence promotes one tier (system+chars+dscan = strong
+        # candidate; dscan with many ships = escalation candidate).
         if rep_n <= 1 and c.report_count <= 2:
             quality = "noisy"
         elif rep_n <= 2 and c.report_count <= 5:
@@ -202,6 +229,18 @@ def run_hostile_clusters(
             quality = "strong"
         else:
             quality = "normal"
+        if c.dscan_snapshot_ids:
+            promotion_ladder = ["noisy", "weak", "normal", "strong", "strategic"]
+            cur_idx = promotion_ladder.index(quality)
+            # Always promote one tier on dscan presence.
+            cur_idx = min(cur_idx + 1, len(promotion_ladder) - 1)
+            # Big dscan (≥50 ships) = at least 'strong'; ≥150 ships =
+            # strategic.
+            if c.dscan_total_ships >= 150:
+                cur_idx = max(cur_idx, promotion_ladder.index("strategic"))
+            elif c.dscan_total_ships >= 50:
+                cur_idx = max(cur_idx, promotion_ladder.index("strong"))
+            quality = promotion_ladder[cur_idx]
 
         evidence = {
             "sample_event_ids": c.sample_event_ids,
@@ -215,8 +254,9 @@ def run_hostile_clusters(
                    primary_system_id, primary_system_name, primary_region_id,
                    adjacent_system_ids_json, involved_character_ids_json,
                    involved_character_names_json, reporter_count, report_count,
-                   confidence, quality, evidence_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   confidence, quality, has_dscan, dscan_total_ships,
+                   dscan_snapshot_ids_json, evidence_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     end_at = VALUES(end_at),
                     primary_system_name = VALUES(primary_system_name),
@@ -228,6 +268,9 @@ def run_hostile_clusters(
                     report_count = VALUES(report_count),
                     confidence = VALUES(confidence),
                     quality = VALUES(quality),
+                    has_dscan = VALUES(has_dscan),
+                    dscan_total_ships = VALUES(dscan_total_ships),
+                    dscan_snapshot_ids_json = VALUES(dscan_snapshot_ids_json),
                     evidence_json = VALUES(evidence_json)
                 """,
                 (
@@ -238,6 +281,9 @@ def run_hostile_clusters(
                     json.dumps([c.characters[k] for k in sorted(c.characters.keys())]),
                     rep_n, c.report_count,
                     confidence, quality,
+                    1 if c.dscan_snapshot_ids else 0,
+                    c.dscan_total_ships if c.dscan_snapshot_ids else None,
+                    json.dumps(sorted(c.dscan_snapshot_ids)) if c.dscan_snapshot_ids else None,
                     json.dumps(evidence, default=str),
                 ),
             )
@@ -265,6 +311,8 @@ class _IncidentAcc:
     character_count: int = 0
     hostile_cluster_quality_max: str = "noisy"
     timeline_quality_max: str = "noisy"
+    has_dscan: bool = False
+    dscan_total_ships: int = 0
 
 
 # Quality ordering for promotion comparisons.
@@ -294,7 +342,8 @@ def run_incidents(
             """
             SELECT id, primary_system_id, primary_system_name, primary_region_id,
                    start_at, end_at, reporter_count, report_count,
-                   confidence, quality, involved_character_ids_json
+                   confidence, quality, involved_character_ids_json,
+                   has_dscan, dscan_total_ships
               FROM operational_hostile_clusters
              WHERE viewer_bloc_id = %s
                AND start_at >= %s
@@ -364,6 +413,11 @@ def run_incidents(
             cur_inc.hostile_cluster_quality_max = _max_quality(
                 cur_inc.hostile_cluster_quality_max, str(payload["quality"])
             )
+            if int(payload.get("has_dscan") or 0) == 1:
+                cur_inc.has_dscan = True
+            ships = payload.get("dscan_total_ships")
+            if ships is not None:
+                cur_inc.dscan_total_ships = max(cur_inc.dscan_total_ships, int(ships))
             if cur_inc.primary_system_name is None:
                 cur_inc.primary_system_name = payload["primary_system_name"]
                 cur_inc.primary_region_id = (
@@ -408,11 +462,11 @@ def run_incidents(
                 INSERT INTO operational_incidents
                   (viewer_bloc_id, incident_type, start_at, end_at,
                    primary_system_id, primary_system_name, primary_region_id,
-                   battle_id, theater_id, severity, confidence,
-                   participant_estimate, signal_types_json,
+                   battle_id, theater_id, severity, has_dscan, dscan_total_ships,
+                   confidence, participant_estimate, signal_types_json,
                    hostile_cluster_ids_json, timeline_event_ids_json,
                    timeline_summary, evidence_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     end_at = VALUES(end_at),
                     incident_type = VALUES(incident_type),
@@ -421,6 +475,8 @@ def run_incidents(
                     battle_id = VALUES(battle_id),
                     theater_id = VALUES(theater_id),
                     severity = VALUES(severity),
+                    has_dscan = VALUES(has_dscan),
+                    dscan_total_ships = VALUES(dscan_total_ships),
                     confidence = VALUES(confidence),
                     participant_estimate = VALUES(participant_estimate),
                     signal_types_json = VALUES(signal_types_json),
@@ -433,7 +489,10 @@ def run_incidents(
                 (
                     viewer_bloc_id, incident_type, inc.start_at, inc.end_at,
                     inc.primary_system_id, inc.primary_system_name, inc.primary_region_id,
-                    battle_id, theater_id, severity, confidence,
+                    battle_id, theater_id, severity,
+                    1 if inc.has_dscan else 0,
+                    inc.dscan_total_ships if inc.has_dscan else None,
+                    confidence,
                     inc.character_count or None,
                     json.dumps(sorted(inc.signal_types)),
                     json.dumps(inc.cluster_ids),
@@ -471,20 +530,30 @@ def _classify_incident_type(signal_types: set[str]) -> str:
 
 
 def _classify_severity(inc: _IncidentAcc) -> str:
-    """Phase 4.3E severity tier. Higher tier wins."""
+    """Phase 4.3E severity tier. Higher tier wins.
+
+    Phase 4.4 dscan integration: a cluster with strong cluster
+    quality alone bumps to 'strategic' (was: required 3+ signals).
+    A dscan with ≥150 ships is an escalation candidate even with a
+    single cluster signal."""
     s = inc.signal_types
     has_hostile = "hostile_cluster" in s
     has_combat = "combat_spike" in s or "escalation" in s
     has_disengage = "disengagement" in s
-    has_formup = "fleet_formup" in s
     n_signals = len(s)
 
     if inc.reporter_count >= 10 and inc.character_count >= 10:
         return "coalition_level"
     if has_hostile and has_combat and has_disengage:
         return "escalation"
+    if inc.has_dscan and inc.dscan_total_ships >= 150 and has_hostile:
+        return "escalation"
+    if inc.hostile_cluster_quality_max == "strategic":
+        return "strategic"
     if n_signals >= 3 and inc.hostile_cluster_quality_max in ("strong", "strategic"):
         return "strategic"
+    if inc.hostile_cluster_quality_max == "strong":
+        return "tactical"
     if n_signals >= 2:
         return "tactical"
     return "noise"
@@ -1033,6 +1102,7 @@ def run_threat_surface(
         "cluster_score": 0.0, "escalation_score": 0.0,
         "battle_linkage_score": 0.0, "density_score": 0.0,
         "reliability_score": 0.0, "corridor_score": 0.0,
+        "dscan_score": 0.0,
     })
 
     # Hostile cluster contributions.
@@ -1040,7 +1110,9 @@ def run_threat_surface(
         cur.execute(
             """
             SELECT primary_system_id, primary_system_name, primary_region_id,
-                   quality, COUNT(*) AS n
+                   quality, COUNT(*) AS n,
+                   SUM(has_dscan) AS dscan_clusters,
+                   SUM(COALESCE(dscan_total_ships, 0)) AS dscan_ships
               FROM operational_hostile_clusters
              WHERE viewer_bloc_id = %s
                AND start_at BETWEEN %s AND %s
@@ -1057,6 +1129,12 @@ def run_threat_surface(
             w = quality_weights.get(str(r["quality"]), 1.0)
             b["cluster_score"] += w * int(r["n"])
             b["density_score"] += int(r["n"])
+            # dscan score: log-ish ramp on total ships seen so a 200-
+            # ship dscan dominates over fifty 5-ship snapshots.
+            ds_ships = int(r.get("dscan_ships") or 0)
+            ds_clusters = int(r.get("dscan_clusters") or 0)
+            if ds_ships > 0:
+                b["dscan_score"] += min(ds_ships / 25.0, 50.0) + ds_clusters * 0.5
 
     # Escalation + density timeline contributions.
     with conn.cursor() as cur:
@@ -1147,6 +1225,7 @@ def run_threat_surface(
         "density_score": 0.05,
         "reliability_score": 0.05,
         "corridor_score": 0.05,
+        "dscan_score": 0.4,
     }
     raw_scores = []
     for sid, b in by_system.items():
@@ -1179,8 +1258,8 @@ def run_threat_surface(
                    window_end_date, window_days, threat_score,
                    hostile_cluster_score, escalation_score, battle_linkage_score,
                    density_score, reliability_score, corridor_centrality_score,
-                   tier, evidence_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   dscan_score, tier, evidence_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     solar_system_name = VALUES(solar_system_name),
                     region_id = VALUES(region_id),
@@ -1191,6 +1270,7 @@ def run_threat_surface(
                     density_score = VALUES(density_score),
                     reliability_score = VALUES(reliability_score),
                     corridor_centrality_score = VALUES(corridor_centrality_score),
+                    dscan_score = VALUES(dscan_score),
                     tier = VALUES(tier),
                     evidence_json = VALUES(evidence_json),
                     computed_at = NOW()
@@ -1204,6 +1284,7 @@ def run_threat_surface(
                     round(b["density_score"], 4),
                     round(b["reliability_score"], 4),
                     round(b["corridor_score"], 4),
+                    round(b["dscan_score"], 4),
                     tier,
                     json.dumps(evidence, default=str),
                 ),
