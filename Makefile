@@ -490,6 +490,13 @@ ci-phase2-cohort-features:
 windows-uploader:
 	@bash windows-uploader/build.sh
 
+# Same as windows-uploader — builds the .exe and bundles the
+# portable .zip with member README + install/uninstall scripts.
+# Output:
+#   windows-uploader/publish/win-x64/AegisCore.EveLogUploader.exe
+#   windows-uploader/publish/AegisCore.EveLogUploader-portable-YYYYMMDD.zip
+windows-uploader-portable: windows-uploader
+
 # Bloc Intelligence — alliance-pair behavior extractor (viewer-agnostic).
 # Args: BI_ARGS="--window-end=2026-04-18"
 bloc-intel-extract:

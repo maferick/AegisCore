@@ -43,3 +43,41 @@ else
     echo "[build] ERROR — exe not produced" >&2
     exit 1
 fi
+
+# Bundle the portable distribution zip alongside. Drops the .exe,
+# install/uninstall scripts, the example config, and the member
+# README into a single archive normal alliance members can unzip
+# anywhere.
+ZIP_NAME="AegisCore.EveLogUploader-portable-$(date -u +%Y%m%d).zip"
+ZIP_OUT="${PWD}/publish/${ZIP_NAME}"
+STAGE="${PWD}/publish/_stage"
+
+echo "[zip] staging portable bundle…"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp "$EXE" "$STAGE/"
+cp "${PWD}/dist/install-service.cmd" "$STAGE/"
+cp "${PWD}/dist/uninstall-service.cmd" "$STAGE/"
+cp "${PWD}/dist/config.example.json" "$STAGE/"
+cp "${PWD}/dist/README-MEMBER.md" "$STAGE/README.md"
+
+if ! command -v zip >/dev/null 2>&1; then
+    echo "[zip] zip not installed locally; building inside container."
+    docker run --rm \
+        -v "${PWD}/publish":/work \
+        -w /work \
+        alpine:3.20 \
+        sh -c "apk add --quiet zip >/dev/null && cd _stage && zip -qr ../${ZIP_NAME} ."
+else
+    (cd "$STAGE" && zip -qr "$ZIP_OUT" .)
+fi
+
+rm -rf "$STAGE"
+
+if [[ -f "$ZIP_OUT" ]]; then
+    ZSIZE=$(du -h "$ZIP_OUT" | cut -f1)
+    echo "[zip] OK — $ZIP_OUT ($ZSIZE)"
+else
+    echo "[zip] ERROR — zip not produced" >&2
+    exit 1
+fi

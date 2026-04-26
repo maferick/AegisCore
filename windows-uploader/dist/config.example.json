@@ -1,0 +1,10 @@
+{
+    "api_base_url": "https://winterco.killsineve.online",
+    "api_token": "PASTE_FROM_PORTAL_HERE",
+    "client_id": "PASTE_FROM_PORTAL_HERE",
+    "watch_paths": [],
+    "auto_discover_eve_logs": true,
+    "upload_interval_seconds": 10,
+    "max_chunk_bytes": 262144,
+    "display_name": "Home PC"
+}
