@@ -10,11 +10,41 @@
 #                             (battle_graph skips pilot_count <= small_tier_max,
 #                             so smaller pairs would loop forever as 'pending')
 #   BATTLE_WEIGHT_LABEL=v1_calibrated_seed
+#   BATTLE_ORPHAN_TTL_MIN=30  reap battle_graph containers older than N min
+#
+# Concurrency:
+#   flock-guarded so overlapping cron ticks don't stack invocations.
+#   Without this, a slow run (single huge battle takes 20 minutes;
+#   cron tick is 5 minutes) gets a fresh batch on top, and 16 stuck
+#   battle_graph containers can pile up exhausting Neo4j threads.
 #
 # Exit non-zero if ANY stage fails for ANY pair so cron logs
 # flag it, but continue processing remaining pairs.
 set -u
 cd "$(dirname "$0")/.."
+
+LOCK_FILE="/tmp/aegiscore-battle-process-pending.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "[$(date -u +%FT%TZ)] battle-auto-pipeline: previous tick still running, skipping"
+    exit 0
+fi
+
+# Reap any leftover battle_graph orphans from a previously-killed run.
+# `docker compose run --rm` doesn't clean up if the host kills the
+# parent (cron timeout, reboot, OOM). These idle containers hold
+# Neo4j threads and starve subsequent runs.
+ORPHAN_TTL_MIN="${BATTLE_ORPHAN_TTL_MIN:-30}"
+ORPHAN_CUTOFF=$(date -u -d "-${ORPHAN_TTL_MIN} minutes" +%s)
+for cid in $(docker ps --filter "name=battle_graph-run" --filter "status=running" --format '{{.ID}}'); do
+    started=$(docker inspect -f '{{.State.StartedAt}}' "$cid" 2>/dev/null || echo "")
+    [[ -z "$started" ]] && continue
+    started_ts=$(date -u -d "$started" +%s 2>/dev/null || echo 0)
+    if [[ "$started_ts" -gt 0 && "$started_ts" -lt "$ORPHAN_CUTOFF" ]]; then
+        echo "[$(date -u +%FT%TZ)] battle-auto-pipeline: reaping orphan $cid (started $started)"
+        docker rm -f "$cid" >/dev/null 2>&1 || true
+    fi
+done
 
 # Load MARIADB_* + friends from .env so the mariadb auth query works.
 set -a

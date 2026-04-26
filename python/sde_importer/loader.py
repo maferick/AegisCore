@@ -65,15 +65,28 @@ def load_all(conn: pymysql.connections.Connection, extract_dir: Path, batch_size
 
     counts: list[LoadCounts] = []
     with conn.cursor() as cur:
-        # Order doesn't matter structurally (no FKs), but we truncate
-        # everything first so a partial spec list can't leave stale rows
-        # from a previous run.
-        for spec in SPECS:
-            cur.execute(f"DELETE FROM {spec.table}")
-        log.info("ref_* tables cleared", tables=len(SPECS))
+        # FK_CHECKS=0 for the wipe-and-reload window. Phase 4+ intel
+        # tables (auto_doctrine_adopter_modules, etc.) now reference
+        # ref_* tables via foreign keys. Without disabling FK checks
+        # the DELETE FROM ref_* fails with errno 1451 the first time
+        # any intel table is populated.
+        #
+        # Safety: CCP SDE bumps are additive in practice — types are
+        # rarely removed. If a type IS removed by an SDE bump while
+        # an intel table still references it, the re-INSERT below
+        # won't restore it and we'll be left with a dangling FK row.
+        # Operators should monitor the intel surfaces after a bump
+        # for "missing item type" rendering anomalies.
+        cur.execute("SET FOREIGN_KEY_CHECKS = 0")
+        try:
+            for spec in SPECS:
+                cur.execute(f"DELETE FROM {spec.table}")
+            log.info("ref_* tables cleared", tables=len(SPECS))
 
-        for spec in SPECS:
-            counts.append(_load_one(cur, extract_dir, spec, batch_size))
+            for spec in SPECS:
+                counts.append(_load_one(cur, extract_dir, spec, batch_size))
+        finally:
+            cur.execute("SET FOREIGN_KEY_CHECKS = 1")
 
     return counts
 
