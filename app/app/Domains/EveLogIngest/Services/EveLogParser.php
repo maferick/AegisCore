@@ -130,6 +130,13 @@ final class EveLogParser
      */
     private function classifyLine(string $line, string $logType, ?string $channelName): ?array
     {
+        // Strip leading per-line BOM bytes. EVE chat logs (especially
+        // after UTF-16→UTF-8 normalisation) place a U+FEFF marker at
+        // the start of every chat line, not just file start. The
+        // TS_REGEX would otherwise fail and the line would land in
+        // the parser failure queue as "no_timestamp_prefix".
+        $line = preg_replace('/^(?:\xEF\xBB\xBF)+/', '', $line);
+
         // Header-ish lines that may appear inside the body for some EVE
         // builds. Skip them — header parsing already captured these.
         if (preg_match('/^(Listener|Session\s+Started|Channel\s+(ID|Name)):/iu', $line)) {
@@ -257,20 +264,16 @@ final class EveLogParser
     {
         $folder = mb_strtolower((string) $folderHint);
         $channel = mb_strtolower((string) $channelName);
-        if (str_contains($folder, 'gamelog')) return 'gamelog';
-        if (str_contains($folder, 'chatlog') && $channel !== '') {
-            if ($channel === 'local') return 'local';
-            if (str_contains($channel, 'fleet')) return 'fleet';
-            foreach (self::INTEL_CHANNEL_HINTS as $hint) {
-                if (str_contains($channel, $hint)) return 'intel';
-            }
-            return 'chatlog';
-        }
+        // Channel-specific overrides win when present.
         if ($channel === 'local') return 'local';
-        if (str_contains($channel, 'fleet')) return 'fleet';
+        if ($channel !== '' && str_contains($channel, 'fleet')) return 'fleet';
         foreach (self::INTEL_CHANNEL_HINTS as $hint) {
-            if (str_contains($channel, $hint)) return 'intel';
+            if ($channel !== '' && str_contains($channel, $hint)) return 'intel';
         }
+        // Folder hints establish a baseline so first-chunk classification
+        // works before the parser has seen the channel header.
+        if (str_contains($folder, 'gamelog')) return 'gamelog';
+        if (str_contains($folder, 'chatlog')) return 'chatlog';
         return 'unknown';
     }
 }

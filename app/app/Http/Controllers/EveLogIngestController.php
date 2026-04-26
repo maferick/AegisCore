@@ -194,8 +194,20 @@ class EveLogIngestController extends Controller
                         $headerUpdates[$k] = $data[$k];
                     }
                 }
-                if (($file->log_type ?? 'unknown') === 'unknown' && $logType !== 'unknown') {
-                    $headerUpdates['log_type'] = $logType;
+                // Re-detect log_type when we learn channel_name via the
+                // header parse on chunk 0. Also upgrades older 'unknown'
+                // / 'chatlog' rows once a fleet/local/intel channel name
+                // appears.
+                $effectiveChannelForDetect = $headerUpdates['channel_name']
+                    ?? $file->channel_name
+                    ?? ($data['channel_name'] ?? null);
+                $detected = EveLogParser::detectLogType(
+                    $data['folder_hint'] ?? null,
+                    $effectiveChannelForDetect,
+                    $data['listener'] ?? null,
+                );
+                if ($detected !== 'unknown' && $detected !== ($file->log_type ?? null)) {
+                    $headerUpdates['log_type'] = $detected;
                 }
 
                 DB::table('eve_log_chunks')->insert([
