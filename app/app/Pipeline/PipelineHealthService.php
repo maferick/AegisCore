@@ -500,6 +500,13 @@ class PipelineHealthService
     private function probeBattlePipeline(): array
     {
         try {
+            // battle_graph writes status='skipped' for any pair with
+            // pilot_count <= small_tier_max, so those pairs will never
+            // reach Spec 4 features. Excluding them here keeps "pending"
+            // aligned with what the pipeline can actually drain.
+            $smallTierMax = (int) (DB::selectOne(
+                'SELECT MAX(small_tier_max) AS n FROM battle_graph_algo_profile_versions'
+            )?->n ?? 10);
             $pending = (int) DB::selectOne(<<<'SQL'
                 SELECT COUNT(*) AS n FROM (
                   SELECT bt.id
@@ -508,9 +515,9 @@ class PipelineHealthService
                     LEFT JOIN battle_character_role_features f ON f.battle_id = bt.id AND f.alliance_id = p.alliance_id
                    WHERE bt.locked_at IS NOT NULL AND p.alliance_id > 0 AND f.battle_id IS NULL
                    GROUP BY bt.id, p.alliance_id
-                   HAVING COUNT(DISTINCT p.character_id) >= 10
+                   HAVING COUNT(DISTINCT p.character_id) > ?
                 ) t
-            SQL)->n;
+            SQL, [$smallTierMax])->n;
             $doneLast1h = (int) DB::table('battle_character_role_features')
                 ->where('updated_at', '>=', now()->subHour())
                 ->count(DB::raw('DISTINCT battle_id, alliance_id'));

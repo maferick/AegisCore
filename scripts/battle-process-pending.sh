@@ -6,7 +6,9 @@
 #
 # Environment variables (optional):
 #   BATTLE_LIMIT=20           max pairs per invocation
-#   BATTLE_MIN_MEMBERS=10     min participants per alliance side to qualify
+#   BATTLE_MIN_MEMBERS=<n>    min participants; default = small_tier_max+1
+#                             (battle_graph skips pilot_count <= small_tier_max,
+#                             so smaller pairs would loop forever as 'pending')
 #   BATTLE_WEIGHT_LABEL=v1_calibrated_seed
 #
 # Exit non-zero if ANY stage fails for ANY pair so cron logs
@@ -21,7 +23,6 @@ set -a
 set +a
 
 LIMIT="${BATTLE_LIMIT:-20}"
-MIN_MEMBERS="${BATTLE_MIN_MEMBERS:-10}"
 WEIGHT_LABEL="${BATTLE_WEIGHT_LABEL:-v1_calibrated_seed}"
 
 # Active weight version used for inference lookups.
@@ -33,6 +34,18 @@ WEIGHT_VERSION=$(
   " 2>/dev/null
 )
 WEIGHT_VERSION="${WEIGHT_VERSION:-9}"
+
+# Tie min-members floor to battle_graph's skip threshold so we don't
+# repeatedly schedule pairs that battle_graph will mark 'skipped'.
+SMALL_TIER_MAX=$(
+  docker compose --env-file .env -f infra/docker-compose.yml exec -T mariadb \
+    mariadb -u"${MARIADB_USER:-aegiscore}" -p"${MARIADB_PASSWORD}" \
+            "${MARIADB_DATABASE:-aegiscore}" -NBe "
+    SELECT MAX(small_tier_max) FROM battle_graph_algo_profile_versions
+  " 2>/dev/null
+)
+SMALL_TIER_MAX="${SMALL_TIER_MAX:-10}"
+MIN_MEMBERS="${BATTLE_MIN_MEMBERS:-$((SMALL_TIER_MAX + 1))}"
 
 # Pull candidate list: locked battles that need either the full pipeline
 # or just role scoring. We skip unlocked theaters because theater_clustering
