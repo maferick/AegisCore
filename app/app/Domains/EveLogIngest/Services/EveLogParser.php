@@ -182,16 +182,20 @@ final class EveLogParser
             ];
         }
 
-        // EVE System messages = session-event (joined / left local channel,
-        // etc.). Detect speaker == "EVE System" before generic chat.
+        // EVE System messages — channel join / leave / MOTD broadcasts.
+        // MOTD lines fire on every chat log open and shouldn't surface
+        // in the dossier timeline as activity, so we split them out
+        // into their own event_type.
         if (preg_match('/^EVE\s+System\s*>\s*(.+)$/iu', $rest, $sm)) {
+            $msg = trim($sm[1]);
+            $isMotd = (bool) preg_match('/^Channel\s+MOTD\s*:/iu', $msg);
             return [
-                'event_type' => 'session_event',
+                'event_type' => $isMotd ? 'channel_motd' : 'session_event',
                 'event_timestamp' => $timestamp,
                 'actor_name' => 'EVE System',
                 'system_name' => null,
                 'channel_name' => $channelName,
-                'parsed_json' => json_encode(['message' => trim($sm[1])]),
+                'parsed_json' => json_encode(['message' => $msg]),
             ];
         }
 

@@ -24,6 +24,8 @@ parses the chat / combat / notify / intel rows during ingest.
 from __future__ import annotations
 
 import json
+import os
+import re
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
@@ -39,21 +41,41 @@ log = get("counter_intel.phase4")
 
 # ---- tuning constants (calibration spec revisits) ---------------------
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 # Timeline clustering: events within ±N minutes + same listener +
 # same source_listener collapse into one row.
-TIMELINE_CLUSTER_MINUTES = 5
+TIMELINE_CLUSTER_MINUTES = _env_int("PHASE4_TIMELINE_CLUSTER_MINUTES", 5)
+
+# Combat spike threshold. v1 used 10 events / window which over-fired
+# every sustained engagement (each combat tick produces an event).
+# Calibrated to 30 events / window — a real fight engagement still
+# fires but per-tick chatter doesn't.
+COMBAT_SPIKE_MIN_EVENTS = _env_int("PHASE4_COMBAT_SPIKE_MIN_EVENTS", 30)
+
+# Self-destruct wave detection — minimum distinct (notify) self-
+# destruct lines within the cluster window.
+SELF_DESTRUCT_MIN_LINES = _env_int("PHASE4_SELF_DESTRUCT_MIN_LINES", 3)
 
 # Fleet presence: gap > N minutes between speaker's messages closes
 # the window.
-FLEET_SESSION_GAP_MINUTES = 30
+FLEET_SESSION_GAP_MINUTES = _env_int("PHASE4_FLEET_SESSION_GAP_MINUTES", 30)
 
 # Intel confirmation window — a hostile killmail occurring within N
 # minutes of an intel report counts as confirmation.
-INTEL_CONFIRM_WINDOW_MINUTES = 15
+INTEL_CONFIRM_WINDOW_MINUTES = _env_int("PHASE4_INTEL_CONFIRM_WINDOW_MINUTES", 15)
 
 # Session correlation: shared session if both characters had any
 # log activity within an N-minute bucket.
-SESSION_BUCKET_MINUTES = 5
+SESSION_BUCKET_MINUTES = _env_int("PHASE4_SESSION_BUCKET_MINUTES", 5)
 
 # Minimum reports for a meaningful intel reliability score.
 MIN_INTEL_REPORTS_MEDIUM_CONFIDENCE = 10
@@ -62,6 +84,21 @@ MIN_INTEL_REPORTS_HIGH_CONFIDENCE = 30
 # Minimum samples for a session correlation edge.
 MIN_SESSION_OVERLAP_BUCKETS_MEDIUM = 6
 MIN_SESSION_OVERLAP_BUCKETS_HIGH = 20
+
+# Self-destruct: only count actual EVE-emitted notify patterns. The
+# lazy substring "self-destruct" was matching MOTD chatter, fleet
+# announcements, and quoted text. The real notify shape is one of:
+#   "Your ship's self-destruct sequence has been initiated"
+#   "Self-destruct sequence aborted"
+#   "Capsule ... self-destruct"
+# All on the (notify) gamelog flavor with a fixed phrasing.
+_SELF_DESTRUCT_PATTERNS = [
+    re.compile(r"self[- ]destruct sequence (has been )?initiated", re.I),
+    re.compile(r"self[- ]destruct sequence (has been )?(activated|started)", re.I),
+    re.compile(r"self[- ]destruct sequence (has been )?aborted", re.I),
+    re.compile(r"capsule .* self[- ]destruct", re.I),
+    re.compile(r"^you (have )?initiat(ed|e) self[- ]destruct", re.I),
+]
 
 
 # =====================================================================
@@ -226,10 +263,11 @@ def _detect_hostile_reports(
 def _detect_combat_spikes_and_escalation(
     bucket: list[dict], listener: str, system: str | None,
 ) -> list[TimelineEvent]:
-    """combat_spike: ≥10 combat_event lines in a 5-min window.
-    escalation: combat_spike that follows a hostile_report within 15min."""
+    """combat_spike: ≥COMBAT_SPIKE_MIN_EVENTS combat_event lines in a
+    5-min window. escalation: combat_spike that follows a hostile_report
+    within 15min."""
     combat_msgs = [e for e in bucket if e["event_type"] == "combat_event"]
-    if len(combat_msgs) < 10:
+    if len(combat_msgs) < COMBAT_SPIKE_MIN_EVENTS:
         return []
     intel_msgs = [e for e in bucket if e["event_type"] == "intel_report"]
     out: list[TimelineEvent] = []
@@ -239,7 +277,7 @@ def _detect_combat_spikes_and_escalation(
         while window and (ts - window[0]["event_timestamp"]).total_seconds() > TIMELINE_CLUSTER_MINUTES * 60:
             window.pop(0)
         window.append(m)
-        if len(window) >= 10:
+        if len(window) >= COMBAT_SPIKE_MIN_EVENTS:
             ws = window[0]["event_timestamp"]
             we = window[-1]["event_timestamp"]
             preceding_intel = [
@@ -276,29 +314,48 @@ def _detect_combat_spikes_and_escalation(
 def _detect_self_destruct_waves(
     bucket: list[dict], listener: str, system: str | None,
 ) -> list[TimelineEvent]:
-    """Heuristic: ≥3 notify_event lines mentioning 'self-destruct'
-    within 5min. Will calibrate on real data."""
-    notify = [e for e in bucket if e["event_type"] == "notify_event"]
-    if len(notify) < 3:
-        return []
+    """≥SELF_DESTRUCT_MIN_LINES notify_event lines that match an
+    actual EVE self-destruct notify pattern within the cluster window.
+
+    v1 used a lazy 'self-destruct' substring match which fired on
+    MOTD chatter, fleet ping copy-paste, and quoted strategy text.
+    Now requires:
+      - event_type == 'notify_event'
+      - parsed_json.gamelog_kind == 'notify' (the actual game UI
+        notify channel — excludes (info)/(hint)/(warning))
+      - message matches one of _SELF_DESTRUCT_PATTERNS
+    """
     out: list[TimelineEvent] = []
     sd_window: list[dict] = []
-    for m in notify:
+    for m in bucket:
+        if m["event_type"] != "notify_event":
+            continue
         parsed = m.get("parsed_json")
         try:
             d = json.loads(parsed) if parsed else None
         except (TypeError, ValueError):
             d = None
-        msg = (d or {}).get("message", "") or ""
-        if "self-destruct" not in msg.lower() and "self destruct" not in msg.lower():
+        if not isinstance(d, dict):
+            continue
+        if (d.get("gamelog_kind") or "").lower() != "notify":
+            continue
+        msg = (d.get("message") or "")
+        if not any(p.search(msg) for p in _SELF_DESTRUCT_PATTERNS):
             continue
         ts = m["event_timestamp"]
         while sd_window and (ts - sd_window[0]["event_timestamp"]).total_seconds() > TIMELINE_CLUSTER_MINUTES * 60:
             sd_window.pop(0)
         sd_window.append(m)
-        if len(sd_window) >= 3:
+        if len(sd_window) >= SELF_DESTRUCT_MIN_LINES:
             ws = sd_window[0]["event_timestamp"]
             we = sd_window[-1]["event_timestamp"]
+            samples: list[str] = []
+            for x in sd_window[:3]:
+                try:
+                    px = json.loads(x.get("parsed_json") or "{}")
+                except (TypeError, ValueError):
+                    px = {}
+                samples.append(str(px.get("message") or "")[:120])
             out.append(TimelineEvent(
                 timeline_type="self_destruct_wave",
                 event_timestamp=ws,
@@ -306,8 +363,8 @@ def _detect_self_destruct_waves(
                 source_listener=listener or None,
                 solar_system_name=system,
                 confidence="medium",
-                event_summary=f"Self-destruct wave: {len(sd_window)} notify lines in {(we - ws).seconds // 60 + 1}m.",
-                evidence={"count": len(sd_window)},
+                event_summary=f"Self-destruct wave: {len(sd_window)} (notify) self-destruct lines in {(we - ws).seconds // 60 + 1}m.",
+                evidence={"count": len(sd_window), "samples": samples},
             ))
             sd_window = []
     return out

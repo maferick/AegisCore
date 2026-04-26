@@ -506,6 +506,12 @@ ci-phase4-session-correlation:
 windows-uploader:
 	@bash windows-uploader/build.sh
 
+# Replay eve_log_parse_errors through the current parser. Use after
+# parser changes that should newly classify previously-unknown lines.
+# Args: ELOG_RETRY_ARGS="--limit=5000 --dry-run"
+eve-log-retry-parse-errors:
+	$(COMPOSE) exec -T php-fpm php artisan eve-log:retry-parse-errors $(ELOG_RETRY_ARGS)
+
 # Same as windows-uploader — builds the .exe and bundles the
 # portable .zip with member README + install/uninstall scripts.
 # Output:
