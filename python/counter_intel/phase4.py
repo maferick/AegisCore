@@ -71,8 +71,10 @@ SELF_DESTRUCT_MIN_LINES = _env_int("PHASE4_SELF_DESTRUCT_MIN_LINES", 3)
 SELF_DESTRUCT_MIN_GAP_MINUTES = _env_int("PHASE4_SELF_DESTRUCT_MIN_GAP_MINUTES", 30)
 
 # Combat spike — minimum distinct line fingerprints within the
-# cluster window. Suppresses overheating-tick repeats.
-COMBAT_SPIKE_MIN_DISTINCT = _env_int("PHASE4_COMBAT_SPIKE_MIN_DISTINCT", 8)
+# cluster window. Suppresses overheating-tick repeats. Calibrated
+# 8 → 4 in 4.4 — gamelog ticks share most of the message text, so
+# 8 was too tight; 4 still excludes single-target overheating spam.
+COMBAT_SPIKE_MIN_DISTINCT = _env_int("PHASE4_COMBAT_SPIKE_MIN_DISTINCT", 4)
 
 # Disengagement — combat-rate derivative threshold. Fires when the
 # events-per-minute rate drops by at least this fraction over a
@@ -235,19 +237,36 @@ def run_timelines(
 
 
 def _load_events_window(conn, since_dt: datetime) -> list[dict]:
-    """Pull eve_log_events + file metadata (listener, system fallback)
-    in the active window. solar_system_name comes from the parser when
-    present; otherwise NULL — readers tolerate the gap."""
+    """Pull eve_log_events + file metadata in the active window.
+    solar_system_name comes from:
+      1. eve_log_events.system_name (parser sets this for EVE System
+         lines)
+      2. fallback: first system entity_resolution attached to the
+         event (Phase 4.4 enrichment — picks up systems mentioned in
+         intel chatter so the timeline clusters can group by
+         operational system instead of falling into the no-system
+         bucket)
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT e.id, e.event_timestamp, e.event_type, e.actor_name,
-                   e.system_name AS solar_system_name, e.channel_name,
+                   COALESCE(e.system_name, sys.resolved_entity_name) AS solar_system_name,
+                   sys.resolved_entity_id AS resolved_system_id,
+                   e.channel_name,
                    e.parsed_json, e.line_offset,
                    f.id AS file_id, f.listener AS source_listener,
                    f.log_type, f.user_id
               FROM eve_log_events e
               JOIN eve_log_files f ON f.id = e.eve_log_file_id
+              LEFT JOIN (
+                SELECT eve_log_event_id, MIN(id) AS keep_id
+                  FROM eve_log_entity_resolutions
+                 WHERE resolved_entity_type = 'system'
+                 GROUP BY eve_log_event_id
+              ) syskeep ON syskeep.eve_log_event_id = e.id
+              LEFT JOIN eve_log_entity_resolutions sys
+                ON sys.id = syskeep.keep_id
              WHERE e.event_timestamp IS NOT NULL
                AND e.event_timestamp >= %s
              ORDER BY e.event_timestamp
@@ -318,22 +337,33 @@ def _detect_fleet_formups(
 def _detect_hostile_reports(
     bucket: list[dict], listener: str, system: str | None,
 ) -> list[TimelineEvent]:
-    """Every intel_report becomes one hostile_report timeline row."""
-    out: list[TimelineEvent] = []
-    for e in bucket:
-        if e["event_type"] != "intel_report":
-            continue
-        actor = e.get("actor_name") or "unknown"
-        out.append(TimelineEvent(
-            timeline_type="hostile_report",
-            event_timestamp=e["event_timestamp"],
-            source_listener=listener or None,
-            solar_system_name=system,
-            confidence="high",
-            event_summary=f"Intel report from {actor} on channel {e.get('channel_name') or '—'}.",
-            evidence={"actor": actor, "channel": e.get("channel_name")},
-        ))
-    return out
+    """Phase 4.4 calibration: hostile_report timeline emission is
+    DISABLED. Per-event rows generated 40K timeline rows that
+    overwhelmed the dossier surface; the same information is
+    represented operationally by operational_hostile_clusters
+    (Phase 4.3A) which the incident-fusion layer already reads
+    directly.
+
+    Kept as a function (returning empty) so the calling code path
+    stays untouched and the calibration is reversible via env var
+    if needed later."""
+    if os.environ.get("PHASE4_EMIT_HOSTILE_REPORTS") == "1":
+        out: list[TimelineEvent] = []
+        for e in bucket:
+            if e["event_type"] != "intel_report":
+                continue
+            actor = e.get("actor_name") or "unknown"
+            out.append(TimelineEvent(
+                timeline_type="hostile_report",
+                event_timestamp=e["event_timestamp"],
+                source_listener=listener or None,
+                solar_system_name=system,
+                confidence="high",
+                event_summary=f"Intel report from {actor} on channel {e.get('channel_name') or '—'}.",
+                evidence={"actor": actor, "channel": e.get("channel_name")},
+            ))
+        return out
+    return []
 
 
 def _detect_combat_spikes_and_escalation(

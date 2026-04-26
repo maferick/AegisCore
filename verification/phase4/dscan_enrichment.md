@@ -115,6 +115,61 @@ remain in the pending fetch queue. Only ~30 of 432 snapshots have
 been fetched at this point — running the fetcher to completion will
 fill in their scores.
 
+## Calibration pass after dscan integration
+
+Same session, four tightenings:
+
+1. **`combat_spike` distinct-fingerprint floor 8 → 4.** Previous
+   threshold rejected almost every fight on gamelog data because
+   tick repeats from the same source share most of the message
+   text. New floor produces 2 rows (was 1).
+
+2. **`hostile_report` timeline emission disabled.** Per-event
+   timeline rows generated 40,732 entries last pass; the same
+   information lives in `operational_hostile_clusters` (Phase
+   4.3A) which the incident-fusion layer reads directly. Kept the
+   detector function as a stub returning `[]`; reversible via
+   `PHASE4_EMIT_HOSTILE_REPORTS=1` env.
+
+3. **Incident severity promotes from cluster quality alone.**
+   Single strategic-quality cluster → strategic incident even
+   without a paired combat signal. Single strong-quality cluster
+   → tactical. (Already shipped in the dscan compute commit
+   above; documented here for the calibration record.)
+
+4. **timeline_events.solar_system_id from entity_resolutions.**
+   `_load_events_window` LEFT JOINs the resolutions table and
+   coalesces `system_name` from there when the event row's own
+   `system_name` is NULL. Has no effect on gamelog combat/notify
+   rows (no chat resolutions on those event ids); does help when
+   the timeline detectors operate on chat-class events in the
+   future.
+
+### After calibration counts (bloc 1, 90d window)
+
+| timeline_type        | rows |
+|----------------------|-----:|
+| fleet_formup         |  119 |
+| self_destruct_wave   |   90 |
+| crash_symptom        |   90 |
+| escalation           |   89 |
+| disengagement        |   83 |
+| combat_spike         |    2 |
+| **(hostile_report)** | 0 (collapsed into clusters) |
+
+Total: 473 timeline rows (was 41,233 — 99% reduction).
+
+| severity         | rows | with_dscan | with_system_id |
+|------------------|-----:|-----------:|---------------:|
+| `escalation`     |    3 |          3 |              3 |
+| `strategic`      |   54 |         49 |             54 |
+| `tactical`       |  408 |         29 |            311 |
+| `noise`          | 9,423|        184 |          9,256 |
+
+Strategic + escalation tiers populated (was 0). 76% of tactical
+incidents now carry `primary_system_id` (was 12%). Strong shift
+from "raw line counts" toward "operational stories".
+
 ## Backlog
 
 - **Fetch the remaining ~400 pending snapshots.** Bounded at 6/min
