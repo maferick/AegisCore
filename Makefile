@@ -589,6 +589,13 @@ ci-phase48-enrich-narrative-sources:
 ci-phase49-freshness:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase49-freshness $(CI_ARGS)
 
+# Counter-Intel Phase 4.9A + 4.9E — orchestration + quality guards.
+ci-phase49a-lane-metrics:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase49a-lane-metrics $(CI_ARGS)
+
+ci-phase49e-quality-guards:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase49e-quality-guards $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

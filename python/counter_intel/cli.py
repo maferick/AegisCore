@@ -58,6 +58,12 @@ from counter_intel.phase4_governance import (
     run_enrich_narrative_sources as phase48_enrich_narrative_sources,
 )
 from counter_intel.phase4_freshness import run_freshness as phase49_freshness
+from counter_intel.phase49a_orchestration import (
+    ComputeLog, run_lane_metrics as phase49a_lane_metrics,
+)
+from counter_intel.phase49e_quality_guards import (
+    run_quality_guards as phase49e_quality_guards,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -221,6 +227,12 @@ def main() -> int:
     p49fr.add_argument("--viewer-bloc-id", type=int, default=None,
                        help="optional bloc scope (default: all blocs)")
 
+    p49lm = sub.add_parser("phase49a-lane-metrics", help="Phase 4.9A — recompute compute_lane_metrics.")
+    # no args; rolls up entire compute_run_log
+
+    p49qg = sub.add_parser("phase49e-quality-guards", help="Phase 4.9E.1 — run quality guard detectors.")
+    p49qg.add_argument("--viewer-bloc-id", type=int, default=None)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -292,6 +304,10 @@ def main() -> int:
         return _run_phase48_enrich_narrative_sources(args)
     if args.cmd == "phase49-freshness":
         return _run_phase49_freshness(args)
+    if args.cmd == "phase49a-lane-metrics":
+        return _run_phase49a_lane_metrics(args)
+    if args.cmd == "phase49e-quality-guards":
+        return _run_phase49e_quality_guards(args)
     parser.print_help()
     return 2
 
@@ -501,8 +517,14 @@ def _run_phase4_threat_surface(args) -> int:
         from datetime import timezone, datetime as _dt
         window_end = _dt.now(timezone.utc).date()
     with connection(cfg) as conn:
-        stats = phase4_threat_surface(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                       window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="operational", pipeline="phase4-threat-surface",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(),
+                              "window_days": int(args.window_days)}) as r:
+            stats = phase4_threat_surface(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                           window_end=window_end, window_days=int(args.window_days))
+            r.set_generated_rows(int(stats.get("systems") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.4F threat-surface complete", stats)
     return 0
 
@@ -587,8 +609,13 @@ def _run_phase47_daily_digest(args) -> int:
         from datetime import timezone, datetime as _dt
         digest_date = _dt.now(timezone.utc).date()
     with connection(cfg) as conn:
-        stats = phase47_daily_digest(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                      digest_date=digest_date, window_kind=str(args.window))
+        with ComputeLog(conn, lane="intelligence_generation", pipeline="phase47-daily-digest",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window": str(args.window), "digest_date": digest_date.isoformat()}) as r:
+            stats = phase47_daily_digest(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                          digest_date=digest_date, window_kind=str(args.window))
+            r.set_generated_rows(1)
+            r.set_stats(stats or {})
     log.info("phase4.7A daily-digest complete", stats)
     return 0
 
@@ -600,9 +627,14 @@ def _run_phase47_strategic_alerts(args) -> int:
         from datetime import timezone, datetime as _dt
         detection_date = _dt.now(timezone.utc).date()
     with connection(cfg) as conn:
-        stats = phase47_strategic_alerts(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                          detection_date=detection_date,
-                                          lookback_days=int(args.lookback_days))
+        with ComputeLog(conn, lane="intelligence_generation", pipeline="phase47-strategic-alerts",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"lookback_days": int(args.lookback_days)}) as r:
+            stats = phase47_strategic_alerts(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                              detection_date=detection_date,
+                                              lookback_days=int(args.lookback_days))
+            r.set_generated_rows(int(stats.get("alerts_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.7B strategic-alerts complete", stats)
     return 0
 
@@ -612,8 +644,13 @@ def _run_phase47_incident_narratives(args) -> int:
     cfg = Config.from_env()
     since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
     with connection(cfg) as conn:
-        stats = phase47_incident_narratives(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                            since_dt=since, limit=int(args.limit))
+        with ComputeLog(conn, lane="intelligence_generation", pipeline="phase47-incident-narratives",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"since_hours": int(args.since_hours), "limit": int(args.limit)}) as r:
+            stats = phase47_incident_narratives(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                                since_dt=since, limit=int(args.limit))
+            r.set_generated_rows(int(stats.get("narratives_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.7C incident-narratives complete", stats)
     return 0
 
@@ -621,7 +658,11 @@ def _run_phase47_incident_narratives(args) -> int:
 def _run_phase48_alert_suppression(args) -> int:
     cfg = Config.from_env()
     with connection(cfg) as conn:
-        stats = phase48_alert_suppression(conn, cfg, viewer_bloc_id=args.viewer_bloc_id)
+        with ComputeLog(conn, lane="governance", pipeline="phase48-alert-suppression",
+                        viewer_bloc_id=args.viewer_bloc_id) as r:
+            stats = phase48_alert_suppression(conn, cfg, viewer_bloc_id=args.viewer_bloc_id)
+            r.set_generated_rows(int(stats.get("rows_modified") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.8E alert-suppression complete", stats)
     return 0
 
@@ -630,8 +671,13 @@ def _run_phase48_trust_metrics(args) -> int:
     cfg = Config.from_env()
     window_end = _resolve_window_end(args)
     with connection(cfg) as conn:
-        stats = phase48_trust_metrics(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
-                                       window_end=window_end, window_days=int(args.window_days))
+        with ComputeLog(conn, lane="governance", pipeline="phase48-trust-metrics",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_end": window_end.isoformat(), "window_days": int(args.window_days)}) as r:
+            stats = phase48_trust_metrics(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                           window_end=window_end, window_days=int(args.window_days))
+            r.set_generated_rows(int(stats.get("surfaces_written") or 0))
+            r.set_stats(stats or {})
     log.info("phase4.8G trust-metrics complete", stats)
     return 0
 
@@ -661,6 +707,32 @@ def _run_phase49_freshness(args) -> int:
     cfg = Config.from_env()
     viewer = int(args.viewer_bloc_id) if args.viewer_bloc_id is not None else None
     with connection(cfg) as conn:
-        stats = phase49_freshness(conn, cfg, viewer_bloc_id=viewer)
+        with ComputeLog(conn, lane="maintenance", pipeline="phase49-freshness",
+                        viewer_bloc_id=viewer, args={"viewer_bloc_id": viewer}) as r:
+            stats = phase49_freshness(conn, cfg, viewer_bloc_id=viewer)
+            r.set_stats(stats or {})
     log.info("phase4.9 freshness complete", stats)
+    return 0
+
+
+def _run_phase49a_lane_metrics(args) -> int:
+    cfg = Config.from_env()
+    with connection(cfg) as conn:
+        with ComputeLog(conn, lane="maintenance", pipeline="phase49a-lane-metrics") as r:
+            stats = phase49a_lane_metrics(conn, cfg)
+            r.set_stats(stats or {})
+    log.info("phase4.9A lane-metrics complete", stats)
+    return 0
+
+
+def _run_phase49e_quality_guards(args) -> int:
+    cfg = Config.from_env()
+    viewer = int(args.viewer_bloc_id) if args.viewer_bloc_id is not None else None
+    with connection(cfg) as conn:
+        with ComputeLog(conn, lane="maintenance", pipeline="phase49e-quality-guards",
+                        viewer_bloc_id=viewer) as r:
+            stats = phase49e_quality_guards(conn, cfg, viewer_bloc_id=viewer)
+            r.set_stats(stats or {})
+            r.set_generated_rows(sum(stats.values()) if stats else 0)
+    log.info("phase4.9E quality-guards complete", stats)
     return 0
