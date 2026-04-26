@@ -76,6 +76,9 @@
                             @if ($i->published)
                                 <span style="font-size:0.55rem; color:#86efac;">published</span>
                             @endif
+                            <x-intel-freshness surface="verified"
+                                :timestamp="$i->verified_at ?? $i->created_at"
+                                :persisted="$i->freshness_state ?? null" />
                             <span style="font-size:0.55rem; color:#7a7a82;">{{ $i->created_at }}</span>
                         </div>
                         @if ($i->body_md)

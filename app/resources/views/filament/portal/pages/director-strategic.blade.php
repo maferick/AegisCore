@@ -29,6 +29,8 @@
                 @endforeach
                 @if ($latest_profile_end)
                     <span style="margin-left:auto; color:#7a7a82;">profile window: {{ $latest_profile_end }}</span>
+                    <x-intel-freshness surface="alliance_profile"
+                        :timestamp="$latest_profile_end" />
                 @endif
             </div>
         </div>
@@ -61,7 +63,10 @@
                             <tbody>
                                 @foreach ($coalitions as $c)
                                     <tr style="border-top:1px solid rgba(255,255,255,0.05);">
-                                        <td style="padding:3px 4px;"><strong>{{ $c->bloc_display_name ?? $c->bloc_code }}</strong></td>
+                                        <td style="padding:3px 4px;"><strong>{{ $c->bloc_display_name ?? $c->bloc_code }}</strong>
+                                            <x-intel-freshness surface="coalition"
+                                                :timestamp="$c->computed_at ?? $c->updated_at ?? null"
+                                                :persisted="$c->freshness_state ?? null" /></td>
                                         <td style="text-align:right; padding:3px 4px;">{{ $c->alliance_count }}</td>
                                         <td style="text-align:right; padding:3px 4px;">{{ number_format($c->incident_count) }}</td>
                                         <td style="text-align:right; padding:3px 4px; color:{{ (float)$c->escalation_rate > 0.05 ? '#fca5a5' : '#cbd5e1' }};">{{ number_format(((float) $c->escalation_rate) * 100, 1) }}%</td>
@@ -149,6 +154,9 @@
                                     <div style="display:flex; gap:0.4rem; align-items:center;">
                                         <span style="font-size:0.55rem; color:{{ $col }}; text-transform:uppercase;">{{ str_replace('_', ' ', $d->event_type) }}</span>
                                         <span style="color:#cbd5e1; flex:1;">{{ $d->alliance_name ?? '(unattributed)' }}</span>
+                                        <x-intel-freshness surface="doctrine_evolution"
+                                            :timestamp="$d->computed_at ?? null"
+                                            :persisted="$d->freshness_state ?? null" />
                                         <span style="color:#7a7a82;">{{ $d->window_end }}</span>
                                     </div>
                                     @if ($d->doctrine_name)

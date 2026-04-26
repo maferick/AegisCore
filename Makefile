@@ -584,6 +584,11 @@ ci-phase48-enrich-digest-trust:
 ci-phase48-enrich-narrative-sources:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase48-enrich-narrative-sources --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.9 — intelligence freshness re-classification.
+# No --viewer-bloc-id arg required (default: all blocs).
+ci-phase49-freshness:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase49-freshness $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

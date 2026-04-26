@@ -52,6 +52,11 @@
                     {{ str_replace('_', ' ', $incident->incident_type) }}
                 </span>
                 <span style="font-size:0.6rem; color:#9ca3af;">confidence: {{ $incident->confidence }}</span>
+                <x-intel-freshness surface="incident"
+                    :timestamp="$incident->end_at"
+                    :persisted="$incident->freshness_state ?? null"
+                    :windowStart="$incident->start_at"
+                    :windowEnd="$incident->end_at" />
                 @if ($incident->battle_id)
                     <a href="/portal/killmails?battle={{ $incident->battle_id }}" style="font-size:0.6rem; color:#fdba74; text-decoration:none; padding:2px 8px; border-radius:4px; background:rgba(249,115,22,0.10);">
                         battle #{{ $incident->battle_id }} →

@@ -66,6 +66,11 @@
                             <span style="font-size:0.55rem; color:{{ $col }}; text-transform:uppercase; letter-spacing:0.08em; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04);">{{ $a->severity }}</span>
                             <span style="font-size:0.55rem; color:#a5b4fc; text-transform:uppercase; letter-spacing:0.08em;">{{ $kindLabels[$a->alert_kind] ?? $a->alert_kind }}</span>
                             <span style="font-size:0.55rem; color:{{ $statusCol }}; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); text-transform:uppercase;">{{ str_replace('_', ' ', $a->analyst_status) }}</span>
+                            <x-intel-freshness surface="alert"
+                                :timestamp="$a->detected_at"
+                                :persisted="$a->freshness_state ?? null"
+                                :windowStart="$a->source_window_start ?? null"
+                                :windowEnd="$a->source_window_end ?? null" />
                             <span style="font-size:0.85rem; color:#e5e5e7; flex:1;">{{ $a->title }}</span>
                             <span style="font-size:0.6rem; color:#7a7a82;">{{ $a->detected_at }}</span>
                         </div>

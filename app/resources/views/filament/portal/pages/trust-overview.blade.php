@@ -20,6 +20,34 @@
             <div style="font-size:0.7rem; color:#9ca3af;">window: <strong style="color:#e5e5e7;">{{ $latest_end ?? '—' }}</strong> · trust score = 0.6×useful_rate + 0.3×(1−fp_rate) + 0.1×(1−suppression_rate). Zero-feedback baseline = 0.5.</div>
         </div>
 
+        {{-- Freshness rollup strip --}}
+        @if (! empty($freshness))
+            <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
+                <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Freshness across surfaces</h3>
+                <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
+                    <thead style="color:#7a7a82;">
+                        <tr><th style="text-align:left;">surface</th><th style="text-align:right; color:#86efac;">fresh</th><th style="text-align:right; color:#fde68a;">aging</th><th style="text-align:right; color:#fdba74;">stale</th><th style="text-align:right; color:#fb7185;">expired</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($freshness as $surface => $tally)
+                            @php
+                                $total = array_sum($tally);
+                                if ($total === 0) continue;
+                            @endphp
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:3px 4px;">{{ str_replace('_', ' ', $surface) }}</td>
+                                <td style="padding:3px 4px; text-align:right; color:#86efac;">{{ number_format($tally['fresh'] ?? 0) }}</td>
+                                <td style="padding:3px 4px; text-align:right; color:#fde68a;">{{ number_format($tally['aging'] ?? 0) }}</td>
+                                <td style="padding:3px 4px; text-align:right; color:#fdba74;">{{ number_format($tally['stale'] ?? 0) }}</td>
+                                <td style="padding:3px 4px; text-align:right; color:#fb7185;">{{ number_format($tally['expired'] ?? 0) }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+                <div style="margin-top:0.4rem; font-size:0.55rem; color:#7a7a82; font-style:italic;">TTL ladders defined per surface in <code>App\Services\IntelFreshness::SURFACE_TTL</code>. Pre-computed via <code>ci-phase49-freshness</code>; live re-evaluated on each render so aging happens between compute runs.</div>
+            </div>
+        @endif
+
         <div style="display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:1rem;">
             <div style="display:grid; gap:0.75rem;">
                 {{-- Surface trust scoreboard --}}

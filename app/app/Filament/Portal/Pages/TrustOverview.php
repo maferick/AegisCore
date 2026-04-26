@@ -53,6 +53,29 @@ class TrustOverview extends Page
             ->orderByDesc('trust_score')
             ->get();
 
+        // Per-surface freshness rollup: count freshness_state across each
+        // bloc-scoped table so the trust dashboard can display freshness
+        // alongside trust.
+        $surfaceTables = [
+            'alert' => 'strategic_alerts',
+            'digest' => 'daily_operational_digest',
+            'narrative' => 'incident_narratives',
+            'incident' => 'operational_incidents',
+            'corridor' => 'operational_corridors',
+            'alliance_profile' => 'alliance_operational_profiles',
+            'threat_surface' => 'system_threat_surface',
+        ];
+        $freshness = [];
+        foreach ($surfaceTables as $surface => $table) {
+            $tally = DB::table($table)
+                ->where('viewer_bloc_id', $blocId)
+                ->groupBy('freshness_state')
+                ->selectRaw('freshness_state, COUNT(*) AS n')
+                ->pluck('n', 'freshness_state')
+                ->all();
+            $freshness[$surface] = $tally;
+        }
+
         $feedback = DB::table('intel_feedback_events')
             ->where('viewer_bloc_id', $blocId)
             ->where('created_at', '>=', now()->subDays(60))
@@ -90,6 +113,7 @@ class TrustOverview extends Page
             'alert_summary' => $alertSummary,
             'verified_summary' => $verifiedSummary,
             'suppression_rules' => $suppressionRules,
+            'freshness' => $freshness,
         ];
     }
 

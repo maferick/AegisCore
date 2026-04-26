@@ -57,6 +57,7 @@ from counter_intel.phase4_governance import (
     run_enrich_digest_trust as phase48_enrich_digest_trust,
     run_enrich_narrative_sources as phase48_enrich_narrative_sources,
 )
+from counter_intel.phase4_freshness import run_freshness as phase49_freshness
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -216,6 +217,10 @@ def main() -> int:
     p48nt.add_argument("--since-hours", type=int, default=720)
     p48nt.add_argument("--limit", type=int, default=2000)
 
+    p49fr = sub.add_parser("phase49-freshness", help="Phase 4.9 — recompute intel freshness state.")
+    p49fr.add_argument("--viewer-bloc-id", type=int, default=None,
+                       help="optional bloc scope (default: all blocs)")
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -285,6 +290,8 @@ def main() -> int:
         return _run_phase48_enrich_digest_trust(args)
     if args.cmd == "phase48-enrich-narrative-sources":
         return _run_phase48_enrich_narrative_sources(args)
+    if args.cmd == "phase49-freshness":
+        return _run_phase49_freshness(args)
     parser.print_help()
     return 2
 
@@ -647,4 +654,13 @@ def _run_phase48_enrich_narrative_sources(args) -> int:
         stats = phase48_enrich_narrative_sources(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
                                                   since_dt=since, limit=int(args.limit))
     log.info("phase4.8C enrich-narrative-sources complete", stats)
+    return 0
+
+
+def _run_phase49_freshness(args) -> int:
+    cfg = Config.from_env()
+    viewer = int(args.viewer_bloc_id) if args.viewer_bloc_id is not None else None
+    with connection(cfg) as conn:
+        stats = phase49_freshness(conn, cfg, viewer_bloc_id=viewer)
+    log.info("phase4.9 freshness complete", stats)
     return 0

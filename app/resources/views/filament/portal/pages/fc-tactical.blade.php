@@ -40,6 +40,9 @@
                                         <span style="font-size:0.55rem; color:{{ $col }}; text-transform:uppercase; letter-spacing:0.08em;">{{ $i->severity }}</span>
                                         <span style="font-size:0.6rem; color:#a5b4fc;">{{ str_replace('_', ' ', $i->incident_type) }}</span>
                                         <span style="font-size:0.85rem; color:#86efac;">{{ $i->primary_system_name ?? '?' }}</span>
+                                        <x-intel-freshness surface="incident"
+                                            :timestamp="$i->end_at ?? $i->start_at"
+                                            :persisted="$i->freshness_state ?? null" />
                                         <span style="margin-left:auto; font-size:0.6rem; color:#7a7a82;">{{ $i->start_at }}</span>
                                     </div>
                                     @if ($i->timeline_summary)
@@ -96,6 +99,9 @@
                                 <div style="padding:0.35rem 0.5rem; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-left:3px solid {{ $col }}; border-radius:4px;">
                                     <div style="display:flex; gap:0.3rem; align-items:center; font-size:0.7rem;">
                                         <span style="font-size:0.55rem; color:{{ $col }}; text-transform:uppercase;">{{ $a->severity }}</span>
+                                        <x-intel-freshness surface="alert"
+                                            :timestamp="$a->detected_at"
+                                            :persisted="$a->freshness_state ?? null" />
                                         <span style="color:#e5e5e7; flex:1;">{{ $a->title }}</span>
                                     </div>
                                     @if ($a->summary)
@@ -117,7 +123,12 @@
                         <div style="display:grid; gap:0.2rem;">
                             @foreach ($hot_corridors as $c)
                                 <div style="font-size:0.7rem; padding:0.25rem 0.4rem; background:rgba(255,255,255,0.02); border-radius:4px;">
-                                    <div style="color:#86efac;">{{ $c->from_system_name }} → {{ $c->to_system_name }}</div>
+                                    <div style="color:#86efac; display:flex; gap:0.3rem; align-items:center;">
+                                        <span style="flex:1;">{{ $c->from_system_name }} → {{ $c->to_system_name }}</span>
+                                        <x-intel-freshness surface="corridor"
+                                            :timestamp="$c->last_seen_at"
+                                            :persisted="$c->freshness_state ?? null" />
+                                    </div>
                                     <div style="color:#7a7a82; font-size:0.6rem;">
                                         {{ $c->transition_count }} transits · {{ $c->distinct_characters }} chars · <span style="color:#a5b4fc;">{{ $c->route_classification }}</span>
                                     </div>

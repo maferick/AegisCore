@@ -110,11 +110,17 @@ class OperationsHeatmap extends Page
                 'avg_transition_seconds', 'confidence',
             ]);
 
+        $latestComputedAt = DB::table('system_threat_surface')
+            ->where('viewer_bloc_id', $blocId)
+            ->where('window_end_date', $latestDate)
+            ->max('computed_at');
+
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $blocId,
             'viewer_bloc_name' => $blocName,
             'latest_date' => $latestDate,
+            'latest_computed_at' => $latestComputedAt,
             'rows' => $rows,
             'by_tier' => $byTier,
             'by_region' => $byRegion,

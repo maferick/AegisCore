@@ -25,6 +25,9 @@
             <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
                 <h2 style="margin:0; font-size:1.05rem; color:#e5e5e7;">{{ $viewer_bloc_name }} <span style="font-weight:400; color:#7a7a82; font-size:0.75rem;">· system threat surface</span></h2>
                 <span style="font-size:0.6rem; color:#7a7a82; margin-left:auto; font-style:italic;">window ending {{ $latest_date ?? '—' }} · advisory · log-derived</span>
+                <x-intel-freshness surface="threat_surface"
+                    :timestamp="$latest_computed_at ?? null" />
+                @php /* end-of-day baseline if computed_at not provided */ @endphp
             </div>
             <p style="font-size:0.78rem; color:#9ca3af; margin-top:0.4rem; margin-bottom:0;">
                 Composite per-system threat from hostile cluster frequency, escalation density, battle linkage, operational density, reliability-weighted reports, and corridor centrality. Tier thresholds: strategic ≥7, hot ≥4, contested ≥2, watch ≥0.5.

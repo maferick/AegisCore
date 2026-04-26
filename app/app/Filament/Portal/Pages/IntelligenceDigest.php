@@ -116,6 +116,9 @@ class IntelligenceDigest extends Page
             'source_reliability' => $decode($digest->source_reliability_json),
             'available_dates' => $availableDates,
             'generated_at' => $digest->generated_at,
+            'freshness_state' => $digest->freshness_state,
+            'source_window_start' => $digest->source_window_start,
+            'source_window_end' => $digest->source_window_end,
         ];
     }
 

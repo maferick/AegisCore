@@ -10,6 +10,13 @@
                 <h2 style="margin:0; font-size:1.05rem; color:#e5e5e7;">
                     Intel digest · {{ $bloc_name }} · <span style="color:#86efac;">{{ $date }}</span>
                 </h2>
+                @if (! empty($generated_at))
+                    <x-intel-freshness surface="digest"
+                        :timestamp="$generated_at"
+                        :persisted="$freshness_state ?? null"
+                        :windowStart="$source_window_start ?? null"
+                        :windowEnd="$source_window_end ?? null" />
+                @endif
                 <span style="font-size:0.6rem; color:#7a7a82;">window:</span>
                 @foreach (['today', 'last_24h', 'last_7d'] as $w)
                     @php $active = ($w === $window); @endphp
