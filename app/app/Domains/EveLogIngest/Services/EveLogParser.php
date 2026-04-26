@@ -136,6 +136,12 @@ final class EveLogParser
             return null;
         }
 
+        // Gamelog / chatlog file decoration: a row of dashes, a single
+        // word like "Gamelog" / "Chatlog", or anything that is purely
+        // ascii-art separator. Skip silently — not a parse failure.
+        if (preg_match('/^[-=*_\s]+$/u', $line)) return null;
+        if (preg_match('/^(Gamelog|Chatlog)\s*$/iu', $line)) return null;
+
         if (! preg_match(self::TS_REGEX, $line, $m)) {
             return [
                 'event_type' => 'unknown',
@@ -149,13 +155,15 @@ final class EveLogParser
         $timestamp = self::eveDateTimeToIso($m[1]);
         $rest = trim($m[2]);
 
-        // (combat) / (notify) gamelog flavours.
+        // (combat) / (notify) / (info|warning|question|hint|None) gamelog flavours.
+        // Combat is its own bucket; everything else is a notify-class
+        // UI event so we put them all under notify_event with the
+        // specific gamelog_kind preserved in parsed_json.
         if (preg_match('/^\((combat|notify|info|warning|question|hint|None)\)\s+(.*)$/iu', $rest, $cm)) {
             $kind = strtolower($cm[1]);
             $msg = $cm[2];
             return [
-                'event_type' => $kind === 'combat' ? 'combat_event'
-                    : ($kind === 'notify' ? 'notify_event' : 'unknown'),
+                'event_type' => $kind === 'combat' ? 'combat_event' : 'notify_event',
                 'event_timestamp' => $timestamp,
                 'actor_name' => null,
                 'system_name' => null,
