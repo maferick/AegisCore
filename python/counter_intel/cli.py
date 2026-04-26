@@ -39,6 +39,13 @@ from counter_intel.phase4_force_composition import (
     run_force_compositions as phase45_force_compositions,
     run_force_transitions as phase45_force_transitions,
 )
+from counter_intel.phase4_coalition import (
+    run_alliance_profiles as phase46_alliance_profiles,
+    run_coalition_comparisons as phase46_coalition_comparisons,
+    run_doctrine_evolution as phase46_doctrine_evolution,
+    run_route_pressure as phase46_route_pressure,
+    run_operator_fingerprints as phase46_operator_fingerprints,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -141,6 +148,29 @@ def main() -> int:
     p45ft.add_argument("--viewer-bloc-id", type=int, required=True)
     p45ft.add_argument("--since-hours", type=int, default=8760)
 
+    p46ap = sub.add_parser("phase46-alliance-profiles", help="Phase 4.6A — per-alliance operational profile.")
+    p46ap.add_argument("--viewer-bloc-id", type=int, required=True)
+    p46ap.add_argument("--window-end", type=str, default=None)
+    p46ap.add_argument("--window-days", type=int, default=30)
+
+    p46cc = sub.add_parser("phase46-coalition-comparisons", help="Phase 4.6B — bloc-level behavior comparison.")
+    p46cc.add_argument("--viewer-bloc-id", type=int, required=True)
+    p46cc.add_argument("--window-end", type=str, default=None)
+    p46cc.add_argument("--window-days", type=int, default=30)
+
+    p46de = sub.add_parser("phase46-doctrine-evolution", help="Phase 4.6C — doctrine adoption / abandonment / shifts.")
+    p46de.add_argument("--viewer-bloc-id", type=int, required=True)
+    p46de.add_argument("--window-end", type=str, default=None)
+    p46de.add_argument("--window-days", type=int, default=14)
+
+    p46rp = sub.add_parser("phase46-route-pressure", help="Phase 4.6D — corridor route classification.")
+    p46rp.add_argument("--viewer-bloc-id", type=int, required=True)
+
+    p46of = sub.add_parser("phase46-operator-fingerprints", help="Phase 4.6E — per-character operational fingerprint.")
+    p46of.add_argument("--viewer-bloc-id", type=int, required=True)
+    p46of.add_argument("--window-end", type=str, default=None)
+    p46of.add_argument("--window-days", type=int, default=30)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -186,6 +216,16 @@ def main() -> int:
         return _run_phase45_force_compositions(args)
     if args.cmd == "phase45-force-transitions":
         return _run_phase45_force_transitions(args)
+    if args.cmd == "phase46-alliance-profiles":
+        return _run_phase46_alliance_profiles(args)
+    if args.cmd == "phase46-coalition-comparisons":
+        return _run_phase46_coalition_comparisons(args)
+    if args.cmd == "phase46-doctrine-evolution":
+        return _run_phase46_doctrine_evolution(args)
+    if args.cmd == "phase46-route-pressure":
+        return _run_phase46_route_pressure(args)
+    if args.cmd == "phase46-operator-fingerprints":
+        return _run_phase46_operator_fingerprints(args)
     parser.print_help()
     return 2
 
@@ -411,4 +451,60 @@ def _run_phase4_session_correlation(args) -> int:
         stats = phase4_session_correlation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
                                            window_end=window_end, window_days=int(args.window_days))
     log.info("phase4 session-correlation complete", stats)
+    return 0
+
+
+def _resolve_window_end(args):
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    if window_end is None:
+        from datetime import timezone, datetime as _dt
+        window_end = _dt.now(timezone.utc).date()
+    return window_end
+
+
+def _run_phase46_alliance_profiles(args) -> int:
+    cfg = Config.from_env()
+    window_end = _resolve_window_end(args)
+    with connection(cfg) as conn:
+        stats = phase46_alliance_profiles(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                          window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.6A alliance-profiles complete", stats)
+    return 0
+
+
+def _run_phase46_coalition_comparisons(args) -> int:
+    cfg = Config.from_env()
+    window_end = _resolve_window_end(args)
+    with connection(cfg) as conn:
+        stats = phase46_coalition_comparisons(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                              window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.6B coalition-comparisons complete", stats)
+    return 0
+
+
+def _run_phase46_doctrine_evolution(args) -> int:
+    cfg = Config.from_env()
+    window_end = _resolve_window_end(args)
+    with connection(cfg) as conn:
+        stats = phase46_doctrine_evolution(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                           window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.6C doctrine-evolution complete", stats)
+    return 0
+
+
+def _run_phase46_route_pressure(args) -> int:
+    cfg = Config.from_env()
+    with connection(cfg) as conn:
+        stats = phase46_route_pressure(conn, cfg, viewer_bloc_id=args.viewer_bloc_id)
+    log.info("phase4.6D route-pressure complete", stats)
+    return 0
+
+
+def _run_phase46_operator_fingerprints(args) -> int:
+    cfg = Config.from_env()
+    window_end = _resolve_window_end(args)
+    with connection(cfg) as conn:
+        stats = phase46_operator_fingerprints(conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                                              window_end=window_end, window_days=int(args.window_days))
+    log.info("phase4.6E operator-fingerprints complete", stats)
     return 0

@@ -539,6 +539,26 @@ ci-phase45-force-compositions:
 ci-phase45-force-transitions:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase45-force-transitions --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.6 — coalition + doctrine behavior intel.
+# Order: alliance-profiles → coalition-comparisons → doctrine-evolution
+# (doctrine-evolution needs prior-window profiles to diff against).
+# route-pressure + operator-fingerprints are independent.
+# Args: VIEWER_BLOC=1 CI_ARGS="--window-days 30"
+ci-phase46-alliance-profiles:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase46-alliance-profiles --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase46-coalition-comparisons:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase46-coalition-comparisons --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase46-doctrine-evolution:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase46-doctrine-evolution --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase46-route-pressure:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase46-route-pressure --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+ci-phase46-operator-fingerprints:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase46-operator-fingerprints --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in
