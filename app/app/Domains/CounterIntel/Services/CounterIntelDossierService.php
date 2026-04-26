@@ -444,10 +444,15 @@ final class CounterIntelDossierService
             }
         }
 
-        // §4.3 Community vs declared. Suppressed when the pilot's
-        // declared alliance is NOT in the viewer bloc's friendly set —
-        // for known-hostile members, "graph community is mostly hostile"
-        // is baseline truth not a review signal.
+        // §4.3 Community vs declared. Two-layer logic:
+        //   - In-bloc (friendly alliance): absolute thresholds (>=60%
+        //     flag, >=40% note) apply. Real spy candidate signal.
+        //   - Out-of-bloc: rendered as suppressed unless the pilot is
+        //     a normalized outlier (>= alliance p90 from
+        //     ci_alliance_community_baseline). The Phase 2 baseline
+        //     pass converts an absolute threshold into "outlier within
+        //     the pilot's own alliance" — finds infiltrators inside
+        //     hostile alliances too without flooding on baseline truth.
         $declaredInBloc = $declaredAllyId !== null && in_array($declaredAllyId, $friendlyAllyIds, true);
         if ($anomaly !== null
             && $anomaly->community_hostile_pct !== null
@@ -455,14 +460,48 @@ final class CounterIntelDossierService
         ) {
             $pct = (float) $anomaly->community_hostile_pct;
             $n = (int) $anomaly->community_neighbor_count;
-            $strong = $pct >= 0.60;
-            $intermediate = $pct >= 0.40 && $pct < 0.60;
-            if ($strong || $intermediate) {
+            $absStrong = $pct >= 0.60;
+            $absInter = $pct >= 0.40 && $pct < 0.60;
+
+            // Normalized layer: how far above the pilot's own alliance baseline?
+            $allianceBaseline = null;
+            $normalizedOutlier = false;
+            if ($declaredAllyId !== null) {
+                $allianceBaseline = DB::table('ci_alliance_community_baseline')
+                    ->where('alliance_id', $declaredAllyId)
+                    ->where('viewer_bloc_id', (int) ($anomaly->viewer_bloc_id ?? 0))
+                    ->orderByDesc('window_end_date')
+                    ->first();
+                if ($allianceBaseline !== null
+                    && $allianceBaseline->p90_pct !== null
+                    && (int) $allianceBaseline->sample_size >= 10
+                    && $pct >= (float) $allianceBaseline->p90_pct
+                ) {
+                    $normalizedOutlier = true;
+                }
+            }
+
+            if ($absStrong || $absInter || $normalizedOutlier) {
                 $entry = [
                     'key' => 'community_mismatch',
                     'reason_code' => 'community_mismatch',
-                    'severity' => $strong ? 'flag' : 'note',
-                    'text' => $strong
+                    'severity' => ($absStrong || ($normalizedOutlier && $declaredInBloc)) ? 'flag' : 'note',
+                    'text' => '',
+                    'confidence' => $n >= 200 ? 'high' : ($n >= 50 ? 'medium' : 'low'),
+                    'sample_size' => $n,
+                    'raw' => [
+                        'community_hostile_pct' => $pct,
+                        'community_neighbor_count' => $n,
+                        'alliance_baseline_p90' => $allianceBaseline?->p90_pct,
+                        'alliance_baseline_median' => $allianceBaseline?->median_pct,
+                        'alliance_baseline_sample' => $allianceBaseline?->sample_size,
+                        'normalized_outlier' => $normalizedOutlier,
+                    ],
+                ];
+                if ($declaredInBloc) {
+                    // In-bloc renders absolute. Optional baseline call-out
+                    // when also normalized outlier (extra strong).
+                    $entry['text'] = $absStrong
                         ? sprintf(
                             'Co-flier graph community is %d%% hostile-tagged (%d neighbours) — graph affiliation contradicts declared bloc.',
                             (int) round($pct * 100), $n,
@@ -470,18 +509,34 @@ final class CounterIntelDossierService
                         : sprintf(
                             'Co-flier mix: %d%% of %d graph neighbours are hostile-tagged.',
                             (int) round($pct * 100), $n,
-                        ),
-                    'confidence' => $n >= 200 ? 'high' : ($n >= 50 ? 'medium' : 'low'),
-                    'sample_size' => $n,
-                    'raw' => ['community_hostile_pct' => $pct, 'community_neighbor_count' => $n],
-                ];
-                if (! $declaredInBloc) {
-                    // Suppress for hostile-alliance members — keep the
-                    // entry but mark it diagnostic-only so it does not
-                    // count toward the band.
+                        );
+                    if ($normalizedOutlier && $allianceBaseline !== null) {
+                        $entry['text'] .= sprintf(
+                            ' Top 10%% within own alliance baseline (alliance p90 %d%% on %d members).',
+                            (int) round((float) $allianceBaseline->p90_pct * 100),
+                            (int) $allianceBaseline->sample_size,
+                        );
+                    }
+                } elseif ($normalizedOutlier && $allianceBaseline !== null) {
+                    // Out-of-bloc + outlier within their own alliance =
+                    // possibly an infiltrator inside the hostile alliance.
+                    // Render as note, not full flag (still uncalibrated).
+                    $entry['severity'] = 'note';
+                    $entry['text'] = sprintf(
+                        'Inside-alliance outlier: %d%% hostile-tagged community vs alliance p90 %d%% (alliance sample %d). Possibly an inside-alliance anomaly.',
+                        (int) round($pct * 100),
+                        (int) round((float) $allianceBaseline->p90_pct * 100),
+                        (int) $allianceBaseline->sample_size,
+                    );
+                } else {
+                    // Out-of-bloc + not a normalized outlier = baseline-true
+                    // signal for known hostile members. Suppress.
                     $entry['severity'] = 'suppressed';
-                    $entry['suppression_reason'] = 'declared_alliance_not_in_viewer_bloc';
-                    $entry['text'] .= ' [suppressed: pilot is in a hostile-tagged alliance, signal reads as baseline truth here, kept as diagnostic only.]';
+                    $entry['suppression_reason'] = 'declared_alliance_not_in_viewer_bloc_and_within_alliance_baseline';
+                    $entry['text'] = sprintf(
+                        'Co-flier mix: %d%% of %d hostile-tagged. [suppressed — pilot is in a hostile-tagged alliance and within their own alliance\'s baseline distribution.]',
+                        (int) round($pct * 100), $n,
+                    );
                 }
                 $signals[] = $entry;
             }

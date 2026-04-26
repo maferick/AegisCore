@@ -19,6 +19,7 @@ from counter_intel.anomalies import compute as compute_anomalies
 from counter_intel.graph_features import compute as compute_graph_features
 from counter_intel.phase1 import run_bloc_agnostic as phase1_agnostic, run_bloc_relative as phase1_relative
 from counter_intel.phase2_triangulation import run as phase2_triangulation
+from counter_intel.phase2_baseline import run as phase2_baseline
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -60,6 +61,10 @@ def main() -> int:
     p2t.add_argument("--viewer-bloc-id", type=int, required=True)
     p2t.add_argument("--window-end", type=str, default=None)
 
+    p2b = sub.add_parser("phase2-baseline", help="Phase 2 alliance community baseline (median/p90 community_hostile_pct per declared alliance).")
+    p2b.add_argument("--viewer-bloc-id", type=int, required=True)
+    p2b.add_argument("--window-end", type=str, default=None)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -77,6 +82,8 @@ def main() -> int:
         return _run_phase1_relative(args)
     if args.cmd == "phase2-triangulation":
         return _run_phase2_triangulation(args)
+    if args.cmd == "phase2-baseline":
+        return _run_phase2_baseline(args)
     parser.print_help()
     return 2
 
@@ -149,4 +156,13 @@ def _run_phase2_triangulation(args) -> int:
     with connection(cfg) as conn:
         stats = phase2_triangulation(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, window_end=window_end)
     log.info("phase2 triangulation complete", stats)
+    return 0
+
+
+def _run_phase2_baseline(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    with connection(cfg) as conn:
+        stats = phase2_baseline(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, window_end=window_end)
+    log.info("phase2 baseline complete", stats)
     return 0

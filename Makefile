@@ -468,6 +468,14 @@ ci-phase1-relative:
 ci-phase2-triangulation:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-triangulation --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 2 — alliance community baseline (per-alliance
+# median/p90 community_hostile_pct). Used by the dossier renderer
+# to convert absolute thresholds into "outlier within own alliance".
+# Run after ci-phase1-relative.
+# Args: VIEWER_BLOC=1 CI_ARGS="--window-end=2026-04-20"
+ci-phase2-baseline:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-baseline --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Bloc Intelligence — alliance-pair behavior extractor (viewer-agnostic).
 # Args: BI_ARGS="--window-end=2026-04-18"
 bloc-intel-extract:
