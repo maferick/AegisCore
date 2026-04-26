@@ -242,15 +242,36 @@ class EveLogIngestController extends Controller
                 if ($events !== []) {
                     $rows = [];
                     $errorRows = [];
+                    $sessionStart = $file->session_started_at ?? ($data['session_started_at'] ?? null);
                     foreach ($events as $e) {
                         $rawLine = mb_substr((string) ($e['raw_line'] ?? ''), 0, 65535);
+                        // Decode parsed_json once so we can pull
+                        // partial_time / showinfo / dscan / reported_count.
+                        $parsed = null;
+                        if (! empty($e['parsed_json'])) {
+                            $parsed = json_decode((string) $e['parsed_json'], true);
+                            if (! is_array($parsed)) $parsed = null;
+                        }
+                        // Partial timestamp recovery — parser left
+                        // event_timestamp NULL when the line carried
+                        // [HH:MM:SS] only. Fill from session_started_at
+                        // date when available.
+                        $eventTs = $e['event_timestamp'] ?? null;
+                        if ($eventTs === null && $parsed && ! empty($parsed['partial_time']) && $sessionStart) {
+                            $datePart = substr((string) $sessionStart, 0, 10);
+                            if (preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $datePart)) {
+                                $eventTs = $datePart . ' ' . $parsed['partial_time'];
+                            }
+                        }
                         $rows[] = [
                             'eve_log_file_id' => $file->id,
-                            'event_timestamp' => $e['event_timestamp'] ?? null,
+                            'event_timestamp' => $eventTs,
                             'event_type' => $e['event_type'] ?? 'unknown',
                             'actor_name' => $e['actor_name'] ?? null,
                             'system_name' => $e['system_name'] ?? null,
                             'channel_name' => $e['channel_name'] ?? null,
+                            'external_dscan_url' => $parsed['dscan_url'] ?? null,
+                            'reported_count' => $parsed['reported_count'] ?? null,
                             'raw_line' => $rawLine,
                             'parsed_json' => $e['parsed_json'] ?? null,
                             'line_offset' => $e['line_offset'] ?? null,
@@ -320,13 +341,14 @@ class EveLogIngestController extends Controller
                             $eventId = $offset !== null ? ($idMap[(int) $offset] ?? null) : null;
                             if ($eventId === null) continue;
                             $payload = $e['parsed_json'] ?? null;
+                            $decodedPayload = null;
                             $msg = '';
                             if (is_string($payload)) {
-                                $decoded = json_decode($payload, true);
-                                if (is_array($decoded)) $msg = (string) ($decoded['message'] ?? '');
+                                $decodedPayload = json_decode($payload, true);
+                                if (is_array($decodedPayload)) $msg = (string) ($decodedPayload['message'] ?? '');
                             }
                             if ($msg === '') continue;
-                            $resolutions = $resolver->resolve($msg);
+                            $resolutions = $resolver->resolve($msg, $decodedPayload);
                             if ($resolutions !== []) {
                                 $resolver->persist($eventId, $resolutions);
                             }

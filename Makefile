@@ -544,6 +544,13 @@ windows-uploader:
 eve-log-retry-parse-errors:
 	$(COMPOSE) exec -T php-fpm php artisan eve-log:retry-parse-errors $(ELOG_RETRY_ARGS)
 
+# Re-parse existing event rows through the current parser so newly-
+# added extraction (showinfo, dscan, reported_count, partial
+# timestamps) backfills onto rows that predate the parser change.
+# Args: ELOG_REPARSE_ARGS="--limit=50000 --types=intel_report"
+eve-log-reparse-events:
+	$(COMPOSE) exec -T php-fpm php artisan eve-log:reparse-events $(ELOG_REPARSE_ARGS)
+
 # Same as windows-uploader — builds the .exe and bundles the
 # portable .zip with member README + install/uninstall scripts.
 # Output:

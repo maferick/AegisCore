@@ -61,7 +61,7 @@ class EveLogResolveEntitiesCommand extends Command
             $payload = json_decode((string) $r->parsed_json, true);
             $message = is_array($payload) ? (string) ($payload['message'] ?? '') : '';
             if ($message === '') continue;
-            $resolutions = $resolver->resolve($message);
+            $resolutions = $resolver->resolve($message, is_array($payload) ? $payload : null);
             if ($resolutions === []) continue;
             $totalResolutions += $resolver->persist((int) $r->id, $resolutions);
             $eventsResolved++;

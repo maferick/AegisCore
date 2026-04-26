@@ -62,6 +62,29 @@ final class EveLogParser
     }
 
     private const TS_REGEX = '/^\[\s*(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2})\s*\]\s*(.*)$/u';
+    // Some chat clients write a short [HH:MM:SS] form. We accept it
+    // and store the time component; the controller infers the date
+    // from the file's session_started_at when persisting.
+    private const TS_REGEX_PARTIAL = '/^\[\s*(\d{2}:\d{2}:\d{2})\s*\]\s*(.*)$/u';
+
+    /**
+     * EVE rich-text showinfo link extraction. Matches:
+     *   <url=showinfo:TYPE//ID>visible label</url>
+     *
+     * TYPE is the EVE typeID:
+     *   5                          solar system → ref_solar_systems
+     *   2                          corporation
+     *   16159                      alliance
+     *   1373-1386 + a few siblings character (race / bloodline variants)
+     *   else                       fall back to esi_entity_names lookup
+     */
+    private const SHOWINFO_REGEX = '/<url=showinfo:(\d+)\/\/(\d+)>(.*?)<\/url>/iu';
+
+    /** dscan.info URL — the snapshot id is everything after /v/. */
+    private const DSCAN_REGEX = '/https?:\/\/dscan\.info\/(?:v\/|view\/)?([a-z0-9]+)/iu';
+
+    /** "+N" marker in intel reports. Conservative — bounded 1-3 digits. */
+    private const PLUSN_REGEX = '/(?:^|\s)\+(\d{1,3})(?=\s|$)/u';
 
     /**
      * Header parser.
@@ -169,7 +192,18 @@ final class EveLogParser
         if (preg_match('/^[-=*_\s]+$/u', $line)) return null;
         if (preg_match('/^(Gamelog|Chatlog)\s*$/iu', $line)) return null;
 
-        if (! preg_match(self::TS_REGEX, $line, $m)) {
+        $timestamp = null;
+        $rest = null;
+        if (preg_match(self::TS_REGEX, $line, $m)) {
+            $timestamp = self::eveDateTimeToIso($m[1]);
+            $rest = trim($m[2]);
+        } elseif (preg_match(self::TS_REGEX_PARTIAL, $line, $m)) {
+            // Partial form [HH:MM:SS] — controller fills the date from
+            // file session_started_at. We stash the time component
+            // here and let the controller compose the final timestamp
+            // before INSERT. Until then, leave it null.
+            $rest = trim($m[2]);
+        } else {
             return [
                 'event_type' => 'unknown',
                 'event_timestamp' => null,
@@ -179,8 +213,9 @@ final class EveLogParser
                 'parsed_json' => json_encode(['reason' => 'no_timestamp_prefix']),
             ];
         }
-        $timestamp = self::eveDateTimeToIso($m[1]);
-        $rest = trim($m[2]);
+        // Carry the partial-time hint into parsed_json so the controller
+        // can assemble the full timestamp.
+        $partialTime = isset($timestamp) ? null : ($m[1] ?? null);
 
         // (combat) / (notify) / (info|warning|question|hint|None) gamelog flavours.
         // Combat is its own bucket; everything else is a notify-class
@@ -224,13 +259,33 @@ final class EveLogParser
             $speaker = trim($cm2[1]);
             $msg = trim($cm2[2]);
             $type = self::classifyChatType($logType, $channelName, $msg);
+
+            // Phase 4.4 — extract authoritative EVE rich-text content.
+            $showinfoLinks = self::extractShowinfoLinks($msg);
+            $dscanUrl = self::extractDscanUrl($msg);
+            $reportedCount = self::extractPlusN($msg);
+
+            $parsed = [
+                'message' => $msg,
+                'partial_time' => $partialTime,
+            ];
+            if ($showinfoLinks) {
+                $parsed['showinfo'] = $showinfoLinks;
+            }
+            if ($dscanUrl !== null) {
+                $parsed['dscan_url'] = $dscanUrl[0];
+                $parsed['dscan_id'] = $dscanUrl[1];
+            }
+            if ($reportedCount !== null) {
+                $parsed['reported_count'] = $reportedCount;
+            }
             return [
                 'event_type' => $type,
                 'event_timestamp' => $timestamp,
                 'actor_name' => $speaker,
                 'system_name' => null,
                 'channel_name' => $channelName,
-                'parsed_json' => json_encode(['message' => $msg]),
+                'parsed_json' => json_encode($parsed),
             ];
         }
 
@@ -284,6 +339,64 @@ final class EveLogParser
      * by the controller when the uploader didn't set an explicit
      * log_type.
      */
+    /**
+     * Extract every <url=showinfo:TYPE//ID>label</url> pair from the
+     * message body. Returns an ordered list of dicts.
+     *
+     * @return list<array{type_id:int,entity_id:int,label:string}>
+     */
+    public static function extractShowinfoLinks(string $msg): array
+    {
+        if (! preg_match_all(self::SHOWINFO_REGEX, $msg, $matches, PREG_SET_ORDER)) {
+            return [];
+        }
+        $out = [];
+        foreach ($matches as $m) {
+            $out[] = [
+                'type_id' => (int) $m[1],
+                'entity_id' => (int) $m[2],
+                'label' => trim((string) $m[3]),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Extract the first dscan.info URL + snapshot id from a message.
+     *
+     * @return array{0:string,1:string}|null  [url, snapshot_id]
+     */
+    public static function extractDscanUrl(string $msg): ?array
+    {
+        if (! preg_match(self::DSCAN_REGEX, $msg, $m)) return null;
+        return [$m[0], $m[1]];
+    }
+
+    public static function extractPlusN(string $msg): ?int
+    {
+        if (! preg_match(self::PLUSN_REGEX, $msg, $m)) return null;
+        return (int) $m[1];
+    }
+
+    /**
+     * Map an EVE showinfo type_id to the canonical entity-resolutions
+     * type bucket. Falls back to 'unknown' for type_ids we don't yet
+     * know a mapping for — the caller can still record them via
+     * showinfo_type_id.
+     */
+    public static function showinfoTypeToEntityType(int $typeId): string
+    {
+        if ($typeId === 5) return 'system';            // solarSystem
+        if ($typeId === 2) return 'corporation';
+        if ($typeId === 16159) return 'alliance';
+        // Character race+bloodline ids span 1373..1386 plus 1377/1378
+        // and a handful of alts; treat the full range conservatively.
+        if ($typeId >= 1373 && $typeId <= 1390) return 'character';
+        // Region / constellation typeIDs.
+        if ($typeId === 3) return 'region';
+        return 'unknown';
+    }
+
     public static function detectLogType(?string $folderHint, ?string $channelName, ?string $listener): string
     {
         $folder = mb_strtolower((string) $folderHint);

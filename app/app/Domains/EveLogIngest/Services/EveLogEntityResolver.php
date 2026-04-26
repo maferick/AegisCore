@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domains\EveLogIngest\Services;
 
+use App\Domains\EveLogIngest\Services\EveLogParser;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -70,20 +71,70 @@ final class EveLogEntityResolver
     private array $entityCache = [];
 
     /**
+     * Resolve a message body. Optionally accepts the parsed_json
+     * blob from the parser so already-extracted authoritative
+     * showinfo links short-circuit the heuristic path with high
+     * confidence rows.
+     *
+     * @param  array<string,mixed>|null  $parsedHints
      * @return list<array<string, mixed>>
      */
-    public function resolve(string $message): array
+    public function resolve(string $message, ?array $parsedHints = null): array
     {
         $msg = trim($message);
         if ($msg === '') return [];
 
+        $resolutions = [];
+
+        // Pass 0 — authoritative showinfo links from the parser.
+        // confidence='high', source='showinfo_link', the label is the
+        // token. No fuzzy lookup needed: the entity_id is canonical.
+        if (is_array($parsedHints) && ! empty($parsedHints['showinfo'])) {
+            foreach ($parsedHints['showinfo'] as $idx => $link) {
+                $typeId = (int) ($link['type_id'] ?? 0);
+                $entityId = (int) ($link['entity_id'] ?? 0);
+                $label = (string) ($link['label'] ?? '');
+                if ($typeId === 0 || $entityId === 0) continue;
+                $entityType = EveLogParser::showinfoTypeToEntityType($typeId);
+                $resolvedName = $label;
+                // For systems, replace the label with the canonical
+                // ref_solar_systems.name to keep names consistent.
+                if ($entityType === 'system') {
+                    $sys = $this->lookupSystemById($entityId);
+                    if ($sys !== null) $resolvedName = $sys;
+                } elseif (in_array($entityType, ['character', 'corporation', 'alliance'], true)) {
+                    $canon = $this->lookupEntityById($entityId);
+                    if ($canon !== null) $resolvedName = $canon;
+                }
+                $resolutions[] = [
+                    'token' => $label !== '' ? $label : "showinfo:{$typeId}/{$entityId}",
+                    'type' => $entityType,
+                    'id' => $entityId,
+                    'name' => $resolvedName,
+                    'method' => 'showinfo_link',
+                    'source' => 'showinfo_link',
+                    'showinfo_type_id' => $typeId,
+                    'confidence' => 'high',
+                    'token_offset' => $idx,
+                ];
+            }
+            // If the parser already gave us links, we still run the
+            // text-match path on the residual message (some intel lines
+            // mix showinfo links with bare text names + system codes).
+        }
+
+        // Strip showinfo url tags from the residual text so the
+        // tokeniser doesn't try to fuzzy-match against the labels we
+        // already resolved authoritatively. Same for dscan urls.
+        $residual = preg_replace('/<url=showinfo:\\d+\\/\\/\\d+>.*?<\\/url>/iu', ' ', $msg) ?? $msg;
+        $residual = preg_replace('/https?:\\/\\/dscan\\.info\\/[a-z0-9\\/]+/iu', ' ', $residual) ?? $residual;
+
         // Tokenise. Split on whitespace + common chat punctuation.
         // Preserve hyphens inside system codes by NOT splitting on `-`.
-        $rawTokens = preg_split('/[\s,;.:!?\\\\\\/`()\\[\\]{}<>"\'’“”]+/u', $msg) ?: [];
+        $rawTokens = preg_split('/[\s,;.:!?\\\\\\/`()\\[\\]{}<>"\'’“”]+/u', $residual) ?: [];
         $tokens = array_values(array_filter($rawTokens, fn ($t) => $t !== ''));
-        if ($tokens === []) return [];
+        if ($tokens === []) return $resolutions;
 
-        $resolutions = [];
         $consumed = []; // token indexes consumed by a multi-word match
 
         // Pass 1: system codes. Anchored regex match; cheap.
@@ -161,6 +212,8 @@ final class EveLogEntityResolver
                 'resolved_entity_name' => $r['name'] ? mb_substr((string) $r['name'], 0, 150) : null,
                 'resolution_confidence' => (string) ($r['confidence'] ?? 'low'),
                 'resolution_method' => (string) ($r['method'] ?? 'exact_name'),
+                'source' => (string) ($r['source'] ?? 'text_match'),
+                'showinfo_type_id' => $r['showinfo_type_id'] ?? null,
                 'token_offset' => $r['token_offset'] ?? null,
                 'created_at' => $now,
             ];
@@ -169,9 +222,21 @@ final class EveLogEntityResolver
             $rows,
             ['eve_log_event_id', 'token', 'resolved_entity_type'],
             ['resolved_entity_id', 'resolved_entity_name', 'resolution_confidence',
-             'resolution_method', 'token_offset'],
+             'resolution_method', 'source', 'showinfo_type_id', 'token_offset'],
         );
         return count($rows);
+    }
+
+    private function lookupSystemById(int $sid): ?string
+    {
+        $row = DB::table('ref_solar_systems')->where('id', $sid)->select('name')->first();
+        return $row ? (string) $row->name : null;
+    }
+
+    private function lookupEntityById(int $eid): ?string
+    {
+        $row = DB::table('esi_entity_names')->where('entity_id', $eid)->select('name')->first();
+        return $row ? (string) $row->name : null;
     }
 
     /**
