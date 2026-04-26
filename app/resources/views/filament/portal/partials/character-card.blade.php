@@ -465,6 +465,142 @@
             @endif
 
 
+            {{-- Counter-Intel section — dedicated review block.
+                 Hidden when the operator has no resolvable bloc (no
+                 ESI alliance / no bloc tag) or the dossier service
+                 returned not_found. Lexicon constraint enforced by
+                 the service: never "spy" / "infiltrator" — review
+                 priority + signals, triage surface only. --}}
+            @if (! empty($c['counter_intel']) && empty($c['counter_intel']['not_found']))
+                @php
+                    $ci = $c['counter_intel'];
+                    $p1 = $ci['phase1_signals'] ?? null;
+                    $anom = $ci['anomaly'] ?? null;
+                    $bandColors = [
+                        'critical'  => ['#7f1d1d', '#fca5a5', 'rgba(239,68,68,0.12)', 'rgba(239,68,68,0.4)'],
+                        'high'      => ['#9a3412', '#fdba74', 'rgba(249,115,22,0.10)', 'rgba(249,115,22,0.35)'],
+                        'elevated'  => ['#854d0e', '#fde68a', 'rgba(234,179,8,0.10)', 'rgba(234,179,8,0.30)'],
+                        'note_only' => ['#1e3a8a', '#bfdbfe', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)'],
+                        'clean'     => ['#14532d', '#86efac', 'rgba(34,197,94,0.08)', 'rgba(34,197,94,0.25)'],
+                    ];
+                    $p1Band = $p1['band'] ?? 'clean';
+                    [$bgDark, $fg, $bgLight, $border] = $bandColors[$p1Band] ?? $bandColors['clean'];
+                @endphp
+                <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,0.06);">
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.6rem;">
+                        <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0;">
+                            Counter-Intel · review signals
+                        </h3>
+                        <span style="font-size:0.55rem; padding:2px 8px; border-radius:4px; text-transform:uppercase; letter-spacing:0.08em;
+                                     background:{{ $bgLight }}; color:{{ $fg }}; border:1px solid {{ $border }};">
+                            {{ str_replace('_', ' ', $p1Band) }}
+                        </span>
+                        <span style="font-size:0.6rem; color:#7a7a82; margin-left:auto; font-style:italic;">
+                            viewer bloc context · cached 10 min · 90-day window
+                        </span>
+                    </div>
+
+                    @if (! empty($p1['evidence_summary']))
+                        <div style="background:{{ $bgLight }}; border:1px solid {{ $border }}; border-radius:6px; padding:0.7rem 0.9rem; margin-bottom:0.75rem; color:{{ $fg }}; font-size:0.82rem;">
+                            {{ $p1['evidence_summary'] }}
+                        </div>
+                    @endif
+
+                    @if (! empty($p1['signals']))
+                        <div style="display:grid; gap:0.45rem;">
+                            @foreach ($p1['signals'] as $sig)
+                                @php
+                                    $isFlag = ($sig['severity'] ?? 'note') === 'flag';
+                                    $rowBg = $isFlag ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.02)';
+                                    $rowBorder = $isFlag ? 'rgba(239,68,68,0.30)' : 'rgba(255,255,255,0.06)';
+                                    $accent = $isFlag ? '#fca5a5' : '#7dd3fc';
+                                @endphp
+                                <div style="display:flex; gap:0.6rem; align-items:flex-start; background:{{ $rowBg }}; border:1px solid {{ $rowBorder }}; border-radius:6px; padding:0.55rem 0.75rem;">
+                                    <span style="display:inline-block; width:0.55rem; height:0.55rem; border-radius:50%; background:{{ $accent }}; flex-shrink:0; margin-top:0.4rem;"></span>
+                                    <div style="flex:1; min-width:0;">
+                                        <div style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:#7a7a82; margin-bottom:0.15rem;">
+                                            {{ str_replace('_', ' ', $sig['key']) }}
+                                            @if ($isFlag)
+                                                <span style="color:{{ $accent }}; margin-left:0.3rem;">· flag</span>
+                                            @endif
+                                        </div>
+                                        <div style="font-size:0.82rem; color:#e5e5e7; line-height:1.4;">
+                                            {{ $sig['text'] }}
+                                        </div>
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    @else
+                        <div style="font-size:0.78rem; color:#7a7a82; font-style:italic; padding:0.5rem 0.75rem; background:rgba(255,255,255,0.02); border:1px dashed rgba(255,255,255,0.08); border-radius:6px;">
+                            No Phase 1 signals are flashing — pilot reads as normal vs the cohort.
+                        </div>
+                    @endif
+
+                    {{-- Existing per-bloc anomaly band, ring members, combat anomaly + cohort context.
+                         These pre-date Phase 1 but live in the same review surface, so we keep them
+                         here so the operator sees one unified Counter-Intel view rather than two. --}}
+                    @if ($anom !== null)
+                        @php
+                            $existingBand = $anom['review_priority_band'] ?? null;
+                            $score = $anom['review_priority_score'] ?? null;
+                        @endphp
+                        @if (! empty($ci['explanation']))
+                            <details style="margin-top:0.75rem;">
+                                <summary style="cursor:pointer; font-size:0.7rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.08em;">
+                                    Cohort + graph evidence
+                                    @if ($existingBand)
+                                        <span style="text-transform:none; letter-spacing:0; font-size:0.7rem; color:#7a7a82; margin-left:0.4rem;">
+                                            · existing band: {{ str_replace('_', ' ', $existingBand) }}@if ($score !== null) · score {{ number_format((float) $score, 2) }}@endif
+                                        </span>
+                                    @endif
+                                </summary>
+                                <ul style="margin-top:0.5rem; padding-left:1.1rem; color:#cbd5e1; font-size:0.78rem; line-height:1.55;">
+                                    @foreach ($ci['explanation'] as $line)
+                                        <li style="margin-bottom:0.25rem;">{{ $line }}</li>
+                                    @endforeach
+                                </ul>
+                            </details>
+                        @endif
+                        @if (! empty($ci['combat_anomaly']['signals']))
+                            <details style="margin-top:0.4rem;">
+                                <summary style="cursor:pointer; font-size:0.7rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.08em;">
+                                    Combat behaviour signals
+                                    <span style="text-transform:none; letter-spacing:0; font-size:0.7rem; color:#7a7a82; margin-left:0.4rem;">
+                                        · {{ $ci['combat_anomaly']['headline'] ?? '' }}
+                                    </span>
+                                </summary>
+                                <ul style="margin-top:0.5rem; padding-left:1.1rem; color:#cbd5e1; font-size:0.78rem; line-height:1.55;">
+                                    @foreach ($ci['combat_anomaly']['signals'] as $cs)
+                                        @php $cls = ($cs['direction'] ?? 'reinforces') === 'reinforces' ? '#fca5a5' : '#86efac'; @endphp
+                                        <li style="margin-bottom:0.25rem;"><span style="color:{{ $cls }};">●</span> {{ $cs['text'] }}</li>
+                                    @endforeach
+                                </ul>
+                            </details>
+                        @endif
+                        @if (! empty($ci['ring_members']))
+                            <details style="margin-top:0.4rem;">
+                                <summary style="cursor:pointer; font-size:0.7rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.08em;">
+                                    Recurring ring · {{ count($ci['ring_members']) }} other pilots
+                                </summary>
+                                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:0.4rem; margin-top:0.5rem;">
+                                    @foreach (array_slice($ci['ring_members'], 0, 12) as $rm)
+                                        <a href="?cid={{ $rm['character_id'] }}" style="text-decoration:none; display:flex; gap:0.4rem; align-items:center; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:5px; padding:0.35rem 0.55rem; color:#e5e5e7; font-size:0.78rem;">
+                                            <img src="https://images.evetech.net/characters/{{ $rm['character_id'] }}/portrait?size=32" referrerpolicy="no-referrer" style="width:20px;height:20px;border-radius:50%;" alt="">
+                                            <span style="flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $rm['character_name'] ?? '#'.$rm['character_id'] }}</span>
+                                            @if (! empty($rm['review_priority_band']))
+                                                <span style="font-size:0.6rem; color:#7a7a82;">{{ $rm['review_priority_band'] }}</span>
+                                            @endif
+                                        </a>
+                                    @endforeach
+                                </div>
+                            </details>
+                        @endif
+                    @endif
+                </div>
+            @endif
+
+
             {{-- Activity map — lazy-loaded via
                  /portal/characters/{cid}/activity-map so the rest of
                  the card renders fast. --}}

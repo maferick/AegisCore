@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Filament\Portal\Pages;
 
 use App\Domains\CounterIntel\Services\CharacterGraphInsightService;
+use App\Domains\CounterIntel\Services\CounterIntelDossierService;
 use BackedEnum;
 use Filament\Pages\Dashboard as BaseDashboard;
 use Illuminate\Support\Facades\Auth;
@@ -409,6 +410,22 @@ class Dashboard extends BaseDashboard
             'last_km' => $lastKm,
         ];
 
+        // Counter-Intel section. Dossier is per-(character, viewer_bloc),
+        // 10min-cached internally by the service. Render-time evidence
+        // strings live in the service so we can change wording without
+        // recomputing anything. Returns null if the viewer has no
+        // resolvable bloc (operator has no main alliance) — in which
+        // case the blade just hides the section.
+        $counterIntel = null;
+        $viewerBlocId = $this->resolveViewerBlocId();
+        if ($viewerBlocId !== null) {
+            try {
+                $counterIntel = app(CounterIntelDossierService::class)->dossier($cid, $viewerBlocId);
+            } catch (\Throwable $e) {
+                $counterIntel = null;
+            }
+        }
+
         return [
             'character_id' => $cid,
             'character_name' => $names[$cid] ?? $char->character_name ?? "Pilot #{$cid}",
@@ -444,7 +461,31 @@ class Dashboard extends BaseDashboard
             'flight_crew' => $flightCrew,
             'arch_enemies' => $archEnemies,
             'structural_rank' => $structRank,
+            'counter_intel' => $counterIntel,
+            'viewer_bloc_id' => $viewerBlocId,
         ];
     }
 
+    /**
+     * Resolve the viewer's bloc id from their primary character's
+     * alliance label. Mirrors CounterIntelDossier::resolveViewerBloc.
+     * Null when the viewer has no alliance / no bloc tag.
+     */
+    private function resolveViewerBlocId(): ?int
+    {
+        $override = request()->query('bloc_id');
+        if ($override !== null && ctype_digit((string) $override)) {
+            return (int) $override;
+        }
+        $user = Auth::user();
+        if ($user === null) return null;
+        $char = $user->characters()->first();
+        if ($char === null || ! $char->alliance_id) return null;
+        $blocId = DB::table('coalition_entity_labels')
+            ->where('entity_type', 'alliance')
+            ->where('entity_id', $char->alliance_id)
+            ->where('is_active', 1)
+            ->value('bloc_id');
+        return $blocId ? (int) $blocId : null;
+    }
 }

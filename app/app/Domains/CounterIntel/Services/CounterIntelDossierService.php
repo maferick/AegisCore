@@ -88,6 +88,7 @@ final class CounterIntelDossierService
         $similarPilots = $this->similarPilots($characterId);
         $coJoins = $this->coordinatedJoins($characterId, $affiliation['current']['alliance_id'] ?? null, $affiliation['current']['start_date'] ?? null, $viewerBlocId);
         $combat = $this->combatAnomaly($characterId, $viewerBlocId);
+        $phase1 = $this->phase1Signals($feature, $anomaly);
 
         return [
             'not_found' => false,
@@ -105,6 +106,224 @@ final class CounterIntelDossierService
             'similar_pilots' => $similarPilots,
             'coordinated_joins' => $coJoins,
             'combat_anomaly' => $combat,
+            'phase1_signals' => $phase1,
+        ];
+    }
+
+    /**
+     * Phase 1 Counter-Intel signal expansion. Renders one evidence
+     * sentence per signal that crossed its review threshold. Aggregate
+     * review band derived from how many signals are flashing.
+     *
+     * Each signal entry: ['key' => string, 'severity' => 'flag'|'note',
+     * 'text' => string]. UI renders 'flag' in amber/red, 'note' as a
+     * muted line.
+     *
+     * @return array{
+     *   signals: list<array{key:string,severity:string,text:string}>,
+     *   flag_count: int,
+     *   note_count: int,
+     *   band: 'critical'|'elevated'|'note_only'|'clean'|'insufficient_history',
+     *   evidence_summary: string,
+     * }
+     */
+    private function phase1Signals(object $feature, ?object $anomaly): array
+    {
+        if ((int) ($feature->has_sufficient_history ?? 0) !== 1) {
+            return [
+                'signals' => [],
+                'flag_count' => 0,
+                'note_count' => 0,
+                'band' => 'insufficient_history',
+                'evidence_summary' => 'Phase 1 signals deferred until pilot has enough activity history.',
+            ];
+        }
+
+        $signals = [];
+
+        // §3.2 Dormancy reactivation — long gap then sudden return.
+        $gap = $feature->dormancy_max_gap_days !== null ? (int) $feature->dormancy_max_gap_days : null;
+        $reactAt = $feature->dormancy_reactivated_at ?? null;
+        $daysToCorp = $feature->dormancy_days_to_corp_change !== null ? (int) $feature->dormancy_days_to_corp_change : null;
+        if ($gap !== null && $reactAt !== null && $gap >= 180) {
+            $months = (int) round($gap / 30);
+            $reactDate = (string) $reactAt;
+            if ($daysToCorp !== null && $daysToCorp <= 30) {
+                $signals[] = [
+                    'key' => 'dormancy_reactivation',
+                    'severity' => 'flag',
+                    'text' => "Reactivated after {$months}mo dormancy on " . substr($reactDate, 0, 10)
+                        . " and changed corp within {$daysToCorp} day(s) — strategic-timing reactivation.",
+                ];
+            } else {
+                $signals[] = [
+                    'key' => 'dormancy_reactivation',
+                    'severity' => 'note',
+                    'text' => "Reactivated after {$months}mo dormancy on " . substr($reactDate, 0, 10) . '.',
+                ];
+            }
+        }
+
+        // §3.1 Corp-hopping cadence — short tenures + low stdev (regular intervals).
+        $minTen = $feature->corp_tenure_min_days !== null ? (int) $feature->corp_tenure_min_days : null;
+        $stdev = $feature->corp_tenure_stdev_days !== null ? (float) $feature->corp_tenure_stdev_days : null;
+        $distinctCorps = (int) ($feature->distinct_corps_all_time ?? 0);
+        if ($minTen !== null && $minTen <= 30 && $distinctCorps >= 4) {
+            $signals[] = [
+                'key' => 'corp_hopping',
+                'severity' => 'flag',
+                'text' => "Corp-hop cadence: {$distinctCorps} corps lifetime, shortest tenure {$minTen} day(s)"
+                    . ($stdev !== null ? sprintf(' (stdev %.0fd).', $stdev) : '.'),
+            ];
+        } elseif ($distinctCorps >= 6) {
+            $signals[] = [
+                'key' => 'corp_hopping',
+                'severity' => 'note',
+                'text' => "Corp history: {$distinctCorps} corps lifetime — high churn worth a glance.",
+            ];
+        }
+
+        // §2 Battle-only character — composite score from solo/sg/cheap loss profile.
+        $battleOnly = $feature->battle_only_score !== null ? (float) $feature->battle_only_score : null;
+        if ($battleOnly !== null && $battleOnly >= 0.75) {
+            $sgN = (int) ($feature->small_gang_loss_count ?? 0);
+            $shipN = (int) ($feature->ship_loss_count ?? 0);
+            $signals[] = [
+                'key' => 'battle_only',
+                'severity' => 'flag',
+                'text' => sprintf(
+                    'Battle-only profile: %d%% abnormal vs typical main pattern (small-gang/solo/cheap losses %d of %d).',
+                    (int) round($battleOnly * 100), $sgN, $shipN,
+                ),
+            ];
+        } elseif ($battleOnly !== null && $battleOnly >= 0.55) {
+            $signals[] = [
+                'key' => 'battle_only',
+                'severity' => 'note',
+                'text' => sprintf('Mostly large-fleet activity (battle-only score %.2f) — limited normal footprint.', $battleOnly),
+            ];
+        }
+
+        // §5.3 Pod survival anomaly — escapes pod loss far above peer median.
+        $podSurv = $feature->pod_survival_rate !== null ? (float) $feature->pod_survival_rate : null;
+        $shipN = (int) ($feature->ship_loss_count ?? 0);
+        if ($podSurv !== null && $shipN >= 10 && $podSurv >= 0.95) {
+            $podN = (int) ($feature->pod_loss_count ?? 0);
+            $signals[] = [
+                'key' => 'pod_survival',
+                'severity' => 'note',
+                'text' => sprintf(
+                    'Pod survival %d%% (%d pods on %d ship losses) — unusually careful or controlled exposure.',
+                    (int) round($podSurv * 100), $podN, $shipN,
+                ),
+            ];
+        }
+
+        // §5.2 Controlled loss / cheap-feed pattern.
+        $cheap = $feature->cheap_loss_rate !== null ? (float) $feature->cheap_loss_rate : null;
+        if ($cheap !== null && $shipN >= 10 && $cheap >= 0.70) {
+            $signals[] = [
+                'key' => 'cheap_loss',
+                'severity' => 'note',
+                'text' => sprintf(
+                    'Cheap-loss rate %d%% (%d of %d ship losses below 50M ISK) — could be feeding for credibility.',
+                    (int) round($cheap * 100), (int) round($cheap * $shipN), $shipN,
+                ),
+            ];
+        }
+
+        // §1.2 Asymmetric mutual presence — handler/asset directional pattern.
+        if ($anomaly !== null
+            && ($anomaly->asymmetric_top_pair_character_id ?? null) !== null
+            && ($anomaly->asymmetric_top_pair_battles ?? 0) >= 5
+        ) {
+            $oppCid = (int) $anomaly->asymmetric_top_pair_character_id;
+            $oppName = DB::table('esi_entity_names')
+                ->where('entity_id', $oppCid)
+                ->where('category', 'character')
+                ->value('name') ?? "Pilot #{$oppCid}";
+            $outbound = (float) ($anomaly->asymmetric_top_pair_outbound_pct ?? 0);
+            $inbound = (float) ($anomaly->asymmetric_top_pair_inbound_pct ?? 0);
+            $battles = (int) $anomaly->asymmetric_top_pair_battles;
+            $delta = $outbound - $inbound;
+            if ($outbound >= 0.40 && $delta >= 0.20) {
+                $signals[] = [
+                    'key' => 'asymmetric_pair',
+                    'severity' => 'flag',
+                    'text' => sprintf(
+                        'Asymmetric counterpart: %s appeared opposite this pilot in %d%% of their active days, but only in %d%% of %s\'s — directional pattern (%d shared days).',
+                        $oppName,
+                        (int) round($outbound * 100), (int) round($inbound * 100),
+                        $oppName, $battles,
+                    ),
+                ];
+            } elseif ($outbound >= 0.30) {
+                $signals[] = [
+                    'key' => 'asymmetric_pair',
+                    'severity' => 'note',
+                    'text' => sprintf(
+                        'Frequent hostile counterpart: %s opposite on %d%% of active days (%d shared days).',
+                        $oppName, (int) round($outbound * 100), $battles,
+                    ),
+                ];
+            }
+        }
+
+        // §4.3 Community vs declared — graph community is mostly hostile.
+        if ($anomaly !== null
+            && $anomaly->community_hostile_pct !== null
+            && (int) ($anomaly->community_neighbor_count ?? 0) >= 20
+        ) {
+            $pct = (float) $anomaly->community_hostile_pct;
+            $n = (int) $anomaly->community_neighbor_count;
+            if ($pct >= 0.60) {
+                $signals[] = [
+                    'key' => 'community_mismatch',
+                    'severity' => 'flag',
+                    'text' => sprintf(
+                        'Co-flier graph community is %d%% hostile-tagged (%d neighbours) — graph affiliation contradicts declared bloc.',
+                        (int) round($pct * 100), $n,
+                    ),
+                ];
+            } elseif ($pct >= 0.40) {
+                $signals[] = [
+                    'key' => 'community_mismatch',
+                    'severity' => 'note',
+                    'text' => sprintf(
+                        'Co-flier mix: %d%% of %d graph neighbours are hostile-tagged.',
+                        (int) round($pct * 100), $n,
+                    ),
+                ];
+            }
+        }
+
+        $flagCount = 0;
+        $noteCount = 0;
+        foreach ($signals as $s) {
+            if ($s['severity'] === 'flag') $flagCount++;
+            else $noteCount++;
+        }
+        $band = match (true) {
+            $flagCount >= 3 => 'critical',
+            $flagCount >= 1 => 'elevated',
+            $noteCount >= 1 => 'note_only',
+            default => 'clean',
+        };
+        $summary = match ($band) {
+            'critical' => "Phase 1 review priority: {$flagCount} flag signals fire concurrently — recommend human counter-intel review.",
+            'elevated' => "Phase 1 review priority: {$flagCount} flag signal" . ($flagCount > 1 ? 's' : '')
+                . ($noteCount > 0 ? " plus {$noteCount} supporting note(s)" : '') . '.',
+            'note_only' => "Phase 1 supporting notes: {$noteCount} item(s). No flag signal yet.",
+            'clean' => 'Phase 1 signals clean — pilot looks normal vs the cohort.',
+            default => '',
+        };
+
+        return [
+            'signals' => $signals,
+            'flag_count' => $flagCount,
+            'note_count' => $noteCount,
+            'band' => $band,
+            'evidence_summary' => $summary,
         ];
     }
 

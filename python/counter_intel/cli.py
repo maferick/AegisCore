@@ -17,6 +17,7 @@ from counter_intel.projection import project
 from counter_intel.similarity import run as run_similarity
 from counter_intel.anomalies import compute as compute_anomalies
 from counter_intel.graph_features import compute as compute_graph_features
+from counter_intel.phase1 import run_bloc_agnostic as phase1_agnostic, run_bloc_relative as phase1_relative
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -47,6 +48,13 @@ def main() -> int:
     g.add_argument("--viewer-bloc-id", type=int, required=True)
     g.add_argument("--window-end", type=str, default=None)
 
+    p1a = sub.add_parser("phase1-agnostic", help="Phase 1 bloc-agnostic CI signals (dormancy, corp tenure, loss profile, battle-only).")
+    p1a.add_argument("--window-end", type=str, default=None)
+
+    p1r = sub.add_parser("phase1-relative", help="Phase 1 bloc-relative CI signals (asymmetric pair, community hostile %).")
+    p1r.add_argument("--viewer-bloc-id", type=int, required=True)
+    p1r.add_argument("--window-end", type=str, default=None)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -58,6 +66,10 @@ def main() -> int:
         return _run_anomalies(args)
     if args.cmd == "graph-features":
         return _run_graph_features(args)
+    if args.cmd == "phase1-agnostic":
+        return _run_phase1_agnostic(args)
+    if args.cmd == "phase1-relative":
+        return _run_phase1_relative(args)
     parser.print_help()
     return 2
 
@@ -103,4 +115,22 @@ def _run_graph_features(args) -> int:
     with connection(cfg) as conn, neo_driver(cfg) as driver:
         stats = compute_graph_features(conn, driver, cfg, viewer_bloc_id=args.viewer_bloc_id, window_end=window_end)
     log.info("graph features pass complete", stats)
+    return 0
+
+
+def _run_phase1_agnostic(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    with connection(cfg) as conn:
+        stats = phase1_agnostic(conn, cfg, window_end=window_end)
+    log.info("phase1 agnostic complete", stats)
+    return 0
+
+
+def _run_phase1_relative(args) -> int:
+    cfg = Config.from_env()
+    window_end = date.fromisoformat(args.window_end) if args.window_end else None
+    with connection(cfg) as conn:
+        stats = phase1_relative(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, window_end=window_end)
+    log.info("phase1 relative complete", stats)
     return 0

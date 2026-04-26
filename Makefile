@@ -448,6 +448,20 @@ ci-anomalies:
 ci-graph-features:
 	$(COMPOSE) --profile tools run --rm --build counter_intel graph-features --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 1 — bloc-agnostic signal expansion (dormancy,
+# corp tenure cadence, loss profile, battle-only score). Run after
+# ci-features so rows already exist to UPDATE.
+# Args: CI_ARGS="--window-end=2026-04-18"
+ci-phase1-agnostic:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase1-agnostic $(CI_ARGS)
+
+# Counter-Intel Phase 1 — bloc-relative signal expansion (asymmetric
+# mutual presence, community hostile %). Run after ci-anomalies so
+# the per-bloc rows are present to UPDATE.
+# Args: VIEWER_BLOC=1 CI_ARGS="--window-end=2026-04-18"
+ci-phase1-relative:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase1-relative --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Bloc Intelligence — alliance-pair behavior extractor (viewer-agnostic).
 # Args: BI_ARGS="--window-end=2026-04-18"
 bloc-intel-extract:
