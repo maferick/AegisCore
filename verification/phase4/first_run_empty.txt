@@ -1,0 +1,12 @@
+Phase 4 status · all blocs
+
+source · clients=0 files=0 events=0 open_parse_errors=0
+
+operational_timeline_events · 0 rows
+
+fleet_presence_windows · 0 rows
+
+intel_reliability_profiles · 0 rows
+
+session_correlation_edges · 0 rows
+
