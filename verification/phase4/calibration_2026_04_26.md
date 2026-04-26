@@ -98,6 +98,32 @@ Fleet form-ups now surface — chat-log classification was the gate.
    `red light`, `cs intel`, `wartime`) doesn't match this
    operator's channels.
 
+   **Resolved 2026-04-26 (later that day):** added
+   `wc.vale`, `wc.tr`, `wc.ge`, `wc.vale+tr+ge` to default hints
+   list and exposed `EVE_INTEL_CHANNEL_HINTS` env var for per-
+   operator extension. SQL backfill reclassified 258 files +
+   41,360 chat_message events → intel_report.
+
+   ### Intel reliability — before / after channel reclass
+
+   | Metric                         | BEFORE | AFTER  |
+   |--------------------------------|-------:|-------:|
+   | `intel_report` events          |     44 | 41,406 |
+   | `intel_reliability_profiles`   |     29 |  4,598 |
+   | confidence=high profiles       |      0 |    285 |
+   | confidence=medium profiles     |      4 |    736 |
+   | confidence=low profiles        |     17 |  1,720 |
+   | confidence=insufficient        |      8 |  1,857 |
+   | confirmations (total reports)  |      2 |  2,454 |
+   | contradictions                 |     42 | 38,953 |
+   | avg reliability_score          |   ~0.05|   0.066|
+
+   Confirmation rate stays low (6.6%) because the v1 heuristic
+   name extractor (`_extract_hostile_names_from_intel`) grabs
+   every capitalised word and most aren't real character names.
+   Calibration backlog item 5 (replace with esi_entity_names
+   join) will lift the rate substantially.
+
 4. **`combat_spike` still 1,101 entries**. May further raise
    threshold to 50, OR add distinct attacker count requirement
    so AI gunnery autofire stops dominating.
