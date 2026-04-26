@@ -183,7 +183,9 @@ class EveLogIngestController extends Controller
 
                 if ($events !== []) {
                     $rows = [];
+                    $errorRows = [];
                     foreach ($events as $e) {
+                        $rawLine = mb_substr((string) ($e['raw_line'] ?? ''), 0, 65535);
                         $rows[] = [
                             'eve_log_file_id' => $file->id,
                             'event_timestamp' => $e['event_timestamp'] ?? null,
@@ -191,14 +193,50 @@ class EveLogIngestController extends Controller
                             'actor_name' => $e['actor_name'] ?? null,
                             'system_name' => $e['system_name'] ?? null,
                             'channel_name' => $e['channel_name'] ?? null,
-                            'raw_line' => mb_substr((string) ($e['raw_line'] ?? ''), 0, 65535),
+                            'raw_line' => $rawLine,
                             'parsed_json' => $e['parsed_json'] ?? null,
                             'line_offset' => $e['line_offset'] ?? null,
                             'created_at' => $now,
                         ];
+                        // Enqueue every 'unknown' line into the parser
+                        // failure queue so operators can review what
+                        // the parser couldn't classify. Pure-empty
+                        // lines are filtered upstream so anything
+                        // landing here is a real parse miss.
+                        if (($e['event_type'] ?? null) === 'unknown') {
+                            $reason = 'unknown_event';
+                            $detail = null;
+                            $parsed = $e['parsed_json'] ?? null;
+                            if (is_string($parsed)) {
+                                $decoded = json_decode($parsed, true);
+                                if (is_array($decoded) && isset($decoded['reason'])) {
+                                    $reason = mb_substr((string) $decoded['reason'], 0, 80);
+                                    $detail = $parsed;
+                                }
+                            }
+                            $errorRows[] = [
+                                'eve_log_file_id' => $file->id,
+                                'eve_log_event_id' => null,
+                                'raw_line' => $rawLine,
+                                'line_offset' => $e['line_offset'] ?? null,
+                                'reason' => $reason,
+                                'detail' => $detail,
+                                'status' => 'open',
+                                'retry_count' => 0,
+                                'last_retried_at' => null,
+                                'last_retried_by' => null,
+                                'created_at' => $now,
+                                'updated_at' => $now,
+                            ];
+                        }
                     }
                     foreach (array_chunk($rows, 500) as $batch) {
                         DB::table('eve_log_events')->insert($batch);
+                    }
+                    if ($errorRows !== []) {
+                        foreach (array_chunk($errorRows, 500) as $batch) {
+                            DB::table('eve_log_parse_errors')->insert($batch);
+                        }
                     }
                 }
 
