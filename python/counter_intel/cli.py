@@ -64,6 +64,9 @@ from counter_intel.phase49a_orchestration import (
 from counter_intel.phase49e_quality_guards import (
     run_quality_guards as phase49e_quality_guards,
 )
+from counter_intel.phase49c_retention import (
+    run_retention_sweep as phase49c_retention_sweep,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -233,6 +236,10 @@ def main() -> int:
     p49qg = sub.add_parser("phase49e-quality-guards", help="Phase 4.9E.1 — run quality guard detectors.")
     p49qg.add_argument("--viewer-bloc-id", type=int, default=None)
 
+    p49ret = sub.add_parser("phase49c-retention", help="Phase 4.9C — retention sweep across all TTL'd tables.")
+    p49ret.add_argument("--dry-run", action="store_true",
+                        help="report what would delete without modifying")
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -308,6 +315,8 @@ def main() -> int:
         return _run_phase49a_lane_metrics(args)
     if args.cmd == "phase49e-quality-guards":
         return _run_phase49e_quality_guards(args)
+    if args.cmd == "phase49c-retention":
+        return _run_phase49c_retention(args)
     parser.print_help()
     return 2
 
@@ -818,4 +827,16 @@ def _run_phase49e_quality_guards(args) -> int:
             r.set_stats(stats or {})
             r.set_generated_rows(sum(stats.values()) if stats else 0)
     log.info("phase4.9E quality-guards complete", stats)
+    return 0
+
+
+def _run_phase49c_retention(args) -> int:
+    cfg = Config.from_env()
+    with connection(cfg) as conn:
+        with ComputeLog(conn, lane="maintenance", pipeline="phase49c-retention",
+                        args={"dry_run": bool(args.dry_run)}) as r:
+            stats = phase49c_retention_sweep(conn, cfg, dry_run=bool(args.dry_run))
+            r.set_generated_rows(int(stats.get("total_deleted") or 0))
+            r.set_stats(stats or {})
+    log.info("phase4.9C retention complete", stats)
     return 0

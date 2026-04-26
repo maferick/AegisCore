@@ -611,6 +611,12 @@ ci-phase49a-lane-metrics:
 ci-phase49e-quality-guards:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase49e-quality-guards $(CI_ARGS)
 
+# Phase 4.9C retention sweep — drop rows older than per-table TTLs.
+# Pass CI_ARGS="--dry-run" first to preview impact.
+# Per-table TTLs documented in docs/RETENTION.md.
+ci-phase49c-retention:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase49c-retention $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in
