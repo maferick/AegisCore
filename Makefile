@@ -505,6 +505,19 @@ ci-phase4-session-correlation:
 ci-phase4-hostile-clusters:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-hostile-clusters --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# Counter-Intel Phase 4.3B/C/E — fuse clusters + timelines into
+# operational incidents, link to battle_theaters where overlap
+# allows. Run after ci-phase4-hostile-clusters + ci-phase4-timelines.
+# Args: VIEWER_BLOC=1 CI_ARGS="--since-hours=8760"
+ci-phase4-incidents:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-incidents --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
+# Counter-Intel Phase 4.3D — daily per-system operational activity
+# rollup. Feeds map overlays + threat-corridor analytics.
+# Args: VIEWER_BLOC=1 CI_ARGS="--since-hours=8760"
+ci-phase4-system-activity:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase4-system-activity --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

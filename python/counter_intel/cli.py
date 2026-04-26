@@ -29,6 +29,8 @@ from counter_intel.phase4 import (
 )
 from counter_intel.phase4_aggregation import (
     run_hostile_clusters as phase4_hostile_clusters,
+    run_incidents as phase4_incidents,
+    run_system_activity as phase4_system_activity,
 )
 from counter_intel.log import get
 
@@ -102,6 +104,14 @@ def main() -> int:
     p4hc.add_argument("--viewer-bloc-id", type=int, required=True)
     p4hc.add_argument("--since-hours", type=int, default=8760)
 
+    p4i = sub.add_parser("phase4-incidents", help="Phase 4.3B/C/E — fuse clusters + timelines into incidents, link battles.")
+    p4i.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4i.add_argument("--since-hours", type=int, default=8760)
+
+    p4sa = sub.add_parser("phase4-system-activity", help="Phase 4.3D — per-system per-day operational activity heatmap.")
+    p4sa.add_argument("--viewer-bloc-id", type=int, required=True)
+    p4sa.add_argument("--since-hours", type=int, default=8760)
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -133,6 +143,10 @@ def main() -> int:
         return _run_phase4_session_correlation(args)
     if args.cmd == "phase4-hostile-clusters":
         return _run_phase4_hostile_clusters(args)
+    if args.cmd == "phase4-incidents":
+        return _run_phase4_incidents(args)
+    if args.cmd == "phase4-system-activity":
+        return _run_phase4_system_activity(args)
     parser.print_help()
     return 2
 
@@ -269,6 +283,26 @@ def _run_phase4_hostile_clusters(args) -> int:
     with connection(cfg) as conn:
         stats = phase4_hostile_clusters(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
     log.info("phase4.3A hostile-clusters complete", stats)
+    return 0
+
+
+def _run_phase4_incidents(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase4_incidents(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4.3B incidents complete", stats)
+    return 0
+
+
+def _run_phase4_system_activity(args) -> int:
+    from datetime import timezone, timedelta, datetime as _dt
+    cfg = Config.from_env()
+    since = _dt.now(timezone.utc) - timedelta(hours=int(args.since_hours))
+    with connection(cfg) as conn:
+        stats = phase4_system_activity(conn, cfg, viewer_bloc_id=args.viewer_bloc_id, since_dt=since)
+    log.info("phase4.3D system-activity complete", stats)
     return 0
 
 

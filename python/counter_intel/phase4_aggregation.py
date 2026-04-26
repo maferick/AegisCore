@@ -44,6 +44,10 @@ def _env_int(name: str, default: int) -> int:
 # primary_system_id whose timestamps are within CLUSTER_GAP_SECONDS.
 CLUSTER_GAP_SECONDS = _env_int("PHASE4_HOSTILE_CLUSTER_GAP_SEC", 5 * 60)
 
+# Incident fusion. Signals on the same primary system within
+# INCIDENT_GAP_SECONDS roll up into one incident.
+INCIDENT_GAP_SECONDS = _env_int("PHASE4_INCIDENT_GAP_SEC", 15 * 60)
+
 
 # =====================================================================
 # §4.3A — hostile-report clustering
@@ -241,3 +245,498 @@ def run_hostile_clusters(
     conn.commit()
     log.info("phase4.3A hostile clusters done", {"events": len(events), "clusters_written": written})
     return {"events": len(events), "clusters_written": written}
+
+
+# =====================================================================
+# §4.3B + §4.3C + §4.3E — operational incident fusion + battle linkage
+# =====================================================================
+
+@dataclass
+class _IncidentAcc:
+    primary_system_id: int | None = None
+    primary_system_name: str | None = None
+    primary_region_id: int | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    signal_types: set[str] = field(default_factory=set)
+    cluster_ids: list[int] = field(default_factory=list)
+    timeline_event_ids: list[int] = field(default_factory=list)
+    reporter_count: int = 0
+    character_count: int = 0
+    hostile_cluster_quality_max: str = "noisy"
+    timeline_quality_max: str = "noisy"
+
+
+# Quality ordering for promotion comparisons.
+_QUALITY_ORDER = ["noisy", "weak", "normal", "strong", "strategic"]
+
+
+def _max_quality(a: str, b: str) -> str:
+    return a if _QUALITY_ORDER.index(a) >= _QUALITY_ORDER.index(b) else b
+
+
+def run_incidents(
+    conn: pymysql.connections.Connection,
+    cfg: Config,
+    viewer_bloc_id: int,
+    since_dt: datetime,
+) -> dict:
+    """Fuse hostile clusters + timeline events on the same primary
+    system within INCIDENT_GAP_SECONDS into a single incident row.
+
+    Also links each incident to a battle_theaters row when the system
+    + time window overlaps a known theater (Phase 4.3C)."""
+    log.info("phase4.3B incidents starting", {"viewer_bloc_id": viewer_bloc_id, "since": since_dt.isoformat()})
+
+    # Pull hostile clusters in window.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, primary_system_id, primary_system_name, primary_region_id,
+                   start_at, end_at, reporter_count, report_count,
+                   confidence, quality, involved_character_ids_json
+              FROM operational_hostile_clusters
+             WHERE viewer_bloc_id = %s
+               AND start_at >= %s
+             ORDER BY start_at
+            """,
+            (viewer_bloc_id, since_dt),
+        )
+        hostile_rows = list(cur.fetchall())
+
+    # Pull timeline events in window with system_id where present.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, timeline_type, event_timestamp, event_window_start,
+                   event_window_end, source_listener, solar_system_name,
+                   solar_system_id, region_id, confidence, quality
+              FROM operational_timeline_events
+             WHERE viewer_bloc_id = %s
+               AND event_timestamp >= %s
+               AND timeline_type != 'hostile_report'
+             ORDER BY event_timestamp
+            """,
+            (viewer_bloc_id, since_dt),
+        )
+        timeline_rows = list(cur.fetchall())
+
+    # Merge into one chronological event stream of (timestamp,
+    # primary_system_id, source_kind, payload). Hostile clusters use
+    # start_at / primary_system_id directly. Timeline events without a
+    # solar_system_id won't fuse cleanly — track them under
+    # source_listener as their pseudo-system. Fleet form-ups are the
+    # main case here; gamelog crash_symptom etc. similarly.
+    chronological: list[tuple[datetime, int | None, str, dict]] = []
+    for h in hostile_rows:
+        chronological.append((h["start_at"], int(h["primary_system_id"]) if h["primary_system_id"] else None,
+                              "hostile_cluster", h))
+    for t in timeline_rows:
+        sid = int(t["solar_system_id"]) if t["solar_system_id"] else None
+        chronological.append((t["event_timestamp"], sid, "timeline", t))
+    chronological.sort(key=lambda x: x[0])
+
+    # Group: per primary_system, an active incident extends while gap
+    # < INCIDENT_GAP_SECONDS. Timeline events without system fall into
+    # a per-listener pseudo-bucket (None bucket).
+    active: dict[int | None, _IncidentAcc] = {}
+    closed: list[_IncidentAcc] = []
+    for ts, sid, kind, payload in chronological:
+        cur_inc = active.get(sid)
+        if cur_inc is None or (ts - cur_inc.end_at).total_seconds() > INCIDENT_GAP_SECONDS:
+            if cur_inc is not None:
+                closed.append(cur_inc)
+            cur_inc = _IncidentAcc(
+                primary_system_id=sid,
+                start_at=ts, end_at=ts,
+            )
+            active[sid] = cur_inc
+        cur_inc.end_at = ts
+        if kind == "hostile_cluster":
+            cur_inc.signal_types.add("hostile_cluster")
+            cur_inc.cluster_ids.append(int(payload["id"]))
+            cur_inc.reporter_count = max(cur_inc.reporter_count, int(payload["reporter_count"]))
+            try:
+                names = json.loads(payload.get("involved_character_ids_json") or "[]")
+                cur_inc.character_count = max(cur_inc.character_count, len(names))
+            except (TypeError, ValueError):
+                pass
+            cur_inc.hostile_cluster_quality_max = _max_quality(
+                cur_inc.hostile_cluster_quality_max, str(payload["quality"])
+            )
+            if cur_inc.primary_system_name is None:
+                cur_inc.primary_system_name = payload["primary_system_name"]
+                cur_inc.primary_region_id = (
+                    int(payload["primary_region_id"]) if payload["primary_region_id"] else None
+                )
+        else:  # timeline
+            cur_inc.signal_types.add(str(payload["timeline_type"]))
+            cur_inc.timeline_event_ids.append(int(payload["id"]))
+            cur_inc.timeline_quality_max = _max_quality(
+                cur_inc.timeline_quality_max, str(payload["quality"])
+            )
+            if cur_inc.primary_system_name is None and payload["solar_system_name"]:
+                cur_inc.primary_system_name = payload["solar_system_name"]
+                cur_inc.primary_region_id = (
+                    int(payload["region_id"]) if payload["region_id"] else None
+                )
+    closed.extend(active.values())
+
+    # Persist + link to battles in one pass.
+    written = 0
+    linked = 0
+    for inc in closed:
+        if not inc.signal_types:
+            continue
+        incident_type = _classify_incident_type(inc.signal_types)
+        severity = _classify_severity(inc)
+        confidence = _classify_confidence(inc)
+        battle_id, theater_id = _link_battle(conn, inc) if inc.primary_system_id else (None, None)
+        if battle_id is not None:
+            linked += 1
+        evidence = {
+            "signal_types": sorted(inc.signal_types),
+            "hostile_cluster_ids": inc.cluster_ids,
+            "timeline_event_ids": inc.timeline_event_ids,
+            "max_hostile_cluster_quality": inc.hostile_cluster_quality_max,
+            "max_timeline_quality": inc.timeline_quality_max,
+        }
+        summary = _build_summary(inc, incident_type, severity)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO operational_incidents
+                  (viewer_bloc_id, incident_type, start_at, end_at,
+                   primary_system_id, primary_system_name, primary_region_id,
+                   battle_id, theater_id, severity, confidence,
+                   participant_estimate, signal_types_json,
+                   hostile_cluster_ids_json, timeline_event_ids_json,
+                   timeline_summary, evidence_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    end_at = VALUES(end_at),
+                    incident_type = VALUES(incident_type),
+                    primary_system_name = VALUES(primary_system_name),
+                    primary_region_id = VALUES(primary_region_id),
+                    battle_id = VALUES(battle_id),
+                    theater_id = VALUES(theater_id),
+                    severity = VALUES(severity),
+                    confidence = VALUES(confidence),
+                    participant_estimate = VALUES(participant_estimate),
+                    signal_types_json = VALUES(signal_types_json),
+                    hostile_cluster_ids_json = VALUES(hostile_cluster_ids_json),
+                    timeline_event_ids_json = VALUES(timeline_event_ids_json),
+                    timeline_summary = VALUES(timeline_summary),
+                    evidence_json = VALUES(evidence_json),
+                    updated_at = NOW()
+                """,
+                (
+                    viewer_bloc_id, incident_type, inc.start_at, inc.end_at,
+                    inc.primary_system_id, inc.primary_system_name, inc.primary_region_id,
+                    battle_id, theater_id, severity, confidence,
+                    inc.character_count or None,
+                    json.dumps(sorted(inc.signal_types)),
+                    json.dumps(inc.cluster_ids),
+                    json.dumps(inc.timeline_event_ids),
+                    summary,
+                    json.dumps(evidence, default=str),
+                ),
+            )
+        written += 1
+    conn.commit()
+    log.info("phase4.3B incidents done", {"incidents_written": written, "battle_linked": linked})
+    return {"incidents_written": written, "battle_linked": linked}
+
+
+def _classify_incident_type(signal_types: set[str]) -> str:
+    """Map signal-type set → incident_type enum."""
+    s = signal_types
+    if "fleet_formup" in s and ("hostile_cluster" in s or "combat_spike" in s or "escalation" in s):
+        return "fleet_op"
+    if "escalation" in s:
+        return "engagement"
+    if "hostile_cluster" in s and ("combat_spike" in s or "disengagement" in s):
+        return "engagement"
+    if "hostile_cluster" in s:
+        return "hostile_contact"
+    if "combat_spike" in s:
+        return "combat"
+    if "disengagement" in s:
+        return "disengagement"
+    if "fleet_formup" in s:
+        return "fleet_op"
+    if s == {"crash_symptom"} or s == {"unknown"}:
+        return "telemetry_gap"
+    return "mixed"
+
+
+def _classify_severity(inc: _IncidentAcc) -> str:
+    """Phase 4.3E severity tier. Higher tier wins."""
+    s = inc.signal_types
+    has_hostile = "hostile_cluster" in s
+    has_combat = "combat_spike" in s or "escalation" in s
+    has_disengage = "disengagement" in s
+    has_formup = "fleet_formup" in s
+    n_signals = len(s)
+
+    if inc.reporter_count >= 10 and inc.character_count >= 10:
+        return "coalition_level"
+    if has_hostile and has_combat and has_disengage:
+        return "escalation"
+    if n_signals >= 3 and inc.hostile_cluster_quality_max in ("strong", "strategic"):
+        return "strategic"
+    if n_signals >= 2:
+        return "tactical"
+    return "noise"
+
+
+def _classify_confidence(inc: _IncidentAcc) -> str:
+    if inc.reporter_count >= 5 or len(inc.cluster_ids) >= 3:
+        return "high"
+    if inc.reporter_count >= 3 or len(inc.cluster_ids) >= 2:
+        return "medium"
+    if inc.reporter_count >= 2 or len(inc.signal_types) >= 2:
+        return "low"
+    return "insufficient"
+
+
+def _build_summary(inc: _IncidentAcc, incident_type: str, severity: str) -> str:
+    sys_part = inc.primary_system_name or "unknown system"
+    duration = max(1, int((inc.end_at - inc.start_at).total_seconds()) // 60)
+    parts = sorted(inc.signal_types)
+    return f"{incident_type.replace('_', ' ')} in {sys_part}, {duration}m, signals: {', '.join(parts)}, severity={severity}, reporters={inc.reporter_count}, named={inc.character_count}"[:500]
+
+
+def run_system_activity(
+    conn: pymysql.connections.Connection,
+    cfg: Config,
+    viewer_bloc_id: int,
+    since_dt: datetime,
+) -> dict:
+    """Phase 4.3D — daily per-system rollup. Combines hostile clusters,
+    timeline events, and incidents into one row per (system, day).
+
+    Reliability-weighted reports: each hostile_report contribution is
+    weighted by the reporter's intel_reliability_profiles.reliability_score
+    (default 0.25 when missing). Strong-reliability reporters dominate
+    the heatmap, low-reliability noise gets damped.
+    """
+    log.info("phase4.3D system activity starting", {"viewer_bloc_id": viewer_bloc_id, "since": since_dt.isoformat()})
+
+    # Load reliability scores in one shot.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT character_name, MAX(reliability_score) AS score
+              FROM intel_reliability_profiles
+             WHERE viewer_bloc_id = %s
+             GROUP BY character_name
+            """,
+            (viewer_bloc_id,),
+        )
+        rel_score = {r["character_name"]: float(r["score"] or 0.25) for r in cur.fetchall()}
+
+    # Per-day per-system buckets.
+    per_day: dict[tuple[int, str], dict] = defaultdict(lambda: {
+        "name": None, "region_id": None,
+        "hostile_report": 0, "hostile_cluster": 0,
+        "escalation": 0, "combat_spike": 0,
+        "fleet_formup": 0, "disengagement": 0,
+        "self_destruct_wave": 0,
+        "incident_count": 0, "incident_max_sev": None,
+        "reporters": set(),
+        "weighted": 0.0,
+    })
+
+    # Hostile clusters → counts + reporter set + weighted reports.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT primary_system_id, primary_system_name, primary_region_id,
+                   DATE(start_at) AS d, reporter_count, report_count,
+                   evidence_json
+              FROM operational_hostile_clusters
+             WHERE viewer_bloc_id = %s AND start_at >= %s
+            """,
+            (viewer_bloc_id, since_dt),
+        )
+        for r in cur.fetchall():
+            sid = r["primary_system_id"]
+            if sid is None:
+                continue
+            sid = int(sid)
+            day = r["d"]
+            key = (sid, day.isoformat())
+            b = per_day[key]
+            b["name"] = r["primary_system_name"]
+            b["region_id"] = int(r["primary_region_id"]) if r["primary_region_id"] else None
+            b["hostile_cluster"] += 1
+            b["hostile_report"] += int(r["report_count"])
+            # Weighted reports: assume average 0.25 reliability for
+            # cluster (per-event weighting needs join to reporters,
+            # heavy; this approximation is fine for the heatmap).
+            b["weighted"] += float(r["report_count"]) * 0.25
+
+    # Reliability-weighted reports — re-pass on raw intel events to
+    # accumulate per-reporter scores. Bound to systems we already
+    # have buckets for.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT e.actor_name, sys.resolved_entity_id AS sys_id,
+                   DATE(e.event_timestamp) AS d
+              FROM eve_log_events e
+              JOIN eve_log_entity_resolutions sys
+                ON sys.eve_log_event_id = e.id
+               AND sys.resolved_entity_type = 'system'
+             WHERE e.event_type = 'intel_report'
+               AND e.event_timestamp >= %s
+               AND e.actor_name IS NOT NULL
+            """,
+            (since_dt,),
+        )
+        for r in cur.fetchall():
+            sid = int(r["sys_id"])
+            day = r["d"].isoformat()
+            key = (sid, day)
+            b = per_day.get(key)
+            if b is None:
+                continue
+            b["reporters"].add(r["actor_name"])
+            # Override the cluster-derived weight with per-reporter
+            # reliability. We add (score - 0.25 default) to avoid
+            # double-counting; net effect is each reporter contributes
+            # their actual reliability.
+            b["weighted"] += rel_score.get(r["actor_name"], 0.25) - 0.25
+
+    # Timeline events → per-type counts. Skip hostile_report (counted
+    # via clusters above).
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT solar_system_id, region_id, DATE(event_timestamp) AS d,
+                   timeline_type
+              FROM operational_timeline_events
+             WHERE viewer_bloc_id = %s
+               AND event_timestamp >= %s
+               AND solar_system_id IS NOT NULL
+               AND timeline_type != 'hostile_report'
+            """,
+            (viewer_bloc_id, since_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["solar_system_id"])
+            day = r["d"].isoformat()
+            key = (sid, day)
+            b = per_day[key]
+            if b["region_id"] is None and r["region_id"] is not None:
+                b["region_id"] = int(r["region_id"])
+            tt = str(r["timeline_type"])
+            if tt in b:
+                b[tt] += 1
+
+    # Incidents → max severity + count.
+    severity_order = ["noise", "tactical", "strategic", "escalation", "coalition_level"]
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT primary_system_id, DATE(start_at) AS d, severity
+              FROM operational_incidents
+             WHERE viewer_bloc_id = %s
+               AND start_at >= %s
+               AND primary_system_id IS NOT NULL
+            """,
+            (viewer_bloc_id, since_dt),
+        )
+        for r in cur.fetchall():
+            sid = int(r["primary_system_id"])
+            day = r["d"].isoformat()
+            key = (sid, day)
+            b = per_day[key]
+            b["incident_count"] += 1
+            sev = str(r["severity"])
+            cur_max = b["incident_max_sev"]
+            if cur_max is None or severity_order.index(sev) > severity_order.index(cur_max):
+                b["incident_max_sev"] = sev
+
+    # Persist.
+    written = 0
+    for (sid, day_iso), b in per_day.items():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO system_operational_activity
+                  (viewer_bloc_id, solar_system_id, solar_system_name, region_id,
+                   activity_date,
+                   hostile_report_count, hostile_cluster_count, escalation_count,
+                   combat_spike_count, fleet_formup_count, disengagement_count,
+                   self_destruct_wave_count, incident_count, incident_max_severity,
+                   distinct_reporters, reliability_weighted_reports)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    solar_system_name = VALUES(solar_system_name),
+                    region_id = VALUES(region_id),
+                    hostile_report_count = VALUES(hostile_report_count),
+                    hostile_cluster_count = VALUES(hostile_cluster_count),
+                    escalation_count = VALUES(escalation_count),
+                    combat_spike_count = VALUES(combat_spike_count),
+                    fleet_formup_count = VALUES(fleet_formup_count),
+                    disengagement_count = VALUES(disengagement_count),
+                    self_destruct_wave_count = VALUES(self_destruct_wave_count),
+                    incident_count = VALUES(incident_count),
+                    incident_max_severity = VALUES(incident_max_severity),
+                    distinct_reporters = VALUES(distinct_reporters),
+                    reliability_weighted_reports = VALUES(reliability_weighted_reports),
+                    computed_at = NOW()
+                """,
+                (
+                    viewer_bloc_id, sid, b["name"], b["region_id"],
+                    day_iso,
+                    b["hostile_report"], b["hostile_cluster"], b["escalation"],
+                    b["combat_spike"], b["fleet_formup"], b["disengagement"],
+                    b["self_destruct_wave"], b["incident_count"], b["incident_max_sev"],
+                    len(b["reporters"]), round(max(0.0, b["weighted"]), 3),
+                ),
+            )
+        written += 1
+    conn.commit()
+    log.info("phase4.3D system activity done", {"rows_written": written})
+    return {"rows_written": written}
+
+
+def _link_battle(
+    conn: pymysql.connections.Connection,
+    inc: _IncidentAcc,
+) -> tuple[int | None, int | None]:
+    """Find a battle_theater that overlaps this incident's primary
+    system + time window. Returns (battle_id, theater_id) — for now
+    they're the same value since battle_theaters.id IS the battle id
+    in this codebase. Confidence-weighted: only link when the theater
+    actually overlaps in time (theater.end_time within ± 15min of
+    incident window)."""
+    if inc.primary_system_id is None:
+        return (None, None)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT bt.id
+              FROM battle_theaters bt
+              JOIN battle_theater_systems bts ON bts.theater_id = bt.id
+             WHERE bts.solar_system_id = %s
+               AND bt.end_time >= %s
+               AND bt.start_time <= %s
+             ORDER BY ABS(TIMESTAMPDIFF(SECOND, bt.start_time, %s)) ASC
+             LIMIT 1
+            """,
+            (
+                inc.primary_system_id,
+                inc.start_at - timedelta(minutes=15),
+                inc.end_at + timedelta(minutes=15),
+                inc.start_at,
+            ),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return (None, None)
+    bid = int(row["id"])
+    return (bid, bid)
