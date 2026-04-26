@@ -482,6 +482,14 @@ ci-phase2-baseline:
 ci-phase2-cohort-features:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-cohort-features $(CI_ARGS)
 
+# Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
+# Worker Service) using the dotnet/sdk:8.0 container. Produces a
+# single-file self-contained .exe in
+#   windows-uploader/publish/win-x64/AegisCore.EveLogUploader.exe
+# No local dotnet install required.
+windows-uploader:
+	@bash windows-uploader/build.sh
+
 # Bloc Intelligence — alliance-pair behavior extractor (viewer-agnostic).
 # Args: BI_ARGS="--window-end=2026-04-18"
 bloc-intel-extract:

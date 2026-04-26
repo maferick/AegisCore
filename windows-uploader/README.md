@@ -22,15 +22,35 @@ the AegisCore Laravel ingest endpoint.
 - No automatic punitive action — the upstream Counter-Intel surface
   is advisory.
 
-## Install (manual, dev workflow)
+## Build the Windows .exe
 
-1. Build:
+Two options:
 
-   ```
-   dotnet publish AegisCore.EveLogUploader -c Release -r win-x64
-   ```
+**Option A — cross-compile from Linux/macOS via Docker** (no local
+.NET install needed):
 
-2. Issue an API token on the server:
+```
+bash windows-uploader/build.sh
+```
+
+Uses `mcr.microsoft.com/dotnet/sdk:8.0`. Produces a single-file
+self-contained `windows-uploader/publish/win-x64/AegisCore.EveLogUploader.exe`
+(~67MB, no .NET runtime required on the target machine).
+
+**Option B — Windows host with .NET 8 SDK installed**:
+
+```
+dotnet publish windows-uploader/AegisCore.EveLogUploader -c Release -r win-x64 ^
+    --self-contained true -p:PublishSingleFile=true
+```
+
+## Install (operator workflow)
+
+1. Build (above) and copy the .exe to the target machine, e.g.
+   `C:\Program Files\AegisCore\AegisCore.EveLogUploader.exe`.
+
+2. Issue an API token on the server (do this on the Linux host
+   running AegisCore):
 
    ```
    docker compose exec php-fpm php artisan eve-log-ingest:issue-token \
@@ -62,12 +82,21 @@ the AegisCore Laravel ingest endpoint.
    AegisCore.EveLogUploader.exe
    ```
 
-   …or install as a service:
+   …or install as a service (run an elevated cmd.exe / PowerShell):
 
+   ```cmd
+   sc.exe create "AegisCoreEveLogUploader" ^
+       binPath= "C:\Program Files\AegisCore\AegisCore.EveLogUploader.exe" ^
+       start= auto ^
+       DisplayName= "AegisCore EVE Log Uploader"
+   sc.exe start "AegisCoreEveLogUploader"
    ```
-   sc.exe create "AegisCore EVE Log Uploader" \
-       binPath="C:\path\to\AegisCore.EveLogUploader.exe" start=auto
-   sc.exe start "AegisCore EVE Log Uploader"
+
+   Stop / uninstall:
+
+   ```cmd
+   sc.exe stop "AegisCoreEveLogUploader"
+   sc.exe delete "AegisCoreEveLogUploader"
    ```
 
 ## State
