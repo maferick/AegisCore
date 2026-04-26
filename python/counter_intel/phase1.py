@@ -241,14 +241,24 @@ def _dormancy_signals(conn: pymysql.connections.Connection, character_id: int) -
 
 
 def _corp_tenure_signals(conn: pymysql.connections.Connection, character_id: int) -> dict:
-    """Compute distinct corp tenure durations and report (min, stdev).
-    Spec §3.1: corp-hopping cadence is most damning when each step is a
-    similar duration — stdev catches that, min catches the suspicious
-    short-stay alt corp pattern."""
+    """Compute distinct corp tenure durations and report (min, stdev,
+    short_count). Spec §3.1: corp-hopping cadence is most damning when
+    each step is a similar duration. Stdev catches regular cadence,
+    min catches very short stays.
+
+    `short_count` = distinct memberships with tenure 1-30 days. The
+    1-day floor is critical: ESI returns back-to-back rows with
+    start_date == end_date for the same corp on many pilots, which
+    inflates a naive min/short metric. Excluding zero-day rows isolates
+    the *real* short-stay artefact from the artefact-of-the-artefact.
+
+    `corp_tenure_min_days` retains the raw min including 0-day rows so
+    the diagnostic doc / calibration spec can still see the artefact
+    rate; only the short_count and stdev are noise-corrected."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT start_date, COALESCE(end_date, NOW()) AS end_dt
+            SELECT corporation_id, start_date, COALESCE(end_date, NOW()) AS end_dt
               FROM character_corporation_history
              WHERE character_id = %s AND is_deleted = 0
              ORDER BY start_date
@@ -257,11 +267,37 @@ def _corp_tenure_signals(conn: pymysql.connections.Connection, character_id: int
         )
         rows = cur.fetchall()
     if not rows:
-        return {"corp_tenure_min_days": None, "corp_tenure_stdev_days": None}
-    durations = [max(int(((r["end_dt"] - r["start_date"]).total_seconds()) / 86400), 0) for r in rows]
-    out = {"corp_tenure_min_days": min(durations) if durations else None}
-    if len(durations) >= 2:
-        out["corp_tenure_stdev_days"] = round(statistics.pstdev(durations), 2)
+        return {
+            "corp_tenure_min_days": None,
+            "corp_tenure_stdev_days": None,
+            "corp_tenure_short_count": None,
+        }
+    # Collapse consecutive identical corp_id rows. ESI sometimes splits
+    # a single membership across multiple history rows when the corp
+    # changed alliance — those are not "leaving and rejoining" so
+    # they should not count as a churn event.
+    collapsed: list[tuple[datetime, datetime]] = []
+    last_corp = None
+    for r in rows:
+        cid = int(r["corporation_id"])
+        start_dt = r["start_date"]
+        end_dt = r["end_dt"]
+        if cid == last_corp and collapsed:
+            prev_start, _prev_end = collapsed[-1]
+            collapsed[-1] = (prev_start, end_dt)
+        else:
+            collapsed.append((start_dt, end_dt))
+            last_corp = cid
+
+    durations = [max(int(((end_dt - start_dt).total_seconds()) / 86400), 0) for start_dt, end_dt in collapsed]
+    short_count = sum(1 for d in durations if 1 <= d <= 30)
+    nonzero = [d for d in durations if d > 0]
+    out: dict = {
+        "corp_tenure_min_days": min(durations) if durations else None,
+        "corp_tenure_short_count": short_count,
+    }
+    if len(nonzero) >= 2:
+        out["corp_tenure_stdev_days"] = round(statistics.pstdev(nonzero), 2)
     else:
         out["corp_tenure_stdev_days"] = None
     return out
@@ -380,6 +416,7 @@ def _persist_bloc_agnostic(
                    dormancy_days_to_corp_change = %s,
                    corp_tenure_min_days = %s,
                    corp_tenure_stdev_days = %s,
+                   corp_tenure_short_count = %s,
                    small_gang_loss_count = %s,
                    solo_loss_count = %s,
                    pod_loss_count = %s,
@@ -395,6 +432,7 @@ def _persist_bloc_agnostic(
                 s.get("dormancy_days_to_corp_change"),
                 s.get("corp_tenure_min_days"),
                 s.get("corp_tenure_stdev_days"),
+                s.get("corp_tenure_short_count"),
                 s.get("small_gang_loss_count") or 0,
                 s.get("solo_loss_count") or 0,
                 s.get("pod_loss_count") or 0,

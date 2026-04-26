@@ -27,6 +27,15 @@ final class CounterIntelDossierService
     private const CACHE_TTL_SECONDS = 600;
 
     /**
+     * UI-side warning shown above the Phase 1 signal list. The
+     * thresholds in this service have not yet been calibrated against
+     * the ci_character_ground_truth label set, so directors must read
+     * Phase 1 output as a triage hint rather than a settled finding.
+     * Removed once the calibration spec lands.
+     */
+    private const PHASE1_CAVEAT = 'Early signal model — review aid only, thresholds under calibration.';
+
+    /**
      * @return array<string, mixed>
      */
     public function dossier(int $characterId, int $viewerBlocId): array
@@ -136,6 +145,7 @@ final class CounterIntelDossierService
                 'note_count' => 0,
                 'band' => 'insufficient_history',
                 'evidence_summary' => 'Phase 1 signals deferred until pilot has enough activity history.',
+                'caveat' => self::PHASE1_CAVEAT,
             ];
         }
 
@@ -164,18 +174,34 @@ final class CounterIntelDossierService
             }
         }
 
-        // §3.1 Corp-hopping cadence — short tenures + low stdev (regular intervals).
-        $minTen = $feature->corp_tenure_min_days !== null ? (int) $feature->corp_tenure_min_days : null;
+        // §3.1 Corp-hopping cadence — defaulted to NOTE in stabilization
+        // pass after the first run flagged 47% of population. The flag
+        // promotion is held back until Phase 2 calibration normalises
+        // against per-alliance churn baselines.
+        //
+        // Stabilization rule: corp_hopping graduates from note to flag
+        // only when ALL three are true:
+        //   - short_count >= 3 (real <=30d stays after ESI noise filter)
+        //   - distinct_corps_all_time >= 6
+        //   - at least one OTHER signal already fires
+        // The "co-fire" gate is checked in a second pass below.
+        $shortCount = $feature->corp_tenure_short_count !== null
+            ? (int) $feature->corp_tenure_short_count
+            : null;
         $stdev = $feature->corp_tenure_stdev_days !== null ? (float) $feature->corp_tenure_stdev_days : null;
         $distinctCorps = (int) ($feature->distinct_corps_all_time ?? 0);
-        if ($minTen !== null && $minTen <= 30 && $distinctCorps >= 4) {
+        $corpHoppingNoteIdx = null;
+        $corpHoppingPromotable = false;
+        if ($shortCount !== null && $shortCount >= 3 && $distinctCorps >= 6) {
+            $stdevText = $stdev !== null ? sprintf(' (stdev %.0fd)', $stdev) : '';
             $signals[] = [
                 'key' => 'corp_hopping',
-                'severity' => 'flag',
-                'text' => "Corp-hop cadence: {$distinctCorps} corps lifetime, shortest tenure {$minTen} day(s)"
-                    . ($stdev !== null ? sprintf(' (stdev %.0fd).', $stdev) : '.'),
+                'severity' => 'note',
+                'text' => "Corp-hop cadence: {$distinctCorps} corps lifetime, {$shortCount} short stays (1–30d){$stdevText}.",
             ];
-        } elseif ($distinctCorps >= 6) {
+            $corpHoppingNoteIdx = array_key_last($signals);
+            $corpHoppingPromotable = true;
+        } elseif ($distinctCorps >= 8) {
             $signals[] = [
                 'key' => 'corp_hopping',
                 'severity' => 'note',
@@ -297,6 +323,21 @@ final class CounterIntelDossierService
             }
         }
 
+        // Co-fire promotion: corp_hopping only graduates to a flag
+        // when at least one independent signal is already firing as a
+        // flag. Stops director-facing trust decisions from triggering
+        // on a single-corp-history signal that is still under
+        // calibration.
+        $otherFlagFires = 0;
+        foreach ($signals as $idx => $s) {
+            if ($idx === $corpHoppingNoteIdx) continue;
+            if (($s['severity'] ?? 'note') === 'flag') $otherFlagFires++;
+        }
+        if ($corpHoppingPromotable && $corpHoppingNoteIdx !== null && $otherFlagFires >= 1) {
+            $signals[$corpHoppingNoteIdx]['severity'] = 'flag';
+            $signals[$corpHoppingNoteIdx]['text'] .= ' Promoted to flag because another Phase 1 signal is also firing.';
+        }
+
         $flagCount = 0;
         $noteCount = 0;
         foreach ($signals as $s) {
@@ -324,6 +365,7 @@ final class CounterIntelDossierService
             'note_count' => $noteCount,
             'band' => $band,
             'evidence_summary' => $summary,
+            'caveat' => self::PHASE1_CAVEAT,
         ];
     }
 

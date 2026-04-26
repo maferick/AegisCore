@@ -500,6 +500,13 @@
                         </span>
                     </div>
 
+                    @if (! empty($p1['caveat']))
+                        <div style="background:rgba(234,179,8,0.06); border:1px solid rgba(234,179,8,0.25); border-radius:6px; padding:0.5rem 0.75rem; margin-bottom:0.6rem; color:#fde68a; font-size:0.72rem; display:flex; gap:0.4rem; align-items:flex-start;">
+                            <span style="font-size:0.85rem; line-height:1;" aria-hidden="true">⚠</span>
+                            <span style="line-height:1.3;">{{ $p1['caveat'] }}</span>
+                        </div>
+                    @endif
+
                     @if (! empty($p1['evidence_summary']))
                         <div style="background:{{ $bgLight }}; border:1px solid {{ $border }}; border-radius:6px; padding:0.7rem 0.9rem; margin-bottom:0.75rem; color:{{ $fg }}; font-size:0.82rem;">
                             {{ $p1['evidence_summary'] }}
