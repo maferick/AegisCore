@@ -317,6 +317,30 @@ class EveLogIngestController extends Controller
                             DB::table('eve_log_parse_errors')->insert($batch);
                         }
                     }
+                    // Register dscan.info URLs seen in this chunk into
+                    // the snapshots table. Async fetch is handled by
+                    // eve-log:fetch-dscan; we just upsert the row +
+                    // bump mention_count here so the queue keeps a
+                    // record of every distinct snapshot.
+                    foreach ($rows as $row) {
+                        if (empty($row['external_dscan_url'])) continue;
+                        $pj = is_string($row['parsed_json']) ? json_decode($row['parsed_json'], true) : null;
+                        $sid = is_array($pj) ? ($pj['dscan_id'] ?? null) : null;
+                        if (! $sid) continue;
+                        DB::statement(
+                            'INSERT INTO eve_log_dscan_snapshots
+                               (snapshot_id, url, fetch_status, mention_count, first_seen_at, last_seen_at)
+                             VALUES (?, ?, "pending", 1, ?, ?)
+                             ON DUPLICATE KEY UPDATE
+                               mention_count = mention_count + 1,
+                               last_seen_at = VALUES(last_seen_at)',
+                            [
+                                mb_substr((string) $sid, 0, 64),
+                                mb_substr((string) $row['external_dscan_url'], 0, 255),
+                                $now, $now,
+                            ],
+                        );
+                    }
                     // Resolve entities (system codes + character /
                     // corp / alliance names) for chat-class events.
                     // Chunk-by-chunk since the unique key (event_id,

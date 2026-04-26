@@ -551,6 +551,16 @@ eve-log-retry-parse-errors:
 eve-log-reparse-events:
 	$(COMPOSE) exec -T php-fpm php artisan eve-log:reparse-events $(ELOG_REPARSE_ARGS)
 
+# Backfill dscan.info URLs from existing events into the snapshot
+# registry. One-shot — new ingest writes to the registry directly.
+eve-log-dscan-backfill:
+	$(COMPOSE) exec -T php-fpm php artisan eve-log:dscan-backfill
+
+# Fetch + parse pending dscan snapshots, rate-limited.
+# Args: ELOG_DSCAN_ARGS="--limit=50 --rate-per-min=6"
+eve-log-fetch-dscan:
+	$(COMPOSE) exec -T php-fpm php artisan eve-log:fetch-dscan $(ELOG_DSCAN_ARGS)
+
 # Same as windows-uploader — builds the .exe and bundles the
 # portable .zip with member README + install/uninstall scripts.
 # Output:
