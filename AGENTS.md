@@ -131,11 +131,12 @@ and `ref_*` table convention.
 - Other 3 pillars are stubs only
 
 ## V1 closure (current phase)
+- **Freeze posture (read first)**: [`docs/V1_FREEZE.md`](docs/V1_FREEZE.md)
 - Burn-down: [`docs/V1_COMPLETION_CHECKLIST.md`](docs/V1_COMPLETION_CHECKLIST.md)
 - Operator runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
 - Retention TTL ladder: [`docs/RETENTION.md`](docs/RETENTION.md)
 - Storage audit: [`verification/storage/db_storage_audit.md`](verification/storage/db_storage_audit.md)
-- Calibration policy: [`docs/adr/0011-v1-calibration-policy.md`](docs/adr/0011-v1-calibration-policy.md)
+- Calibration governance: [`docs/adr/0011-v1-calibration-policy.md`](docs/adr/0011-v1-calibration-policy.md) + [`verification/calibration/SCHEMA.md`](verification/calibration/SCHEMA.md)
 - Market_orders partitioning (v2 execution): [`docs/ADR-market-orders-partitioning.md`](docs/ADR-market-orders-partitioning.md)
 - Live platform-health: `/portal/intelligence/platform-health`
 

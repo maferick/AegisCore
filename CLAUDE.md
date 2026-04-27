@@ -82,7 +82,7 @@ Pre-approved defaults — apply without asking:
 
 ## V1 closure status
 
-Platform is in **v1 freeze**. No new intelligence capabilities. Burn down [`docs/V1_COMPLETION_CHECKLIST.md`](docs/V1_COMPLETION_CHECKLIST.md) gates only.
+Platform is in **v1 freeze + operational watch mode**. Posture rules in [`docs/V1_FREEZE.md`](docs/V1_FREEZE.md). Burn-down in [`docs/V1_COMPLETION_CHECKLIST.md`](docs/V1_COMPLETION_CHECKLIST.md). Calibration governance in [`docs/adr/0011-v1-calibration-policy.md`](docs/adr/0011-v1-calibration-policy.md). Forbidden during freeze: new intelligence surfaces, predictive features, recommendations, autonomous tuning, anything that puts humans in the calibration loop as the calibrated entity.
 
 - **Hardening surfaces shipped**: governance (Phase 4.8), freshness (4.9), orchestration + quality guards (4.9A/E), retry+circuit (4.9D), retention (4.9C), audit log (§11), single-source TTL (§13), calibration policy (§14).
 - **Operator entry points**: [`docs/RUNBOOK.md`](docs/RUNBOOK.md) (incident recipes), [`docs/RETENTION.md`](docs/RETENTION.md) (TTL ladder), [`/portal/intelligence/platform-health`](http://localhost/portal/intelligence/platform-health) (live state).

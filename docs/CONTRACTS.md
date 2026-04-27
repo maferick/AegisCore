@@ -162,6 +162,8 @@ both planes:
 
 ## V1 closure references
 
+- [`docs/V1_FREEZE.md`](V1_FREEZE.md) — operational watch-mode
+  posture: allowed work, forbidden work, exit criteria.
 - [`docs/V1_COMPLETION_CHECKLIST.md`](V1_COMPLETION_CHECKLIST.md)
   — burn-down across 16 sections; contracts close against the gates
   in each section.

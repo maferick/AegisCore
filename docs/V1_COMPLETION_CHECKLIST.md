@@ -254,17 +254,25 @@ considered closed for v1.
 
 ## 14. Calibration
 
-- ☑ ADR 0011 — v1 calibration policy: what gets calibrated,
-  how (capture → analyse → propose → adopt), when (one-off
-  on analyst complaint, quarterly sweep, major data shifts),
-  authority + audit (no autonomous calibration; recalibration
-  commits include verification/calibration/<date>_<reason>.md)
+- ☑ ADR 0011 — v1 calibration **governance** (refined
+  2026-04-27): 6 binding rules — what's calibration-eligible,
+  baseline corpus structure, promotion / demotion rules
+  (multi-step + symmetric review), quarterly process (capture
+  → analyse → propose → review → adopt → re-snapshot),
+  feedback-to-threshold workflow (≥10 noisy or ≥30%
+  suppression for demotion candidate; ≥5 useful + 30d
+  follow-on for promotion), guardrail Rule 6: no automatic
+  punitive action against analysts.
 - ☑ baseline snapshot 2026-04-27:
   `verification/calibration/baseline_2026_04_27.json`
-  captures bloc-1 incident/cluster/corridor counts, doctrine
-  match rate, alert distribution, trust scores at snapshot
-  time, all detector thresholds active. Future recalibrations
-  diff against this.
+  captures bloc-1 metrics + thresholds active + corpus state.
+- ☑ corpus schema: `verification/calibration/SCHEMA.md`
+  defining baseline JSON shape, detector → param mapping,
+  diffing rules (green / yellow / red drift bands).
+- ☑ calibration_proposals table — append-only audit trail for
+  every threshold change. Status: proposed / reviewed /
+  adopted / rejected / superseded. Two-operator sign-off
+  recorded inline.
 - ☐ collect 200+ analyst feedback events spanning all 7
   instrumented surfaces (gate for trust-weight recalibration)
 - ☐ first quarterly recalibration sweep (90 days post-freeze)

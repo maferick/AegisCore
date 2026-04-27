@@ -1,6 +1,6 @@
-# ADR 0011 — v1 calibration policy
+# ADR 0011 — v1 calibration governance
 
-**Status:** accepted (2026-04-27).
+**Status:** accepted (2026-04-27, refined 2026-04-27).
 
 ## Context
 
@@ -15,156 +15,222 @@ infrastructure. Most threshold values were:
 3. set against documented system limits (e.g.
    `neo4j_thread_pressure` 80% of 16 Bolt slots).
 
-Without a calibration discipline, those values drift away from
-operational meaning as the platform scales and meta shifts.
-**Trust scores stay anchored to 0.50 baseline** until analyst
-feedback flows in. **Severity tiers misclassify** if not
-retuned. **Detectors false-fire or miss** without periodic
-revalidation.
-
-This ADR defines how calibration runs in v1.
+V1 closure is **operational survivability**, not aggressive
+tuning. This ADR defines calibration **governance**: who can
+change what, when, with what evidence, with what audit trail.
+The guiding principle: **a wrong threshold is recoverable;
+analyst trust loss from a bad auto-tune is not.**
 
 ## Decision
 
-### What gets calibrated
+Calibration is a **governed, manual, auditable** process. There
+is no autonomous threshold tuning in v1. Six rules below are
+binding.
+
+### Rule 1 — what gets calibrated
+
+Six surfaces are calibration-eligible:
 
 1. **Detector severity thresholds** in
-   `python/counter_intel/phase49e_quality_guards.py`:
-   - `incident_explosion` (ratio gates + abs floor)
-   - `corridor_explosion`
-   - `doctrine_mismatch_explosion`
-   - `current_parser_drift`
-   - `unknown_event_spike`
-   - `impossible_fleet_size`
-   - `duplicate_narrative_loop`
-   - `stale_compute_chain`
-   - `neo4j_thread_pressure`
-   - `circuit_open`
+   `python/counter_intel/phase49e_quality_guards.py` —
+   `incident_explosion`, `corridor_explosion`,
+   `doctrine_mismatch_explosion`, `current_parser_drift`,
+   `unknown_event_spike`, `impossible_fleet_size`,
+   `duplicate_narrative_loop`, `stale_compute_chain`,
+   `neo4j_thread_pressure`, `circuit_open`.
 2. **Operational style classifier** in
-   `phase4_coalition._classify_operational_style`. Currently
-   biases toward `defensive` when feedback signals are sparse;
-   needs recalibration once April composition data thickens.
+   `phase4_coalition._classify_operational_style`.
 3. **Trust score weights** in
-   `phase4_governance.run_trust_metrics` — currently
-   `0.6×useful_rate + 0.3×(1−fp_rate) + 0.1×(1−suppression_rate)`.
-   Baseline is 0.50 with no feedback; once 200+ events exist,
-   verify the score actually deviates and recalibrate weights
-   if surface-tier separation is poor.
-4. **Confidence cutoffs** on incident severity classification
-   (`_classify_severity`), digest section confidence
-   (`_section_confidence`), and narrative confidence in
-   `phase4_governance.run_enrich_narrative_sources`.
-5. **Freshness TTL ladder** in `intel_ttl.json`. Currently
-   one-size-fits-bloc-1; recalibrate per-surface if FC
-   feedback says freshness pills mislead during ops.
+   `phase4_governance.run_trust_metrics`.
+4. **Confidence cutoffs** on incident severity,
+   digest section confidence, narrative confidence.
+5. **Freshness TTL ladder** in
+   `app/config/intel_ttl.json` ⇄ `python/counter_intel/intel_ttl.json`.
+6. **Suppression ratios** in
+   `phase4_governance.run_alert_suppression`.
 
-### How calibration runs
+Any other threshold that materially affects analyst-visible
+output may be added to this list with a calibration commit; not
+without one.
 
-**Step 1 — capture.** Record a baseline snapshot in
-`verification/calibration/baseline_<date>.json`. Captures:
-- per-bloc daily incident / cluster / alert counts (mean, p95, max)
-- doctrine match rate distribution
-- corridor classification distribution
-- severity distribution per bloc
-- alert generation rate by kind / severity
-- analyst feedback corpus size (per-surface, per-kind)
-- trust score values at snapshot time
-- threshold values currently active
+### Rule 2 — baseline corpus structure
 
-**Step 2 — analyse.** Per-detector, compute the empirical
-percentile of the metric the detector watches. Threshold
-proposals come from:
-- p95 of metric over 30 days → warning
-- p98 of metric over 30 days → elevated
-- p99.5 of metric over 30 days → critical
-- abs floor: 80% of empirical mean
+Every calibration cycle starts and ends with a baseline
+snapshot. Schema in `verification/calibration/SCHEMA.md`. Each
+snapshot lives at
+`verification/calibration/baseline_<YYYY_MM_DD>.json` and
+captures:
 
-**Step 3 — propose.** Diff the proposed thresholds against
-current values. Capture in
-`verification/calibration/proposal_<date>.md`. Include:
-- before / after values
-- expected detector fire-rate change
-- list of historical events that would have flipped (over /
-  under the new threshold)
+- per-bloc daily metric distributions (incidents / clusters /
+  alerts / new corridors / force compositions)
+- detector fire-rate distribution per surface per severity
+- analyst feedback corpus size + breakdown
+- trust score values
+- threshold values active at snapshot time
 
-**Step 4 — adopt.** Patch the detector code + push a calibration
-commit. Re-snapshot the baseline immediately after.
+The baseline is **frozen at commit time**. Future recalibrations
+diff against the prior snapshot, not against current state.
 
-### When calibration runs
+### Rule 3 — promotion / demotion rules for detector signals
 
-- **One-off:** any time an analyst reports a false-fire or a
-  miss on a quality_event. Walks through Step 1-4 above.
-- **Quarterly:** every 90 days, run a full calibration sweep
-  even if no analyst complaints. Drift accumulates silently.
-- **Major data shifts:** after a new bloc onboards, after a
-  big EVE patch (CCP balance pass), after the platform crosses
-  a 2× change in ingest volume. Recalibrate before the next
-  detector sweep.
+Detectors emit `info / warning / elevated / critical` events.
+Promotion (raising severity) and demotion (lowering severity)
+follow strict rules.
 
-### Eligibility for trust-weight recalibration
+**Promotion rules** — make signal louder:
+- A detector may only promote if **≥ 5 distinct analyst
+  feedback events** of kind `useful` or `strategic` on the
+  surface within the prior 30 days, AND the metric watched by
+  the detector is consistently in the upper percentile of the
+  baseline distribution.
+- Promotion is **never** a one-shot threshold drop.
+  Multi-step: warning → elevated requires 2 prior cycles of
+  warning fires that analysts marked `useful`.
 
-Tighter than detector recalibration. Requires:
+**Demotion rules** — make signal quieter:
+- A detector may demote (raise threshold) when:
+  - **≥ 10 distinct analyst feedback events** of kind `noisy`
+    or `duplicate` on the surface within the prior 30 days, OR
+  - **≥ 30 % suppression rate** on the alerts emitted by the
+    detector, OR
+  - **a single false-critical event reproducibly explained**
+    that pinpoints the threshold as wrong.
+- Demotion takes effect on the next calibration commit, not
+  retroactively.
 
-- **≥ 200 analyst feedback events** captured across **≥ 5
-  distinct surfaces** (alert / digest / narrative / incident /
-  corridor / alliance_profile / threat_surface).
-- **At least one surface trust_score below 0.50** — proves the
-  scoring is doing real work and not just baseline-stuck.
-- **Manual review** of the per-surface useful_rate /
-  false_positive_rate / suppression_rate distribution before
-  weight changes.
+**Symmetry guardrail:** promotion and demotion go through the
+same review process. There is no fast-path for either.
 
-Until that point: trust scores stay at the
-`0.6/0.3/0.1` v1 default.
+### Rule 4 — quarterly calibration process
 
-### Authority + audit
+Every 90 days, on a schedule visible in
+`verification/calibration/CALENDAR.md`, the following sequence
+runs:
 
-- **Recalibration commits** must include a
-  `verification/calibration/<date>_<reason>.md` file explaining:
-  - what changed
-  - why
-  - which baseline / proposal informed the change
-  - what monitoring follows the change
-- **No autonomous calibration.** All threshold changes are
-  human-decided, code-reviewed, code-committed.
-- **All analyst feedback** flows through
-  `intel_feedback_events`, captured at write-time. Recalibration
-  reads from this corpus exclusively — not from operator memory.
+1. **Capture (day 0)** — snapshot the platform state into
+   `baseline_<date>.json`. Use the existing capture queries in
+   `verification/storage/db_storage_audit.md` plus the
+   thresholds-active table from `phase49e_quality_guards`.
+2. **Analyse (day 0–7)** — compute per-detector empirical
+   percentiles. Identify candidates for promotion / demotion
+   per Rule 3.
+3. **Propose (day 7–14)** — draft
+   `verification/calibration/proposal_<date>.md`. Include:
+   before/after values, evidence count per Rule 3, expected
+   fire-rate change.
+4. **Review (day 14–21)** — two operators sign off on the
+   proposal. Sign-off is a checked box in the proposal file
+   plus a separate operator pin via
+   `verified_intelligence_items` (kind=`analyst_note`).
+5. **Adopt (day 21–30)** — patch the detector code or config.
+   Commit message links the proposal + baseline + sign-offs.
+6. **Re-snapshot (day 30)** — new
+   `baseline_<date>.json` post-adoption.
 
-### v1 baseline snapshot
+### Rule 5 — feedback-to-threshold workflow
+
+Analyst feedback flows through `intel_feedback_events` (Phase
+4.8D). The feedback-to-threshold path is:
+
+```
+intel_feedback_events ── (90d, ≥10 noisy on surface) ──▶ demotion candidate
+intel_feedback_events ── (90d, ≥5 useful + 30d follow-on) ──▶ promotion candidate
+```
+
+The path is **never closed automatically**. Each candidate
+becomes a row in `calibration_proposals` (Rule 6) and only
+graduates via the quarterly cycle (Rule 4).
+
+**Trust score weights** are gated tighter than detector
+thresholds:
+
+- **≥ 200 feedback events** captured across **≥ 5 surfaces**
+- **≥ 1 surface trust_score below 0.50** (proves the formula
+  separates surfaces in production, not just at baseline)
+- **manual review** of useful_rate / fp_rate / suppression_rate
+  per surface
+
+Until those three preconditions all hold, trust weights stay
+at the v1 default `0.6×useful + 0.3×(1-fp) + 0.1×(1-suppression)`.
+
+### Rule 6 — guardrail: no automatic punitive action
+
+This rule is the most important. The platform must **never**:
+
+- auto-suppress an analyst's feedback because it diverges from
+  the consensus,
+- auto-downgrade an analyst's verified intelligence item,
+- auto-archive an alert because too many analysts marked it
+  noisy (operator-driven manual archive is fine),
+- auto-recalibrate any threshold based on feedback alone,
+- attribute a "low-quality reporter" rating to any analyst.
+
+Calibration adjusts the platform's own voice. It does not
+adjust the platform's response to any human. **People are
+never the variable being tuned.**
+
+The technical embodiment of this rule:
+
+- `intel_feedback_events` is append-only.
+- `verified_intelligence_items.delete()` requires the
+  creator's user_id OR an admin user_id (audit-logged).
+- No code path reduces an analyst's effective trust based on
+  their feedback content. Reliability scoring exists (Phase
+  4.3 `intel_reliability_profiles`) and is a separate signal
+  on raw intel reports — it does **not** feed the calibration
+  loop.
+- Any future code change that touches the analyst-facing
+  feedback / verified-item / audit pipelines must be reviewed
+  for compliance with this rule. Reviewers reject changes that
+  put humans in the calibration loop as the calibrated entity.
+
+## Storage / audit support
+
+`compute_run_log` already records every calibration recompute
+that runs through `ComputeLog`. Calibration proposals are
+captured in a new lightweight table `calibration_proposals`
+(see migration `2026_04_27_080000_create_calibration_proposals.php`):
+
+```
+calibration_proposals
+  id                BIGINT
+  proposal_date     DATE
+  surface           VARCHAR(60)        -- name of detector / classifier
+  field             VARCHAR(120)       -- specific threshold being moved
+  prior_value       VARCHAR(120)       -- before
+  proposed_value    VARCHAR(120)       -- after
+  evidence_json     TEXT               -- feedback counts, percentiles
+  status            ENUM('proposed','reviewed','adopted','rejected','superseded')
+  reviewer_user_ids TEXT               -- JSON array of user IDs
+  baseline_ref      VARCHAR(120)       -- baseline_<date>.json filename
+  rationale         TEXT
+  decided_at        DATETIME NULL
+  created_at        DATETIME
+```
+
+The table is the immutable record of every calibration
+decision. Drops are append-only (status='superseded' on
+replacement, never DELETE).
+
+## V1 baseline
 
 `verification/calibration/baseline_2026_04_27.json` is the
-v1-freeze reference. Captures bloc-1 metrics + current
-thresholds + feedback corpus state (1 event — see "future
-calibrations need real corpus" caveat). Future recalibrations
-diff against this snapshot.
+v1-freeze reference. Future quarterly cycles diff against it.
 
 ## Consequences
 
 **Positive:**
-- Threshold drift becomes detectable, not silent.
-- Trust scores eventually become meaningful (post-corpus).
-- Analyst feedback feeds back into platform behavior in a
-  principled way.
-- Recalibration commits are reviewable and reversible.
+- Calibration drift is detectable, not silent.
+- Analyst trust is structurally protected — Rule 6 is
+  load-bearing.
+- Every threshold change has a paper trail.
 
 **Negative:**
-- Quarterly calibration is operator overhead. v1 accepts this
-  cost; v2 may automate.
-- The `_classify_operational_style` "defensive bias" persists
-  until April composition data thickens. Documented; not fixed
-  in v1.
-- Trust score weights stay at 0.6/0.3/0.1 default until corpus
-  fills. Documented; not fixed in v1.
+- Quarterly cadence is operator overhead.
+- v1 cannot react to a sudden platform-meta shift faster than
+  the 30-day cycle. Acceptable: operational survivability is
+  v1's goal, not operational reactiveness.
 
-## Compliance
-
-This ADR is compatible with:
-- ADR 0009 (Phase 4 operational event intelligence)
-- ADR 0010 (Phase 6 stylometry — deferred to v2)
-- `memory/project_v1_v2_split.md` (v1 = trust infrastructure;
-  predictive ML stays out)
-
-V1 closure §14 gate: this ADR + the 2026-04-27 baseline file
-satisfy the policy requirement. The actual quarterly
-recalibration cadence kicks in 90 days post-freeze.
+**Compliance:** consistent with ADR 0009 (Phase 4), ADR 0010
+(stylometry deferred), `memory/project_v1_v2_split.md`
+(predictive ML stays out of v1).
