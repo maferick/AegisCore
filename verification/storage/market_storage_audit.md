@@ -67,20 +67,21 @@ p2026_05 → p2026_12  : 0 rows each
 p_future             : 0 rows
 ```
 
-**All 960 M rows are in `p2026_04`.** No data exists outside
-the current month — historical retention has been silently
-discarded (or simply never accumulated past the most recent
-poll cycles). Either:
+**All 960 M rows are in `p2026_04`.** Confirmed time range:
+`MIN(observed_at) = 2026-04-16 21:14`, `MAX = 2026-04-27 06:10`.
+**11 days of data** — pollers ramped up mid-April. There is
+no pre-April history; the empty 2025 + 2026-Q1 partitions
+were created proactively by the schema, never populated.
 
-- pollers only began running this month (most likely; v1
-  ramp-up), or
-- prior partitions were dropped without telemetry.
+This rules out the partition-rotation reclaim path:
 
-Either way, the partition rotation discipline that
-`docs/ADR-market-orders-partitioning.md` proposes is **not
-necessary for historical reclaim** — there is no historical
-data to drop. The audit's 30-300 GB reclaim estimate must be
-revised: market_orders growth is **purely forward-looking**.
+- Audit's prior 30-300 GB reclaim estimate **does not apply**
+  to the immediate first cycle. Steady-state reclaim materializes
+  once the platform crosses the 14d HOT-window boundary on
+  partitions outside the current month.
+- All current data (10.5 days) is inside any reasonable HOT
+  window — **0 GB drop opportunity today**.
+- Growth is purely forward-looking (~87 M/day).
 
 ### Daily ingest rate
 
