@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Pages;
 
+use App\Services\IntelAuditLog;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
@@ -278,7 +279,7 @@ class OperationsIncidentDossier extends Page
         $blocId = $this->resolveViewerBlocId();
         if ($blocId === null) return;
 
-        DB::table('intel_feedback_events')->insert([
+        $fbId = DB::table('intel_feedback_events')->insertGetId([
             'viewer_bloc_id' => $blocId,
             'surface' => 'incident',
             'surface_ref_id' => $this->incidentId,
@@ -286,6 +287,13 @@ class OperationsIncidentDossier extends Page
             'analyst_user_id' => Auth::id(),
             'created_at' => now(),
         ]);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_FEEDBACK,
+            (int) $fbId,
+            'create:' . $kind,
+            null,
+            ['surface' => 'incident', 'ref_id' => $this->incidentId, 'kind' => $kind],
+        );
     }
 
     public function pinIncident(): void
@@ -301,9 +309,13 @@ class OperationsIncidentDossier extends Page
             DB::table('verified_intelligence_items')
                 ->where('id', $existing->id)
                 ->update(['pinned' => 1, 'verified_by_user_id' => Auth::id(), 'verified_at' => now()]);
+            IntelAuditLog::record(
+                IntelAuditLog::SURFACE_VERIFIED_ITEM, (int) $existing->id, 'pin',
+                ['pinned' => $existing->pinned], ['pinned' => 1],
+            );
             return;
         }
-        DB::table('verified_intelligence_items')->insert([
+        $id = DB::table('verified_intelligence_items')->insertGetId([
             'viewer_bloc_id' => $blocId,
             'item_kind' => 'pinned_incident',
             'title' => 'Pinned incident #' . $this->incidentId,
@@ -315,6 +327,10 @@ class OperationsIncidentDossier extends Page
             'verified_at' => now(),
             'created_at' => now(),
         ]);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_VERIFIED_ITEM, (int) $id, 'create:pinned_incident',
+            null, ['related_incident_id' => $this->incidentId],
+        );
     }
 
     private function resolveViewerBlocId(): ?int

@@ -67,6 +67,11 @@ RETENTION: list[tuple[str, str, int, str, int]] = [
     # rollups; the raw event corpus stops being read.
     ("intel_feedback_events", "created_at", 180, "1=1", 5000),
 
+    # Audit log retains 365 days. Long enough for any reasonable
+    # retrospective analyst review window. Append-only so the
+    # retention sweep is the only path that ever drops rows.
+    ("intel_audit_log", "created_at", 365, "1=1", 5000),
+
     # Trust metrics roll forward — old window snapshots redundant
     # past 90 days.
     ("system_trust_metrics", "computed_at", 90, "1=1", 1000),

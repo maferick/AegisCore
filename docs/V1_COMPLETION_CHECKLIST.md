@@ -210,9 +210,13 @@ considered closed for v1.
 - ☑ ABAC audit trail for parser failure queue
 - ☑ bloc-scoping on every intelligence portal page
 - ☑ share-token route bloc-gated (not just token-gated)
-- ◐ verified_intelligence_items deletes are not audit-logged
-- ☐ analyst_status changes on strategic_alerts are not audit-logged
-  (counted in trust metrics, but no per-row history)
+- ☑ intel_audit_log table + App\Services\IntelAuditLog helper
+  (resolves actor user/alliance/bloc at write-time, captures
+  IP + user_agent, redacts secret-named keys, append-only)
+- ☑ wired into: alert setStatus / saveNotes, verified_item
+  create/togglePin/publish/delete, dossier recordFeedback +
+  pinIncident, export generate + share view/download
+- ☑ retention rule added: 365-day TTL on intel_audit_log
 - **Gate**: every analyst-mutable surface writes to an audit table
   on change; spot-check via 10 random alert lifecycle changes
   matched against audit rows.

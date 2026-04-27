@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Portal;
 
 use App\Http\Controllers\Controller;
+use App\Services\IntelAuditLog;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
@@ -39,6 +40,11 @@ class IntelExportShareController extends Controller
             $safe = preg_replace('/[^A-Za-z0-9\-_]+/', '_', (string) $artifact->title);
             $headers['Content-Disposition'] = "attachment; filename=\"{$safe}.{$ext}\"";
         }
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_EXPORT, (int) $artifact->id,
+            $download ? 'download' : 'view',
+            null, ['format' => $artifact->format, 'kind' => $artifact->artifact_kind],
+        );
         return response($body, 200, $headers);
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Pages;
 
+use App\Services\IntelAuditLog;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
@@ -64,7 +65,7 @@ class VerifiedIntelligence extends Page
             $this->newSignificance = 'medium';
         }
 
-        DB::table('verified_intelligence_items')->insert([
+        $payload = [
             'viewer_bloc_id' => $blocId,
             'item_kind' => $this->newKind,
             'title' => mb_substr($this->newTitle, 0, 220),
@@ -77,7 +78,12 @@ class VerifiedIntelligence extends Page
             'verified_by_user_id' => Auth::id(),
             'verified_at' => now(),
             'created_at' => now(),
-        ]);
+        ];
+        $id = DB::table('verified_intelligence_items')->insertGetId($payload);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_VERIFIED_ITEM, (int) $id, 'create:' . $this->newKind,
+            null, $payload,
+        );
 
         $this->reset(['newTitle', 'newBody', 'newRelatedIncidentId', 'newRelatedAlertId']);
     }
@@ -90,10 +96,17 @@ class VerifiedIntelligence extends Page
             ->where('id', $id)
             ->where('viewer_bloc_id', $blocId)
             ->value('pinned');
+        if ($cur === null) return;
+        $next = $cur ? 0 : 1;
         DB::table('verified_intelligence_items')
             ->where('id', $id)
             ->where('viewer_bloc_id', $blocId)
-            ->update(['pinned' => $cur ? 0 : 1]);
+            ->update(['pinned' => $next]);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_VERIFIED_ITEM, $id,
+            $next ? 'pin' : 'unpin',
+            ['pinned' => $cur], ['pinned' => $next],
+        );
     }
 
     public function publish(int $id): void
@@ -108,16 +121,27 @@ class VerifiedIntelligence extends Page
                 'verified_by_user_id' => Auth::id(),
                 'verified_at' => now(),
             ]);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_VERIFIED_ITEM, $id, 'publish',
+            null, ['published' => 1],
+        );
     }
 
     public function delete(int $id): void
     {
         $blocId = $this->resolveViewerBlocId();
         if ($blocId === null) return;
+        $prior = DB::table('verified_intelligence_items')
+            ->where('id', $id)->where('viewer_bloc_id', $blocId)->first();
+        if ($prior === null) return;
         DB::table('verified_intelligence_items')
             ->where('id', $id)
             ->where('viewer_bloc_id', $blocId)
             ->delete();
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_VERIFIED_ITEM, $id, 'delete',
+            $prior, null,
+        );
     }
 
     /** @return array<string, mixed> */

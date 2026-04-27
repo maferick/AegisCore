@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Pages;
 
+use App\Services\IntelAuditLog;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
@@ -83,6 +84,13 @@ class StrategicAlerts extends Page
         $blocId = $this->resolveViewerBlocId();
         if ($blocId === null) return;
 
+        $prior = DB::table('strategic_alerts')
+            ->where('id', $alertId)->where('viewer_bloc_id', $blocId)
+            ->select('analyst_status', 'false_positive', 'suppressed_until',
+                     'suppression_reason', 'dismissed_at')
+            ->first();
+        if ($prior === null) return;
+
         $updates = [
             'analyst_status' => $status,
             'reviewed_by_user_id' => Auth::id(),
@@ -108,6 +116,14 @@ class StrategicAlerts extends Page
             ->where('viewer_bloc_id', $blocId)
             ->update($updates);
 
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_ALERT,
+            $alertId,
+            'set_status:' . $status,
+            $prior,
+            $updates,
+        );
+
         // Record analyst feedback for trust metrics.
         $feedbackKind = match ($status) {
             'validated' => 'useful',
@@ -116,7 +132,7 @@ class StrategicAlerts extends Page
             default => null,
         };
         if ($feedbackKind !== null) {
-            DB::table('intel_feedback_events')->insert([
+            $fbId = DB::table('intel_feedback_events')->insertGetId([
                 'viewer_bloc_id' => $blocId,
                 'surface' => 'alert',
                 'surface_ref_id' => $alertId,
@@ -124,6 +140,13 @@ class StrategicAlerts extends Page
                 'analyst_user_id' => Auth::id(),
                 'created_at' => now(),
             ]);
+            IntelAuditLog::record(
+                IntelAuditLog::SURFACE_FEEDBACK,
+                (int) $fbId,
+                'create:' . $feedbackKind,
+                null,
+                ['surface' => 'alert', 'ref_id' => $alertId, 'kind' => $feedbackKind],
+            );
         }
     }
 
@@ -131,14 +154,25 @@ class StrategicAlerts extends Page
     {
         $blocId = $this->resolveViewerBlocId();
         if ($blocId === null) return;
+        $prior = DB::table('strategic_alerts')
+            ->where('id', $alertId)->where('viewer_bloc_id', $blocId)
+            ->value('analyst_notes');
+        $clean = mb_substr($notes, 0, 4000);
         DB::table('strategic_alerts')
             ->where('id', $alertId)
             ->where('viewer_bloc_id', $blocId)
             ->update([
-                'analyst_notes' => mb_substr($notes, 0, 4000),
+                'analyst_notes' => $clean,
                 'reviewed_by_user_id' => Auth::id(),
                 'reviewed_at' => now(),
             ]);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_ALERT,
+            $alertId,
+            'save_notes',
+            ['analyst_notes' => $prior],
+            ['analyst_notes_length' => strlen($clean)],
+        );
     }
 
     /** @return array<string, mixed> */

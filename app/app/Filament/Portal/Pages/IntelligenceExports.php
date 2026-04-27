@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Pages;
 
+use App\Services\IntelAuditLog;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
@@ -76,7 +77,7 @@ class IntelligenceExports extends Page
             $bodyJson = json_encode($payload, JSON_PRETTY_PRINT);
         }
 
-        DB::table('intel_export_artifacts')->insert([
+        $id = DB::table('intel_export_artifacts')->insertGetId([
             'viewer_bloc_id' => $blocId,
             'artifact_kind' => $this->kind,
             'format' => $this->format,
@@ -92,6 +93,12 @@ class IntelligenceExports extends Page
             'expires_at' => now()->addDays(30),
             'created_at' => now(),
         ]);
+        IntelAuditLog::record(
+            IntelAuditLog::SURFACE_EXPORT, (int) $id, 'generate:' . $this->kind,
+            null,
+            ['kind' => $this->kind, 'format' => $this->format, 'days' => $this->days],
+            ['share_token_prefix' => substr($token, 0, 8)],
+        );
     }
 
     /** @return array<string, mixed> */
