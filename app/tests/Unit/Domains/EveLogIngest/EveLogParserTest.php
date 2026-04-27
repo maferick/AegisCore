@@ -92,6 +92,37 @@ class EveLogParserTest extends TestCase
     }
 
     #[Test]
+    public function gamelog_continuation_lines_are_notify_not_unknown(): void
+    {
+        $parser = new EveLogParser();
+        $body = "[ 2026.04.25 18:38:57 ] (notify) Are you sure you want to undock?\n"
+            . "<br><br>This action cannot be undone.<br>\n"
+            . "Do you wish to proceed?\n";
+        $events = $parser->parseEvents($body, 'gamelog', null);
+
+        $this->assertCount(3, $events);
+        $this->assertSame('notify_event', $events[0]['event_type']);
+        $this->assertSame('notify_event', $events[1]['event_type']);
+        $this->assertSame('notify_event', $events[2]['event_type']);
+        $payload1 = json_decode($events[1]['parsed_json'], true);
+        $payload2 = json_decode($events[2]['parsed_json'], true);
+        $this->assertSame('continuation', $payload1['gamelog_kind']);
+        $this->assertSame('continuation', $payload2['gamelog_kind']);
+        $this->assertSame('<br><br>This action cannot be undone.<br>', $payload1['message']);
+    }
+
+    #[Test]
+    public function chatlog_continuation_still_unknown(): void
+    {
+        $parser = new EveLogParser();
+        $body = "stray line in a chat log\n";
+        $events = $parser->parseEvents($body, 'chatlog', 'Random');
+
+        $this->assertCount(1, $events);
+        $this->assertSame('unknown', $events[0]['event_type']);
+    }
+
+    #[Test]
     public function preserves_line_offset_across_chunk(): void
     {
         $parser = new EveLogParser();

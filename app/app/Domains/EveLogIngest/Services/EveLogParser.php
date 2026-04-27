@@ -204,6 +204,29 @@ final class EveLogParser
             // before INSERT. Until then, leave it null.
             $rest = trim($m[2]);
         } else {
+            // EVE notify dialogs span multiple lines — the timestamp
+            // sits on the first line and the body wraps with embedded
+            // <br>/<b>/<a> markup or plain prose. Those continuation
+            // lines have no leading timestamp by design and aren't
+            // parser drift. Capture them as notify_event with
+            // gamelog_kind='continuation' so the dossier keeps the
+            // text and the parse-error queue isn't polluted. Restrict
+            // to gamelog: chat/local/fleet/intel each line must carry
+            // its own [ ts ] prefix, so a missing one there really is
+            // a parse failure worth surfacing.
+            if ($logType === 'gamelog') {
+                return [
+                    'event_type' => 'notify_event',
+                    'event_timestamp' => null,
+                    'actor_name' => null,
+                    'system_name' => null,
+                    'channel_name' => $channelName,
+                    'parsed_json' => json_encode([
+                        'gamelog_kind' => 'continuation',
+                        'message' => $line,
+                    ]),
+                ];
+            }
             return [
                 'event_type' => 'unknown',
                 'event_timestamp' => null,
