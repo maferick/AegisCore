@@ -269,33 +269,97 @@ complete.
 
 ---
 
-## Stage E — cutover plan (NOT executed yet)
+## Stage E — cutover (in progress)
+
+### E.1 — reader cutover (NO-OP)
+
+Audit of every direct `market_orders` reader:
+
+| caller | window | needs cutover? |
+|--------|--------|----------------|
+| DoctrineMarket.stockAtHubs | `now() - 2 hours` | **no** |
+| DoctrineMarket.priceAtHubs | `now() - 2 hours` | **no** |
+| PersonalOrderPredictor.jitaSellFloor | `now() - 6 hours` | **no** |
+| DeriveMarketDailyCommand | yesterday window | **no** |
+| outbox_relay/projectors/market_orders.py | latest snapshot | **no** |
+
+Every consumer reads ≤ 6 hours of raw market_orders. **No
+reader cutover needed for a 72-hour HOT cutoff.** The
+`market_order_daily_aggregates` table is forward-looking
+infrastructure: it preserves location-level history that
+analyst pages can use later (e.g. when a future page needs
+> 72 h location-level data, it reads from the aggregate).
+
+### E.2 — hourly aggregator cron (DONE 2026-04-27)
+
+`scripts/market-order-aggregator-rolling.sh`:
+- flock-guarded
+- re-aggregates yesterday + today every hour
+- idempotent (worker uses ON DUPLICATE KEY UPDATE)
+- logs to `scripts/log/market-order-aggregator.log`
+
+Cron line installed:
+```
+17 * * * * /opt/AegisCore/scripts/market-order-aggregator-rolling.sh \
+  >> /opt/AegisCore/scripts/log/market-order-aggregator.log 2>&1
+```
+
+Each tick re-aggregates ~13 minutes of work (Jita + Domain +
+small regions × yesterday + today). Hourly cadence means
+worst-case freshness lag = 1 hour + run time. Aggregator
+runtime stays well under the cron interval.
+
+### E.3 — daily-partitioned `market_orders_v2` (NOT executed)
 
 Sequence (operator-led):
 
-1. **Pause /portal/market historical reads** by
-   feature-flagging analytics queries to the aggregate
-   table. Code work, not a DB change.
-2. **Switch `JitaValuationService`, `MarketItemHistory`,
-   `DoctrineMarket`, `PersonalOrderPredictor`** to read
-   `market_order_daily_aggregates` for any window > 72 h.
-3. **Confirm `market:derive-daily` aggregator + new
-   aggregator both populate `market_history` for current
-   day** (overlapping safety).
-4. **Wait 24 h** to confirm no analyst surface fell over.
-5. **Create `market_orders_v2`** with daily partitioning
-   (separate ALTER TABLE, hours of locking on 960 M rows —
-   schedule downtime window).
-6. **Point market_poller writes to v2.**
-7. **Keep old `market_orders` read-only for 7 days** as
+1. **Schedule downtime window** — daily-partition migration
+   needs hours of locking on a 960 M-row table.
+2. **Stop pollers** for the duration:
+   `docker compose stop market_poll_scheduler market_import_scheduler`.
+3. **Create `market_orders_v2`** with daily partitioning
+   (~365 partitions covering rolling year):
+   ```sql
+   CREATE TABLE market_orders_v2 LIKE market_orders;
+   ALTER TABLE market_orders_v2 REMOVE PARTITIONING;
+   ALTER TABLE market_orders_v2 PARTITION BY RANGE COLUMNS(observed_at) (
+     PARTITION p20260416 VALUES LESS THAN ('2026-04-17'),
+     PARTITION p20260417 VALUES LESS THAN ('2026-04-18'),
+     -- ...one per day, generate via script
+     PARTITION p_future VALUES LESS THAN MAXVALUE
+   );
+   ```
+4. **Copy live window** (last 72 h) from old → v2:
+   `INSERT INTO market_orders_v2 SELECT * FROM market_orders
+    WHERE observed_at >= NOW() - INTERVAL 72 HOUR;`
+   At ~85 M rows/day × 3 days = ~255 M rows, copy ~30-60 min.
+5. **Atomic table rename**:
+   ```sql
+   RENAME TABLE market_orders TO market_orders_old,
+                market_orders_v2 TO market_orders;
+   ```
+6. **Restart pollers** — they now write to the new
+   daily-partitioned table.
+7. **Keep `market_orders_old` read-only for 7 days** as
    rollback window.
-8. **Drop old `market_orders` partitions older than 72 h**
-   via DROP PARTITION (metadata-only on InnoDB).
-9. **OPTIMIZE TABLE market_orders** to reclaim free space
-   from data files.
+8. **Drop old monthly-partition table** entirely after
+   rollback window passes:
+   `DROP TABLE market_orders_old;` — reclaims 456 GB at once.
+9. **Install daily partition rotation cron**:
+   ```cron
+   30 3 * * * /opt/AegisCore/scripts/market-orders-rotate.sh
+   ```
+   Drops partitions older than 72 h + creates next-day
+   partition. Metadata-only on InnoDB; <60 s.
 
 Each step has an explicit rollback documented in the
 `Rollback` section below.
+
+**Reclaim path:**
+- Step 4: 0 GB (copy)
+- Step 5: 0 GB (rename)
+- Step 8: ~456 GB (DROP TABLE old monthly-partitioned table)
+- Step 9: ~85 GB/day reclaimed continuously by daily rotation
 
 ---
 
