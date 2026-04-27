@@ -12,9 +12,11 @@
                 'not_instrumented' => '#7a7a82',
             ];
             $surfaceStateColors = [
-                'healthy' => '#86efac', 'degraded' => '#fde68a',
-                'stale' => '#fdba74', 'backlogged' => '#fb923c',
-                'failed' => '#fb7185',
+                'healthy' => '#86efac', 'aging' => '#fde68a',
+                'stale' => '#fdba74', 'failed' => '#fb7185',
+                // legacy ratio-based states kept for backwards-compat
+                // until any cached page state turns over.
+                'degraded' => '#fde68a', 'backlogged' => '#fb923c',
             ];
             $sevColors = ['critical' => '#fb7185', 'elevated' => '#fdba74',
                           'warning' => '#fde68a', 'info' => '#9ca3af'];
@@ -122,14 +124,22 @@
                         <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Surface health</h3>
                         <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
                             <thead style="color:#7a7a82;">
-                                <tr><th style="text-align:left;">surface</th><th style="text-align:left;">badge</th><th style="text-align:right;">total</th><th style="text-align:right; color:#86efac;">fresh</th><th style="text-align:right; color:#fde68a;">aging</th><th style="text-align:right; color:#fdba74;">stale</th><th style="text-align:right; color:#fb7185;">expired</th></tr>
+                                <tr><th style="text-align:left;">surface</th><th style="text-align:left;">badge</th><th style="text-align:right;">newest age</th><th style="text-align:right;">total</th><th style="text-align:right; color:#86efac;">fresh</th><th style="text-align:right; color:#fde68a;">aging</th><th style="text-align:right; color:#fdba74;">stale</th><th style="text-align:right; color:#fb7185;">expired</th></tr>
                             </thead>
                             <tbody>
                                 @foreach ($surface_freshness as $surface => $tally)
-                                    @php $health = $surface_health[$surface] ?? 'healthy'; $col = $surfaceStateColors[$health] ?? '#9ca3af'; @endphp
+                                    @php
+                                        $health = $surface_health[$surface] ?? 'healthy';
+                                        $col = $surfaceStateColors[$health] ?? '#9ca3af';
+                                        $ageH = $tally['newest_age_h'] ?? null;
+                                        $ageDisplay = $ageH === null
+                                            ? '—'
+                                            : ($ageH < 1 ? '<1h' : ($ageH < 48 ? "{$ageH}h" : floor($ageH / 24) . 'd'));
+                                    @endphp
                                     <tr style="border-top:1px solid rgba(255,255,255,0.05);">
                                         <td style="padding:3px 4px;">{{ str_replace('_', ' ', $surface) }}</td>
                                         <td style="padding:3px 4px;"><span style="font-size:0.55rem; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:{{ $col }};">{{ $health }}</span></td>
+                                        <td style="padding:3px 4px; text-align:right; color:{{ $col }};">{{ $ageDisplay }}</td>
                                         <td style="padding:3px 4px; text-align:right;">{{ number_format($tally['total']) }}</td>
                                         <td style="padding:3px 4px; text-align:right; color:#86efac;">{{ $tally['fresh'] ?? 0 }}</td>
                                         <td style="padding:3px 4px; text-align:right; color:#fde68a;">{{ $tally['aging'] ?? 0 }}</td>

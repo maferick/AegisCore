@@ -152,21 +152,30 @@ class PlatformHealth extends Page
             ->get();
 
         // Per-surface freshness rollup (re-using Phase 4.9 columns).
-        $surfaceTables = [
-            'alert' => 'strategic_alerts',
-            'digest' => 'daily_operational_digest',
-            'narrative' => 'incident_narratives',
-            'incident' => 'operational_incidents',
-            'corridor' => 'operational_corridors',
-            'force_composition' => 'operational_force_compositions',
-            'alliance_profile' => 'alliance_operational_profiles',
-            'threat_surface' => 'system_threat_surface',
-            'doctrine_evolution' => 'doctrine_evolution_events',
+        // Surface health is derived from the age of the *newest* row,
+        // not a ratio over the full history. Surfaces like incidents
+        // and corridors accumulate sealed historical records — 90%
+        // expired only means 90% of rows are 90 days old, not that
+        // the writer pipeline is broken. The operator wants "is the
+        // latest data fresh enough to act on?", which the
+        // newest-row-age comparison answers directly. We still surface
+        // the per-state tally for context.
+        $ttlConfig = $this->loadFreshnessTtl();
+        $surfaces = [
+            'alert' => ['table' => 'strategic_alerts', 'ts' => 'detected_at', 'ttl' => 'alert'],
+            'digest' => ['table' => 'daily_operational_digest', 'ts' => 'generated_at', 'ttl' => 'digest'],
+            'narrative' => ['table' => 'incident_narratives', 'ts' => 'computed_at', 'ttl' => 'narrative'],
+            'incident' => ['table' => 'operational_incidents', 'ts' => 'end_at', 'ttl' => 'incident'],
+            'corridor' => ['table' => 'operational_corridors', 'ts' => 'last_seen_at', 'ttl' => 'corridor'],
+            'force_composition' => ['table' => 'operational_force_compositions', 'ts' => 'snapshot_at', 'ttl' => 'force_composition'],
+            'alliance_profile' => ['table' => 'alliance_operational_profiles', 'ts' => 'computed_at', 'ttl' => 'alliance_profile'],
+            'threat_surface' => ['table' => 'system_threat_surface', 'ts' => 'computed_at', 'ttl' => 'threat_surface'],
+            'doctrine_evolution' => ['table' => 'doctrine_evolution_events', 'ts' => 'computed_at', 'ttl' => 'doctrine_evolution'],
         ];
         $surfaceFreshness = [];
         $surfaceHealth = [];
-        foreach ($surfaceTables as $surface => $table) {
-            $tally = DB::table($table)
+        foreach ($surfaces as $surface => $cfg) {
+            $tally = DB::table($cfg['table'])
                 ->where('viewer_bloc_id', $blocId)
                 ->groupBy('freshness_state')
                 ->selectRaw('freshness_state, COUNT(*) AS n')
@@ -175,18 +184,30 @@ class PlatformHealth extends Page
             $total = array_sum($tally);
             if ($total === 0) continue;
 
-            $fresh = $tally['fresh'] ?? 0;
-            $expired = $tally['expired'] ?? 0;
-            $freshRate = $fresh / $total;
-            $expRate = $expired / $total;
+            // Newest-row age in hours. Skips NULL ts (unbounded /
+            // never-finished rows like open incidents) so an open
+            // incident with NULL end_at doesn't poison the metric.
+            $newestTs = DB::table($cfg['table'])
+                ->where('viewer_bloc_id', $blocId)
+                ->whereNotNull($cfg['ts'])
+                ->max($cfg['ts']);
 
-            $health = 'healthy';
-            if ($expRate >= 0.95) $health = 'failed';
-            elseif ($freshRate < 0.05 && $expRate >= 0.50) $health = 'stale';
-            elseif ($expRate >= 0.50) $health = 'degraded';
-            elseif ($freshRate < 0.30) $health = 'backlogged';
+            [$freshH, $agingH, $staleH] = $ttlConfig[$cfg['ttl']] ?? [24, 168, 720];
+            $health = 'failed';
+            $newestAgeH = null;
+            if ($newestTs !== null) {
+                $newestAgeH = max(0, (int) round((time() - strtotime((string) $newestTs)) / 3600, 2));
+                if ($newestAgeH <= $freshH) $health = 'healthy';
+                elseif ($newestAgeH <= $agingH) $health = 'aging';
+                elseif ($newestAgeH <= $staleH) $health = 'stale';
+                else $health = 'failed';
+            }
 
-            $surfaceFreshness[$surface] = $tally + ['total' => $total];
+            $surfaceFreshness[$surface] = $tally + [
+                'total' => $total,
+                'newest_age_h' => $newestAgeH,
+                'fresh_ttl_h' => $freshH,
+            ];
             $surfaceHealth[$surface] = $health;
         }
 
@@ -218,6 +239,24 @@ class PlatformHealth extends Page
             'lane_retry' => $laneRetry,
             'top_retry_pipelines' => $topRetryPipelines,
         ];
+    }
+
+    /**
+     * Load the per-surface freshness TTL ladder from
+     * config/intel_ttl.json (single source of truth shared with the
+     * Python freshness compute). Returns [fresh_h, aging_h, stale_h]
+     * per surface key.
+     *
+     * @return array<string, array{0:float,1:float,2:float}>
+     */
+    private function loadFreshnessTtl(): array
+    {
+        $path = config_path('intel_ttl.json');
+        if (! is_readable($path)) return [];
+        $blob = json_decode((string) file_get_contents($path), true);
+        return is_array($blob['freshness_ttl_hours'] ?? null)
+            ? $blob['freshness_ttl_hours']
+            : [];
     }
 
     private function ingestPulse(): array
