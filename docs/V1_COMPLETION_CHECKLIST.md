@@ -134,8 +134,12 @@ considered closed for v1.
   the 90d mark)
 - ☑ first live sweep run 2026-04-27: 241 dscan rows dropped, 0
   elsewhere, all specs complete, no errors
-- ☐ host cron line installed (operator action):
-  `15 4 * * * cd /opt/AegisCore && make ci-phase49c-retention`
+- ☑ outbox.processed_at 7-day TTL added to retention spec
+  (Storage audit Stage 1 follow-up); second live sweep 2026-04-27
+  dropped 2,012 stale processed outbox rows
+- ☑ host cron lines installed: retention (15 4 * * *) +
+  lane-metrics (0 */6 * * *) + quality-guards (30 */6 * * *) +
+  freshness (45 */6 * * *) + sde-auto-update (30 8 * * *)
 - ☐ dashboard surfaces verified to show no rows older than the
   configured window
 - **Gate**: retention sweep cron in place + first sweep ran

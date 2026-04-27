@@ -40,6 +40,7 @@ Sweep order (child → parent):
 
 | table                              | ts column           | days | predicate                                     |
 |------------------------------------|---------------------|------|-----------------------------------------------|
+| outbox                             | processed_at        | 7    | processed_at IS NOT NULL                      |
 | compute_run_log                    | compute_started_at  | 30   | all                                           |
 | system_quality_events              | resolved_at         | 90   | resolved_at IS NOT NULL                       |
 | intel_export_artifacts             | expires_at          | 0    | expires_at < NOW()                            |

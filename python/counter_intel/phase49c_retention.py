@@ -51,6 +51,14 @@ log = get("counter_intel.phase49c_retention")
 # ----------------------------------------------------------------------
 
 RETENTION: list[tuple[str, str, int, str, int]] = [
+    # Outbox: processed events older than 7d. The relay only needs
+    # a recent replay window for debugging. Storage audit 2026-04-27
+    # showed 8.1M unprocessed rows after a relay outage; leaving
+    # processed rows around indefinitely compounds the bloat. NEVER
+    # drops unprocessed rows (processed_at IS NULL) — those are
+    # actively-pending events.
+    ("outbox", "processed_at", 7, "processed_at IS NOT NULL", 5000),
+
     # Compute trace ages out fast — rollups are authoritative.
     ("compute_run_log", "compute_started_at", 30, "1=1", 5000),
 
