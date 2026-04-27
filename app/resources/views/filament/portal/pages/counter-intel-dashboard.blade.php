@@ -151,20 +151,53 @@
                     @endif
                 </div>
 
-                {{-- Top hostile triangles --}}
+                {{-- Internal pilots by hostile-cluster exposure --}}
                 <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                    <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0 0 0.4rem;">
-                        Top hostile triangles
+                    <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0 0 0.2rem;">
+                        Internal pilots · hostile-cluster exposure
                     </h3>
+                    <p style="font-size:0.6rem; color:#7a7a82; margin:0 0 0.4rem; font-style:italic; line-height:1.4;">
+                        These are <strong>your bloc's pilots</strong> ranked by the size of
+                        the hostile-pilot triangle that has engaged them. Investigative
+                        priority signal, not an accusation. Cross-check with review band
+                        before drawing conclusions.
+                    </p>
+                    @php
+                        $bandColors = [
+                            'critical' => '#fb7185', 'high' => '#fdba74',
+                            'elevated' => '#fde68a', 'below_threshold' => '#9ca3af',
+                            'insufficient_history' => '#7a7a82',
+                            'cohort_unavailable' => '#7a7a82',
+                            'leadership_exempt' => '#a5b4fc',
+                        ];
+                    @endphp
                     @if (count($top_triangles) === 0)
                         <p style="font-size:0.72rem; color:#7a7a82; font-style:italic;">No triangles computed yet.</p>
                     @else
-                        <div style="display:grid; gap:0.3rem; max-height:280px; overflow:auto;">
+                        <div style="display:grid; gap:0.3rem; max-height:340px; overflow:auto;">
                             @foreach ($top_triangles as $t)
-                                <a href="/portal/characters/lookup?cid={{ $t->character_id }}" style="text-decoration:none; padding:0.35rem 0.5rem; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); border-radius:5px; display:flex; gap:0.4rem; align-items:center; color:#e5e5e7; font-size:0.72rem;">
-                                    <span style="flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $t->character_name ?? '#'.$t->character_id }}</span>
-                                    <span style="font-size:0.55rem; color:#fca5a5;">{{ $t->triangle_size }}× cluster</span>
-                                    <span style="font-size:0.55rem; color:#7a7a82;">{{ $t->shared_battle_days }}d shared</span>
+                                @php
+                                    $bandCol = $bandColors[$t->review_priority_band ?? ''] ?? '#7a7a82';
+                                @endphp
+                                <a href="/portal/characters/lookup?cid={{ $t->character_id }}" style="text-decoration:none; padding:0.4rem 0.5rem; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); border-radius:5px; display:grid; gap:0.15rem; color:#e5e5e7; font-size:0.72rem;">
+                                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                                        <span style="flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $t->character_name ?? '#'.$t->character_id }}</span>
+                                        <span style="font-size:0.55rem; color:#fca5a5;">{{ $t->triangle_size }}× cluster</span>
+                                        <span style="font-size:0.55rem; color:#7a7a82;">{{ $t->shared_battle_days }}d shared</span>
+                                    </div>
+                                    <div style="display:flex; gap:0.3rem; align-items:center; font-size:0.55rem;">
+                                        <span style="color:#9ca3af; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px;">
+                                            {{ $t->alliance_name ? '['.($t->alliance_name).']' : '[no alliance]' }}
+                                        </span>
+                                        @if ($t->review_priority_band)
+                                            <span style="color:{{ $bandCol }}; padding:1px 5px; border-radius:3px; background:rgba(255,255,255,0.04);">
+                                                {{ str_replace('_', ' ', $t->review_priority_band) }}
+                                            </span>
+                                        @endif
+                                        @if ($t->review_priority_score !== null)
+                                            <span style="color:#7a7a82; margin-left:auto;">score {{ number_format((float) $t->review_priority_score, 3) }}</span>
+                                        @endif
+                                    </div>
                                 </a>
                             @endforeach
                         </div>

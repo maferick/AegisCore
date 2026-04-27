@@ -101,14 +101,44 @@ class CounterIntelDashboard extends Page
             ->pluck('n', 'status')
             ->all();
 
-        // Top hostile triangle clusters in the bloc — characters with
-        // the most members in their hostile triangle.
+        // Internal pilots by hostile-cluster exposure. The character_id
+        // is a bloc-internal pilot; the triangulation rows around them
+        // describe distinct hostile pilots they've engaged. The
+        // alliance_name + review_priority_band columns make it
+        // unambiguous that these are OUR pilots being scored, not
+        // hostile actors in the watchlist sense.
         $topTriangles = DB::select(<<<'SQL'
             SELECT t.character_id, t.triangle_size, t.shared_battle_days, t.weight,
-                   en.name AS character_name
+                   en.name AS character_name,
+                   alli_en.name AS alliance_name,
+                   cah.alliance_id AS alliance_id,
+                   a.review_priority_band, a.review_priority_score
               FROM ci_hostile_triangulation t
               LEFT JOIN esi_entity_names en
                 ON en.entity_id = t.character_id AND en.category = 'character'
+              LEFT JOIN character_corporation_history cch
+                ON cch.character_id = t.character_id
+               AND cch.is_deleted = 0
+               AND cch.end_date IS NULL
+              LEFT JOIN corporation_alliance_history cah
+                ON cah.corporation_id = cch.corporation_id
+               AND cah.start_date <= NOW()
+               AND (cah.end_date IS NULL OR cah.end_date > NOW())
+              LEFT JOIN esi_entity_names alli_en
+                ON alli_en.entity_id = cah.alliance_id AND alli_en.category = 'alliance'
+              LEFT JOIN (
+                  SELECT a.character_id, a.viewer_bloc_id,
+                         a.review_priority_band, a.review_priority_score
+                    FROM ci_character_anomalies_rolling a
+                    JOIN (
+                        SELECT character_id, viewer_bloc_id, MAX(window_end_date) AS mx
+                          FROM ci_character_anomalies_rolling
+                         GROUP BY character_id, viewer_bloc_id
+                    ) m
+                      ON m.character_id = a.character_id
+                     AND m.viewer_bloc_id = a.viewer_bloc_id
+                     AND m.mx = a.window_end_date
+              ) a ON a.character_id = t.character_id AND a.viewer_bloc_id = t.viewer_bloc_id
              WHERE t.viewer_bloc_id = ?
              ORDER BY t.triangle_size DESC, t.shared_battle_days DESC
              LIMIT 10
