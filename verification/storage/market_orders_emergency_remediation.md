@@ -350,6 +350,36 @@ Operator OK 2026-04-27 15:57 UTC. Sequence:
     older than 72h + ensures 90 days of future partitions
     pre-created.
 
+### Post-cutover state (verified 2026-04-27 17:45 UTC)
+
+```
+market_orders        (v2, daily-partitioned, accepting writes)
+  exact rows         251,147,059
+  observed_at range  2026-04-24 16:03:37 → 2026-04-27 17:45:17 (live)
+  partition counts   p20260424=28.7M (partial 72h start)
+                     p20260425=81.2M
+                     p20260426=76.6M
+                     p20260427=54.2M (today, growing)
+
+market_orders_old    (monthly-partitioned, read-only rollback window)
+  exact rows         949,202,209
+```
+
+Pollers writing to v2 confirmed: latest observed_at 17:45 UTC,
+~10 min after cutover. Daily partitions populating correctly.
+Each day's writes land in their own partition → DROP PARTITION
+will be metadata-only.
+
+### Reclaim achieved + pending
+
+- E.3 cutover: 0 GB at moment of cutover (RENAME is metadata).
+- E.3 rotation cron (next 03:30 UTC): 0 GB until first
+  partition ages past 72h (likely 2026-04-30 onwards).
+- E.3.8 `DROP TABLE market_orders_old` after 2026-05-04:
+  **~456 GB reclaim** at once.
+- Continuous (post-rollback-window): ~85 GB/day reclaim
+  via daily DROP PARTITION rotation.
+
 Sequence (operator-led):
 
 1. **Schedule downtime window** — daily-partition migration
