@@ -41,7 +41,8 @@ All in [`docs/adr/`](docs/adr/). Read before proposing cross-cutting change.
 4. [0004](docs/adr/0004-market-data-ingest.md) — market data ingest
 5. [0005](docs/adr/0005-private-market-hub-overlay.md) — private market hub overlay
 6. [0011](docs/adr/0011-v1-calibration-policy.md) — v1 calibration governance
-7. [0012](docs/adr/0012-single-operator-ai-assist.md) — single-operator AI assist policy (supersedes 0010 stylometry for v1 scope)
+7. [0012](docs/adr/0012-single-operator-ai-assist.md) — single-operator AI assist policy
+8. [0013](docs/adr/0013-hypothesis-confidence-framing.md) — hypothesis-confidence framing (amends 0012; replaces topic-based forbidden list with guarantee-based ladder)
 
 Add new ADR rather than mutate overlay of existing one.
 

@@ -1,21 +1,23 @@
 # V1 Freeze — operational watch mode
 
-**Effective:** 2026-04-27 (reframed same day for single-operator
-reality — see ADR 0012).
+**Effective:** 2026-04-27 (reframed twice same day —
+[ADR 0012](adr/0012-single-operator-ai-assist.md) for
+single-operator scope, [ADR 0013](adr/0013-hypothesis-confidence-framing.md)
+for hypothesis-confidence framing).
 **Author:** v1 closure pass.
-**Lifts when:** v2 entry criteria in
-[`docs/adr/0012-single-operator-ai-assist.md`](adr/0012-single-operator-ai-assist.md)
-§ "V2 entry criteria — single-operator revision" are observed
-live for the documented window.
+**Lifts when:** v2 entry criteria in ADR 0012 § "V2 entry criteria
+— single-operator revision" (intact under 0013) are observed live
+for the documented window.
 
 This document defines what is allowed and what is forbidden
 during v1 freeze. Burn-down for the open gates is in
-[`V1_COMPLETION_CHECKLIST.md`](V1_COMPLETION_CHECKLIST.md). The
-allowed-AI scope was expanded 2026-04-27 by ADR 0012 to include
-safe AI assistance (summarization, ranking, dedup, narrative
-generation, "what changed?" synthesis, investigation
-suggestions, confidence estimation, alert prioritization,
-incident grouping). Operator attribution + punitive automation
+[`V1_COMPLETION_CHECKLIST.md`](V1_COMPLETION_CHECKLIST.md).
+
+**Guiding principle (ADR 0013):** Allow the system to form
+increasingly strong hypotheses. Inference about operators,
+coordination, and same-operator activity is permitted —
+hypothesis-shaped, with confidence + evidence + reversibility +
+audit. Autonomous punitive action and irreversible escalation
 remain forbidden.
 
 ---
@@ -61,61 +63,64 @@ The following are explicitly OK to ship without lifting freeze:
 9. **Test coverage** on shipped pipelines.
 10. **Incident response** — anything in
     [`docs/RUNBOOK.md`](RUNBOOK.md).
-11. **Safe AI assistance** per ADR 0012 — summarization,
+11. **Safe AI assistance** per ADR 0012 + ADR 0013 — summarization,
     anomaly ranking, dedup, narrative generation tied to
     traceable rows, cluster / doctrine-evolution explanation,
     operational change detection, "what changed?" synthesis,
-    investigation suggestions (queries only), confidence
+    investigative suggestions (queries only), confidence
     estimation, alert prioritization within an existing queue,
-    incident grouping suggestions. Operator stays in the loop;
-    AI proposes, operator commits. Source citation required;
-    audit trail required (`intel_audit_log` actor_kind='ai').
+    incident grouping suggestions, correlation discovery,
+    hypothesis synthesis, temporal pattern analysis, operational
+    behavior clustering, suspicious-network surfacing, stylometry
+    as weak signal, operator attribution as hypothesis (not
+    verdict). Every output ships with confidence + evidence +
+    source refs + caveats + freshness + why-strengthened (the
+    six binding UI/UX fields per ADR 0013). Source citation
+    required; audit trail required (`intel_audit_log`
+    actor_kind='ai'); reversibility required (operator can
+    undo any AI-influenced action within 24h).
 
 ---
 
 ## Forbidden during freeze
 
-The following are blocked until v2 entry approved:
+Reframed by ADR 0013: focus on autonomous-action prohibitions,
+not topic prohibitions. The platform may *infer*; it may not
+*act*.
 
-1. **New intelligence surfaces outside the safe-AI scope above.**
-   No new `/portal/intelligence/...` pages that infer about
-   operators-as-humans or take action without operator
-   confirmation.
-2. **Predictive accusations** — AI claims that X *will* betray,
-   X is hostile, X is an alt. Predictive *patterns* about
-   operations (escalation likelihood, corridor pressure,
-   doctrine trends, fleet-size projections) stay deferred to v2.
-3. **Autonomous recommendations with operational action
-   attached** — "kick this pilot", "deny fleet invite", "auto-
-   suspend on these signals". Recommendation alone is fine
-   (see safe-AI scope); attached action is not.
-4. **Autonomous mutation of analyst-visible state** — auto-tune
+1. **Autonomous punitive action against operators** — suspend,
+   kick, deny invite, remove access, watchlist auto-add. The
+   operator must explicitly trigger any action.
+2. **Irreversible escalation** — any AI-influenced action that
+   cannot be undone within 24 hours. If a surface ships an
+   action, it ships an undo.
+3. **Hidden black-box scoring** — every inference must surface
+   confidence + evidence + caveats + freshness + why-strengthened.
+   No score without reasoning.
+4. **Autonomous access decisions** — AI may rank, suggest,
+   prioritize; AI may not gate access.
+5. **Presenting hypotheses as fact** — UI must always render
+   the confidence band. No "X is a spy"; instead "high-confidence
+   operational suspicion: X" with the evidence ladder.
+6. **Autonomous mutation of analyst-visible state** — auto-tune
    of thresholds, auto-suppress of alerts on machine-derived
    signals (manual operator suppression is fine), auto-rotate
    of severity classifications without analyst acknowledgement.
-5. **Stylometry / typed-text similarity / writing-style
-   inference** — ADR 0010 deferred to v2 and gated on a separate
-   privacy/ABAC ADR + dual operator review even at v2 entry.
-6. **Operator attribution** — AI claims about who runs what
-   character, identity inference, alt detection.
-7. **Punitive automation** — suspension, access removal,
-   watchlist auto-add, or any action against an operator
-   without explicit operator confirmation.
-8. **Aggressive behavioral profiling** — operator-behavior
-   clustering, communication-pattern intelligence beyond what
-   the safe-AI scope already covers.
-9. **Schema-changing migrations** that add net-new functional
-   tables outside what the safe-AI scope requires. Schema
-   change for hardening (audit, retry, freshness) is fine.
-10. **Adopting new external dependencies** — new ESI scopes, new
-    third-party APIs, new SDKs — without a freeze-lift exception
-    logged in `calibration_proposals` (kind=`dependency_addition`)
-    and dual sign-off.
-11. **Any change that puts humans in the calibration loop as the
-    calibrated entity.** Per ADR 0011 Rule 6, the platform never
-    auto-suppresses analysts, never down-weights their feedback,
-    never attributes "low-quality reporter" labels. Do not weaken
-    this constraint without explicit ADR amendment.
+7. **Schema-changing migrations** outside what the safe-AI scope
+   requires. Schema change for hardening (audit, retry,
+   freshness) is fine. Hypothesis surfaces may add tables, but
+   each table needs an ADR or a verification doc.
+8. **Adopting new external dependencies** — new ESI scopes, new
+   third-party APIs, new SDKs — without a freeze-lift exception
+   logged in `calibration_proposals` (kind=`dependency_addition`)
+   and dual sign-off.
+9. **Any change that puts humans in the calibration loop as the
+   calibrated entity.** Per ADR 0011 Rule 6, the platform never
+   auto-suppresses analysts, never down-weights their feedback,
+   never attributes "low-quality reporter" labels. This is
+   distinct from operator-investigation: investigating a
+   suspected hostile is allowed (under hypothesis framing);
+   tuning analysts as a system input is not.
 
 ---
 

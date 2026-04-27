@@ -309,52 +309,83 @@ considered closed for v1.
 - **Gate**: usable on tablet (≥768px viewport); analyst workflow
   exercised by ≥3 different humans for ≥1 week each.
 
-## 17. Safe AI assistance (added 2026-04-27, ADR 0012)
+## 17. Safe AI assistance (added 2026-04-27 ADR 0012; broadened ADR 0013)
 
-Surfaces that summarize / rank / explain / dedupe / synthesize
-already-trusted operational data. Force multiplier for the
-single operator. Operator stays in the loop; AI proposes,
-operator commits.
+Surfaces that summarize / rank / explain / dedupe / synthesize /
+hypothesize over operational data. Force multiplier for the
+single operator. AI proposes, operator commits. Hypothesis
+framing per ADR 0013 — confidence + evidence + reversibility
++ audit are required, but the *topics* the platform may
+investigate are no longer narrowly limited.
 
-- ☐ "what changed?" synthesis between two operator-chosen
-  windows over already-rendered surfaces (alerts / incidents /
-  corridors / digest). Pure window diff; cheapest first win;
-  no new schema.
-- ☐ narrative summarization for incidents / clusters with
-  source-row citation (`actor_kind='ai'` rows in
-  `intel_audit_log`).
-- ☐ anomaly ranking — reorder existing alert / incident lists
-  by AI-estimated severity within the queue.
-- ☐ deduplication suggestions for overlapping incidents /
-  alerts / narratives. Suggest only — operator clicks merge.
-- ☐ confidence estimation calibrated against operator
-  feedback corpus (depends on §6 / §14 corpus growth).
-- ☐ investigation-suggestion panel (queries the operator can
-  run, never actions).
-- ☐ alert prioritization within an analyst's already-visible
-  queue.
-- ☐ incident-grouping suggestions.
-- ☐ cluster / doctrine-evolution explanation surfaces (why
-  was this clustered, what shifted).
+### §17.1 First ship — "what changed?" synthesis
+
+- ◐ migration: `operational_change_summaries` table
+- ◐ surface delta gatherer (Python, deterministic SQL aggregation)
+- ◐ synthesizer: deltas → grouped findings via `intel_copilot`;
+  LLM only formats narrative, structured facts come from the
+  rule-based pre-extraction
+- ◐ CLI entry + ComputeLog wrap (lane=intelligence_generation)
+- ◐ scheduling: 1h every 15m / 6h every hour / 24h every 4h /
+  7d daily 04:00 UTC (host cron)
+- ◐ Filament page `/portal/intelligence/what-changed` with
+  1h/6h/24h/7d tabs, expandable evidence cards
+- ◐ render contract test: PHPUnit feature asserts citation +
+  caveat + confidence band on every rendered card
+- ◐ audit hook: synthesizer writes `intel_audit_log` rows with
+  `actor_kind='ai'`
+- ◐ verification doc + first-run baseline at
+  `verification/v1_section17/what_changed_baseline.md`
+- **Gate (§17.1)**: pipeline runs daily for 7d, ≥10 cards
+  surfaced, operator reports ≥1 finding actionable per day
+  on average.
+
+### §17.2 Hypothesis surfaces (broader scope per ADR 0013)
+
+- ☐ correlation discovery across surfaces
+- ☐ cluster explanation (why this cluster, evidence chain)
+- ☐ hypothesis synthesis surface — accumulating signals
+  promote/demote across confidence bands per ADR 0013 ladder
+- ☐ investigative-suggestion panel (queries the operator runs,
+  never actions)
+- ☐ temporal pattern analysis
+- ☐ operational behavior clustering (broader than v1's
+  existing clusters — these are operator-side patterns)
+- ☐ suspicious-network surfacing (co-occurrence graphs,
+  rendered as hypothesis with full evidence chain)
+- ☐ stylometry as weak signal contributing to hypothesis
+  confidence (per ADR 0010 spec, gated on privacy/ABAC review
+  of raw-message handling)
+- ☐ operator attribution as hypothesis surface (never as
+  verdict; promotion to "confirmed" requires operator
+  validation per ADR 0013 ladder)
+- ☐ confidence estimation calibrated against operator feedback
+
+### §17.3 Cross-surface AI infrastructure
+
 - ☐ runtime: extend `intel_copilot` (ADR 0007) rather than
-  introducing a new container.
-- ☐ render contract: every AI surface cites source rows,
-  shows confidence band (low/medium/high), shows one-line
-  caveat. No naked claims.
-- ☐ audit contract: AI artifacts that influence analyst
-  decisions write to `intel_audit_log` with `actor_kind='ai'`.
-- **Gate**: ≥1 safe-AI surface live; operator reports
-  measurable time savings on a documented analyst workflow
-  (this gate is also v1 freeze exit criterion 8 in
-  V1_FREEZE.md).
+  introducing a new container
+- ☐ render contract enforcement: each AI surface ships the
+  six binding fields per ADR 0013 — confidence band + evidence
+  + source refs + caveats + freshness + why-strengthened
+- ☐ audit contract: every AI inference that surfaces to an
+  analyst writes `intel_audit_log` with actor_kind='ai',
+  ai_model, prompt_hash, source_refs in details_json
+- ☐ reversibility contract: any AI-influenced operator action
+  reversible within 24h with one-click undo
+- ☐ confidence-band promotion governance — when does medium
+  → high require dual operator review? (open question)
+- **Gate (§17 overall)**: ≥1 safe-AI surface live; operator
+  reports measurable time savings on a documented analyst
+  workflow (also v1 freeze exit criterion 8).
 
-**FORBIDDEN even within this section** (per ADR 0012):
-- stylometry / writing-style inference
-- operator attribution
-- punitive automation
-- autonomous escalation
-- predictive accusations about people
-- AI surfaces that take action without operator confirmation
+### Still forbidden even under §17 (per ADR 0013)
+- autonomous punitive action against operators
+- irreversible escalation (no undo path)
+- hidden black-box scoring (no surfaced reasoning)
+- autonomous access decisions
+- presenting hypotheses as fact (no confidence band)
+- autonomous mutation of analyst-visible state without ack
 
 ## 16. Documentation
 
