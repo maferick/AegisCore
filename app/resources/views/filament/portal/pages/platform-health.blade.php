@@ -30,8 +30,11 @@
             </div>
             <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="text-align:center;">
                 <div style="font-size:1.4rem; color:{{ $parser_pulse['error_rate'] >= 0.05 ? '#fb7185' : '#86efac' }};">{{ number_format(($parser_pulse['error_rate'] ?? 0) * 100, 2) }}%</div>
-                <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">parse error rate</div>
-                <div style="font-size:0.55rem; color:#7a7a82;">{{ $parser_pulse['errors_24h'] }} / {{ $parser_pulse['events_24h'] }} 24h</div>
+                <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">parse error rate (open)</div>
+                <div style="font-size:0.55rem; color:#7a7a82;">{{ number_format($parser_pulse['errors_24h']) }} open / {{ number_format($parser_pulse['events_24h']) }} 24h</div>
+                @if (! empty($parser_pulse['resolved_24h']))
+                    <div style="font-size:0.55rem; color:#86efac;">+{{ number_format($parser_pulse['resolved_24h']) }} resolved</div>
+                @endif
             </div>
             <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="text-align:center;">
                 <div style="font-size:1.4rem; color:{{ $parser_pulse['unknown_rate'] >= 0.08 ? '#fdba74' : '#86efac' }};">{{ number_format(($parser_pulse['unknown_rate'] ?? 0) * 100, 2) }}%</div>
@@ -46,6 +49,23 @@
                 <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">incidents 24h</div>
             </div>
         </div>
+
+        @if (! empty($parser_pulse['top_reasons']) && count($parser_pulse['top_reasons']) > 0)
+            <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="margin-bottom:0.75rem;">
+                <h3 style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.3rem;">Top open parse-error reasons (24h)</h3>
+                <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
+                    <tbody>
+                        @foreach ($parser_pulse['top_reasons'] as $r)
+                            <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:3px 4px;"><code>{{ $r->reason }}</code></td>
+                                <td style="padding:3px 4px; text-align:right; color:#fb7185;">{{ number_format($r->n) }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+                <p style="font-size:0.6rem; color:#7a7a82; margin:0.4rem 0 0;">Inspect via <code>/portal/eve-log/uploader-errors</code>; replay queue with <code>php artisan eve-log:retry-parse-errors</code> after parser fix.</p>
+            </div>
+        @endif
 
         <div style="display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:1rem;">
             <div style="display:grid; gap:0.75rem;">

@@ -243,13 +243,24 @@ class PlatformHealth extends Page
 
     private function parserPulse(): array
     {
-        // All three windows key on created_at (ingest time), not
+        // All windows key on created_at (ingest time), not
         // event_timestamp. Re-uploads of historical logs land rows now
         // with old event_timestamps; mixing the two time bases produces
         // bogus rates (errors_24h / events_24h > 1).
+        //
+        // error_rate uses status='open' — rows already upgraded via
+        // eve-log:retry-parse-errors (status in retried/reparsed_ok/
+        // dismissed) shouldn't count against current parser quality,
+        // they're audit trail. resolved_24h is reported separately so
+        // the operator still sees the queue-drain progress.
         try {
-            $errors = DB::table('eve_log_parse_errors')
+            $openErrors = DB::table('eve_log_parse_errors')
                 ->where('created_at', '>=', now()->subHours(24))
+                ->where('status', 'open')
+                ->count();
+            $resolvedErrors = DB::table('eve_log_parse_errors')
+                ->where('created_at', '>=', now()->subHours(24))
+                ->whereIn('status', ['retried', 'reparsed_ok', 'dismissed'])
                 ->count();
             $events = DB::table('eve_log_events')
                 ->where('created_at', '>=', now()->subHours(24))
@@ -258,16 +269,27 @@ class PlatformHealth extends Page
                 ->where('created_at', '>=', now()->subHours(24))
                 ->where('event_type', 'unknown')
                 ->count();
+            $topReasons = DB::table('eve_log_parse_errors')
+                ->where('created_at', '>=', now()->subHours(24))
+                ->where('status', 'open')
+                ->groupBy('reason')
+                ->selectRaw('reason, COUNT(*) AS n')
+                ->orderByDesc('n')
+                ->limit(5)
+                ->get();
             return [
-                'errors_24h' => $errors,
+                'errors_24h' => $openErrors,
+                'resolved_24h' => $resolvedErrors,
                 'events_24h' => $events,
                 'unknown_24h' => $unknown,
-                'error_rate' => $events > 0 ? round($errors / $events, 4) : 0,
+                'error_rate' => $events > 0 ? round($openErrors / $events, 4) : 0,
                 'unknown_rate' => $events > 0 ? round($unknown / $events, 4) : 0,
+                'top_reasons' => $topReasons,
             ];
         } catch (\Throwable) {
-            return ['errors_24h' => 0, 'events_24h' => 0, 'unknown_24h' => 0,
-                    'error_rate' => 0, 'unknown_rate' => 0];
+            return ['errors_24h' => 0, 'resolved_24h' => 0, 'events_24h' => 0,
+                    'unknown_24h' => 0, 'error_rate' => 0, 'unknown_rate' => 0,
+                    'top_reasons' => collect()];
         }
     }
 
