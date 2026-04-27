@@ -105,13 +105,31 @@ Sanity check (top-volume Jita rows):
 - weighted_avg between min/max for all rows.
 - Tritanium prices match expected Jita ranges.
 
+### Region distribution (sample 24h Apr 26 → Apr 27)
+
+| region_id | rows in 24h |
+|-----------|-----------:|
+| 10000002 (The Forge / Jita) | 81,037,006 |
+| 10000003 (next observed)    |    951,093 |
+
+**Jita is 98.8 % of all market_orders volume.** Pollers
+appear to be configured for ≤ 2 regions in this deployment
+(`SELECT COUNT(DISTINCT region_id) FROM
+market_order_daily_aggregates` after backfill confirms
+the actual ingested set).
+
 ### Full 11-day backfill (running)
 
 Started 07:10 UTC across all regions, 2026-04-16 →
 2026-04-27 exclusive.
 
-Estimate based on Jita timing: ~10-15 hours total
-(non-Jita regions are smaller; Jita dominates poll volume).
+Estimate revised given Jita-only distribution:
+- Jita: 5 min/day × 11 days = ~55 min
+- other regions: <1 min/day × 11 days = trivial
+
+**Total backfill: ~1 hour** (was 10-15 h estimate before
+region distribution was visible).
+
 Background; non-blocking against ingest.
 
 Monitor progress:
