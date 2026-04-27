@@ -2,6 +2,16 @@
 
 **Status:** proposed (2026-04-27). Not implemented.
 
+**Update 2026-04-27** — see
+`verification/storage/market_storage_audit.md` for the
+follow-up audit. Critical correction: all 960 M rows live in
+a single `p2026_04` partition. Empty partitions exist for
+2025 and other 2026 months. **Real first-month rotation
+reclaim is 0 GB until the second-prior-month partition ages
+past the HOT window** (early-mid May 2026 at earliest). The
+30-300 GB estimate below remains valid as the steady-state
+projection but does not apply to the immediate first cycle.
+
 **Context:** the `market_orders` table dominates the AegisCore
 data directory at 456 GB (180 GB data + 275 GB indexes, 939 M
 rows). Range-partitioned scaffolding already exists on the PK
