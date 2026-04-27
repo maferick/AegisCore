@@ -309,7 +309,7 @@ small regions × yesterday + today). Hourly cadence means
 worst-case freshness lag = 1 hour + run time. Aggregator
 runtime stays well under the cron interval.
 
-### E.3 — daily-partitioned `market_orders_v2` (in progress 2026-04-27 16:00 UTC)
+### E.3 — daily-partitioned `market_orders_v2` (CUTOVER COMPLETE 2026-04-27 17:30 UTC)
 
 Operator OK 2026-04-27 15:57 UTC. Sequence:
 
@@ -327,15 +327,28 @@ Operator OK 2026-04-27 15:57 UTC. Sequence:
    SELECT * FROM market_orders WHERE observed_at >= NOW() -
    INTERVAL 72 HOUR`. Background; monitor reporting row
    counts as they land.
-5. RENAME TABLE pending — fires on INSERT completion.
-6. Pollers restart pending — fires on RENAME completion.
-7. `market_orders_old` kept read-only for 7 days as
+5. **72h INSERT done at 16:48 UTC** — 251,147,059 rows
+   covering 2026-04-24 16:03 → 2026-04-27 15:58. ~9 hours
+   total runtime (slower than initial estimate; daily-
+   partition write fanout overhead vs the source's monthly
+   partition).
+6. **RENAME TABLE atomic swap done at 17:30 UTC** —
+   `market_orders_v2 → market_orders`,
+   `market_orders → market_orders_old`. Initially blocked
+   on a stale `SELECT DISTINCT region_id` query (15 min idle
+   from earlier aggregator); killed query → RENAME
+   completed in <1 s.
+7. **Pollers restarted at 17:32 UTC** — market_poll_scheduler,
+   market_import_scheduler, outbox_relay all healthy.
+   Logs show ESI page fetches resuming normally.
+8. **`market_orders_old` kept read-only** for 7 days as
    rollback window.
-8. `DROP TABLE market_orders_old` — separate operator
-   step after 7-day window expires.
-9. Daily rotation cron — pre-built at
-   `scripts/market-orders-rotate.sh` + Make target. Will be
-   installed after RENAME confirmed clean.
+9. **`DROP TABLE market_orders_old`** — operator action
+   after 2026-05-04 (7-day window). Will reclaim ~456 GB.
+10. **Daily rotation cron installed** — `30 3 * * *
+    scripts/market-orders-rotate.sh`. Drops partitions
+    older than 72h + ensures 90 days of future partitions
+    pre-created.
 
 Sequence (operator-led):
 
