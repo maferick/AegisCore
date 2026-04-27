@@ -42,15 +42,15 @@
             </span>
         </div>
 
-        <div class="fi-section rounded-xl"
-             style="padding:0.5rem 0.75rem; margin-bottom:0.75rem;
-                    background:rgba(165,180,252,0.06);
-                    border:1px solid rgba(165,180,252,0.20);
-                    font-size:0.7rem; color:#cbd5e1;">
-            <strong>Hypotheses, not verdicts.</strong> Every card shows confidence, evidence,
-            source rows, caveats, and why-strengthened. AI proposes; operator commits. Per
-            <a href="/docs/adr/0013-hypothesis-confidence-framing.md" style="color:#a5b4fc;">ADR 0013</a>.
-        </div>
+        <details style="margin-bottom:0.75rem; font-size:0.7rem; color:#9ca3af;">
+            <summary style="cursor:pointer;">about these hypotheses</summary>
+            <p style="margin:0.4rem 0; line-height:1.5;">
+                These are AI-generated <strong>hypotheses</strong>, not verdicts. Each card
+                shows confidence band, evidence, source rows, caveats, and why-strengthened.
+                AI proposes; you commit. Per
+                <a href="/docs/adr/0013-hypothesis-confidence-framing.md" style="color:#a5b4fc;">ADR 0013</a>.
+            </p>
+        </details>
 
         @if (count($cards) === 0)
             <div class="fi-section rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
@@ -86,6 +86,12 @@
 
                         <h3 style="font-size:1rem; color:#e2e8f0; margin:0.4rem 0 0.2rem;">
                             <a href="/portal/characters/lookup?cid={{ $c['character_id'] }}" style="color:inherit; text-decoration:none; border-bottom:1px dotted rgba(255,255,255,0.15);">{{ $c['character_name'] }}</a>
+                            @if (! empty($c['cluster_hint']))
+                                <span style="margin-left:0.5rem; font-size:0.6rem; padding:2px 8px; border-radius:3px; background:rgba(165,180,252,0.12); color:#a5b4fc; font-weight:500; text-transform:uppercase; letter-spacing:0.06em;"
+                                      title="Shares the prefix '{{ $c['cluster_hint']['prefix'] }}' with {{ $c['cluster_hint']['sibling_count'] }} other suspicious pilot{{ $c['cluster_hint']['sibling_count'] === 1 ? '' : 's' }}. Possible alt-pattern — investigate together.">
+                                    + {{ $c['cluster_hint']['sibling_count'] }} alt-hint
+                                </span>
+                            @endif
                         </h3>
                         <p style="font-size:0.78rem; color:#cbd5e1; margin:0 0 0.4rem; line-height:1.5;">
                             {{ $c['summary'] }}
@@ -148,10 +154,19 @@
                             </details>
                         @endif
 
-                        <div style="margin-top:0.4rem; font-size:0.55rem; color:#7a7a82;">
-                            first seen <x-relative-time :ts="$c['first_seen_at']" /> ·
-                            recomputed <x-relative-time :ts="$c['last_recomputed_at']" /> ·
-                            model <code>{{ $c['ai_model'] ?? 'rule_based_v1' }}</code>
+                        <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem; flex-wrap:wrap;">
+                            <a href="/portal/characters/lookup?cid={{ $c['character_id'] }}"
+                               style="text-decoration:none; padding:5px 12px; background:rgba(125,211,252,0.12); color:#7dd3fc; border:1px solid rgba(125,211,252,0.25); border-radius:5px; font-size:0.72rem; font-weight:600;">
+                                Investigate →
+                            </a>
+                            <a href="/portal/counter-intel/watchlist"
+                               style="text-decoration:none; padding:5px 12px; background:rgba(255,255,255,0.04); color:#cbd5e1; border:1px solid rgba(255,255,255,0.10); border-radius:5px; font-size:0.72rem;">
+                                Add to watchlist
+                            </a>
+                            <span style="margin-left:auto; font-size:0.55rem; color:#7a7a82;">
+                                first seen <x-relative-time :ts="$c['first_seen_at']" /> ·
+                                model <code>{{ $c['ai_model'] ?? 'rule_based_v1' }}</code>
+                            </span>
                         </div>
                     </div>
                 @endforeach

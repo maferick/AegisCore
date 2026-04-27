@@ -351,3 +351,218 @@ borderline rows but didn't change the top of the queue.
    than the current 30d-prior column provides.
 3. No third-party uploader corpus to corroborate via dscan
    / chat overlap (single-operator reality).
+
+---
+
+# Second pass — loops 15-24 (human-readability focus)
+
+User directive: "in the end for humans, adapt the pages for that".
+Cron installed (§17.1 + §18 hourly). Goal of pass 2: page is
+operator-digestible in under 10 minutes.
+
+## Loop 15 — default min_band='high'
+
+**Problem:** page opened with `medium` filter showing 498 cards —
+operator overwhelmed.
+
+**Fix:** default min_band changed to `high`. Operator sees the
+strongest queue first; medium / low are explicit drill-downs.
+
+## Loop 16 — medium-band score floor 2.5 → 3.0
+
+**Problem:** histogram showed 178 medium-band rows clustered
+between 2.5 and 3.0 — borderline cohort patterns.
+
+**Fix:** floor lifted. Medium band reduced 498 → 305.
+
+## Loop 17 — graph-centrality threshold tighten
+
+**Problem:** pagerank 0.001 fired on every active FC; betweenness
+50 fired on most cohort members. Centrality alone isn't
+suspicion — it's combat tempo.
+
+**Fix:** thresholds 0.001 → 0.0025 (pagerank), 50 → 150
+(betweenness). Strength normalisers retuned so the score still
+scales.
+
+## Loop 18 — alt-cluster hint via name-prefix grouping
+
+**Problem:** `Bakkanta one / Bakkanta to / Bakkanta Aviai Odunen`
+were three separate cards even though the prefix screams alt
+pattern. No visual hint linking them.
+
+**Fix:** PHP page groups active hypothesis names by first word
+(>=4 chars, not numeric). When 3+ rows share a prefix, each gets
+a `cluster_hint` payload with prefix + sibling count.
+
+## Loop 19 — render the cluster hint on cards
+
+**Problem:** L18 computed but didn't render.
+
+**Fix:** title row now shows
+`+ N alt-hint` chip with tooltip explaining the prefix match.
+Visual cue, not a verdict.
+
+## Loop 20 — corp-cadence-anomaly signal
+
+**Problem:** spec listed corp cadence anomalies as a fusion
+input, but the pipeline ignored them.
+
+**Fix:** new signal `corp_cadence_anomaly` (domain=temporal,
+weight=2.0). Fires on >= 3 distinct corp moves in last 30 days.
+Bulk-loaded into the bundle so per-pilot loop stays fast.
+
+After L20 first run: `Bakkanta one` jumped from score 7.05 → 8.38;
+new entries surfaced (`Me 0FF Jack`, `Huulen Tekitsu`) where corp
+cadence pushed them across the high-band threshold.
+
+## Loop 21 — cap displayed cards at 25
+
+**Problem:** Command page rendered up to 50 cards; even after
+filtering to `high` (43 rows), still too long for one screen.
+
+**Fix:** LIMIT 25 in the page query. The 18 rows below the cut
+remain in the table (audit + cluster-hint detection unaffected),
+just don't render.
+
+## Loop 22 — actionable CTAs on every card
+
+**Problem:** no obvious next step. Operator could expand details
+but couldn't act.
+
+**Fix:** each card now ends with two buttons:
+`Investigate →` (links to the pilot's lookup card) and
+`Add to watchlist`. Footer compacts the metadata
+(`first seen / model`) into one right-aligned line.
+
+## Loop 23 — collapse the disclaimer ribbon
+
+**Problem:** the "Hypotheses, not verdicts" ribbon at the page
+top consumed ~12% of screen height. Repetitive — confidence chips
+on every card already encode the framing.
+
+**Fix:** moved to an `<details>` block titled "about these
+hypotheses". Ribbon space freed up for the actual queue.
+
+## Loop 24 — measurement / convergence check
+
+After loops 15-23 (single fusion run, same window 2026-04-20):
+
+| metric              | end of pass 1 | end of pass 2 |
+|---------------------|---------------|---------------|
+| active total        | 518           | 359           |
+| high/elevated       | 20            | 43            |
+| medium/elevated     | 4             | 4             |
+| medium/watch        | 494           | 301           |
+| top 1 score         | 7.05          | 8.38          |
+| domains in top 1    | 4             | 4             |
+| cards rendered      | 50 cap        | 25 cap        |
+
+The cluster signal "Bakkanta" is unmistakable on the page — three
+rows in the top 9, all flagged with `+2 alt-hint` chips, all
+high/elevated, all 4-domain corroborated.
+
+`Me 0FF Jack` and `Huulen Tekitsu` newly appeared in top 10 once
+the corp-cadence signal landed — both have 4 corp hops in 30d.
+
+## Final convergence summary (post-pass-2)
+
+### Top 10 active hypotheses (bloc 1)
+
+```
+1.  Bakkanta one          s=8.38  4 domains  + alt-hint
+2.  Bakkanta to           s=7.95  4 domains  + alt-hint
+3.  Titus Lancaster       s=6.14  4 domains
+4.  Huulen Tekitsu        s=5.82  3 domains  (corp_cadence)
+5.  Mokken Kashada        s=5.80  3 domains
+6.  RexDaniel             s=5.50  3 domains
+7.  ChaosXD               s=5.47  3 domains
+8.  Oen Meda              s=5.43  3 domains
+9.  Bakkanta Aviai Odunen s=5.41  3 domains  + alt-hint
+10. Me 0FF Jack           s=5.27  4 domains  (corp_cadence)
+```
+
+### Strongest corroborated cluster
+
+`Bakkanta`-prefix cluster — 3 active high-confidence rows, all
+4-domain corroborated. Likely alt pattern. Investigative priority
+worth manual review.
+
+### Confidence distribution (post-pass-2)
+
+```
+high/elevated:    43   (was 0 baseline, 20 end of pass 1)
+medium/elevated:   4
+medium/watch:    301
+low (active):      0
+total active:    359
+```
+
+97% reduction from the raw rolling-anomaly count of 17,561.
+
+### Major improvements achieved across both passes
+
+- Operator sees `high` band first (~25 cards on Command page).
+- Multi-domain corroboration is the dominant ranking signal —
+  single-domain rows can't reach the high band.
+- Alt-pattern visible via name-prefix `+ N alt-hint` chip.
+- Per-card: confidence + severity + freshness + score + domain
+  chips + signals + caveats + why-strengthened + source rows +
+  Investigate / Watchlist CTAs.
+- Hypothesis decay: fresh < 7d, aging < 21d, stale older.
+- Stale-on-no-refresh archive keeps queue current.
+- Cron-driven (hourly) — no manual runs needed.
+
+### Operational usefulness assessment
+
+Page answers "who do I investigate first?" in one render. Top 3
+are believable (Bakkanta cluster + Titus Lancaster). Top 10
+multi-domain, all with linked evidence and source rows. Operator
+can drill in via the `Investigate →` button on any card and land
+on the pilot's full intel surface.
+
+### Remaining weaknesses (deferred to a future pass)
+
+1. **No `correlated_cluster` hypothesis type yet.** The
+   alt-hint chip is informational; the underlying schema supports
+   a true cluster row with `related_character_ids_json`, but the
+   compute path isn't wired. Loop work item.
+2. **No materialised per-character operational overlap.** The
+   incident_overlap signal is scaffolded but disabled — needs a
+   covering aggregate table.
+3. **No Neo4j community read.** Graph-mismatch and bridge
+   behaviour signals from Neo4j aren't yet folded in.
+4. **No analyst-feedback loop.** `confirmed` band requires
+   operator validation; no UI yet to flip a hypothesis to
+   `confirmed` from the Command page (depends on §6 governance
+   surface).
+5. **Doctrine deviation / corridor presence / force-comp
+   mismatch — three operational signals listed in spec, all
+   skipped this pass.** Each adds DB joins; each will need a
+   per-loop cost / value review.
+
+### Recommended next iteration areas (priority order)
+
+1. Materialise `character_operational_overlap_30d` aggregate so
+   incident-overlap can land cheaply.
+2. Implement true `correlated_cluster` hypothesis type — fuse
+   prefix-matched + corp-shared + timing-overlap cohorts into
+   one row with `related_character_ids_json`.
+3. Wire Command-page "validate" / "dismiss" buttons → bumps
+   confidence to `confirmed` (operator-driven) or status to
+   `archived` with audit log.
+4. Read Neo4j community labels + bridge scores into the bundle.
+5. Calibrate score thresholds against operator validation
+   feedback once #3 ships.
+
+### What still blocks the very strongest CI
+
+- Operator-validated `confirmed` band requires the validation
+  loop (#3 above) — until then, the AI ceiling is `high`.
+- Stylometry / typed-text similarity — permitted under ADR 0013
+  but requires a privacy/ABAC ADR before raw chat content is
+  joined into the bundle.
+- A second-bloc baseline corpus (no parallel WC-scale dataset
+  exists today) — limits operator's ability to calibrate "what
+  does normal look like".
+

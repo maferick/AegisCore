@@ -71,6 +71,7 @@ SIGNAL_WEIGHTS: dict[str, float] = {
     "incident_overlap":        2.5,   # operational telemetry (gated, see Loop 6)
     "corridor_overlap":        2.0,
     "synchronized_timing":     1.5,
+    "corp_cadence_anomaly":    2.0,   # Loop 20 — 3+ corp moves in 30d
 }
 
 
@@ -93,11 +94,10 @@ def _band_from_score(score: float, corroboration: int, longitudinal: bool) -> tu
         return "high", sev
     if corroboration >= 2 and score >= 3.0:
         return "medium", "elevated" if score >= 4 else "watch"
-    # Loop 12 — medium-band floor bumped from 2.0 → 2.5. Score 2.0
-    # admits too many borderline pilots whose only signals are
-    # cohort-routine (e.g. centrality + asymmetric pair). Lift the
-    # floor so 'medium' means a substantive multi-signal pattern.
-    if corroboration >= 2 and score >= 2.5:
+    # Loop 16 — medium-band floor 2.5 → 3.0. Histogram showed 178
+    # rows clustered in the 2.5–3.0 range, all borderline cohort
+    # patterns. Operator wants fewer/stronger; raise floor.
+    if corroboration >= 2 and score >= 3.0:
         return "medium", "watch"
     if corroboration >= 1 and score >= 1.5:
         return "low", "watch"
@@ -172,6 +172,24 @@ def _gather_signals(
 
     # Operational corroboration in one pass.
     op_overlap = _gather_operational_overlap(conn, bloc_id, days=30)
+
+    # Loop 20 — corp-cadence anomaly. Pilots with 3+ corp moves in
+    # 30d are unusual; legitimate pilots rarely jump corps that
+    # often. Bulk-load to avoid per-pilot subquery.
+    corp_cadence: dict[int, int] = {}
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT character_id, COUNT(*) AS hops
+              FROM character_corporation_history
+             WHERE is_deleted = 0
+               AND start_date >= NOW() - INTERVAL 30 DAY
+             GROUP BY character_id
+             HAVING hops >= 3
+            """
+        )
+        for r in cur.fetchall() or []:
+            corp_cadence[int(r["character_id"])] = int(r["hops"])
 
     # Pull rolling anomalies for the latest available window.
     with conn.cursor(pymysql.cursors.DictCursor) as cur:
@@ -266,14 +284,18 @@ def _gather_signals(
 
         pr = float(r.get("pagerank") or 0)
         bt = float(r.get("betweenness") or 0)
-        if pr >= 0.001 or bt >= 50:
+        # Loop 17 — bump centrality threshold. Pagerank 0.001 fires
+        # on every active FC; lift to 0.0025 so the signal flags
+        # genuine cross-side bridge behaviour, not routine cohort
+        # role. Same on betweenness 50 → 150.
+        if pr >= 0.0025 or bt >= 150:
             signals.append({
                 "kind": "graph_centrality",
                 "domain": DOMAIN_GRAPH,
                 "pagerank": round(pr, 6),
                 "betweenness": round(bt, 4),
                 "weight": SIGNAL_WEIGHTS["graph_centrality"],
-                "strength": min(1.0, max(pr / 0.005, bt / 200)),
+                "strength": min(1.0, max(pr / 0.008, bt / 400)),
                 "evidence": f"Graph centrality outlier (pagerank {pr:.4f}, betweenness {bt:.1f})",
             })
 
@@ -291,6 +313,18 @@ def _gather_signals(
                 "weight": SIGNAL_WEIGHTS["longitudinal_exposure"],
                 "strength": min(1.0, hist / 12.0),
                 "evidence": f"{hist} distinct hostile alliances across history",
+            })
+
+        # Loop 20 — corp-cadence anomaly.
+        hops = corp_cadence.get(cid)
+        if hops:
+            signals.append({
+                "kind": "corp_cadence_anomaly",
+                "domain": DOMAIN_TEMPORAL,
+                "hops_30d": hops,
+                "weight": SIGNAL_WEIGHTS["corp_cadence_anomaly"],
+                "strength": min(1.0, hops / 6.0),
+                "evidence": f"{hops} corp moves in last 30 days — unusual cadence",
             })
 
         # Operational corroboration — pilot was active on incidents

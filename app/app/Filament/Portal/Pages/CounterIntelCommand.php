@@ -43,13 +43,16 @@ class CounterIntelCommand extends Page
 
     protected string $view = 'filament.portal.pages.counter-intel-command';
 
-    public ?string $minBand = 'medium';
+    public ?string $minBand = 'high';
 
     public function mount(): void
     {
-        $b = (string) (request()->query('min_band') ?? 'medium');
+        // Default to 'high' so the operator sees the strongest queue
+        // first. Medium / low surface only on explicit drill-down via
+        // the band selector — keeps the page digestible.
+        $b = (string) (request()->query('min_band') ?? 'high');
         if (! in_array($b, ['low', 'medium', 'high', 'confirmed'], true)) {
-            $b = 'medium';
+            $b = 'high';
         }
         $this->minBand = $b;
     }
@@ -70,6 +73,8 @@ class CounterIntelCommand extends Page
             default    => ['medium', 'high', 'confirmed'],
         };
 
+        // Loop 21 — cap at 25 cards by default. Operator-readable
+        // page wants the top of the queue, not the full backlog.
         $rows = DB::table('counter_intel_hypotheses')
             ->where('viewer_bloc_id', $blocId)
             ->whereIn('confidence', $bands)
@@ -78,7 +83,7 @@ class CounterIntelCommand extends Page
             ->orderByRaw("FIELD(severity,'critical','elevated','watch','info')")
             ->orderByDesc('suspicion_score')
             ->orderByDesc('last_strengthened_at')
-            ->limit(50)
+            ->limit(25)
             ->get();
 
         $cards = [];
@@ -121,6 +126,28 @@ class CounterIntelCommand extends Page
             ->selectRaw('confidence, COUNT(*) AS n')
             ->pluck('n', 'confidence')
             ->all();
+
+        // Loop 18 — alt-cluster hint via name-prefix grouping. When
+        // 3+ active hypotheses share the first word of the pilot
+        // name (e.g. "Bakkanta one / Bakkanta to / Bakkanta Aviai
+        // Odunen"), tag them with a cluster_hint so the renderer
+        // can group them visually. NOT a verdict — purely a hint
+        // for the operator to consider as alt-pattern.
+        $prefixGroups = [];
+        foreach ($cards as $i => $c) {
+            $first = mb_strtolower(strtok((string) $c['character_name'], ' '));
+            if (mb_strlen($first) < 4 || ctype_digit($first)) continue; // skip "#1234" / 1-3 char prefixes
+            $prefixGroups[$first][] = $i;
+        }
+        foreach ($prefixGroups as $prefix => $indices) {
+            if (count($indices) < 3) continue;
+            foreach ($indices as $i) {
+                $cards[$i]['cluster_hint'] = [
+                    'prefix' => $prefix,
+                    'sibling_count' => count($indices) - 1,
+                ];
+            }
+        }
 
         $verdict = $this->buildVerdict($totals, count($cards));
 
