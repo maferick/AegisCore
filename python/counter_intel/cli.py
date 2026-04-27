@@ -70,6 +70,9 @@ from counter_intel.phase49e_quality_guards import (
 from counter_intel.phase49c_retention import (
     run_retention_sweep as phase49c_retention_sweep,
 )
+from counter_intel.phase17_change_synthesis import (
+    run_change_synthesis as phase17_change_synthesis,
+)
 from counter_intel.market_order_aggregator import (
     run_backfill as market_order_aggregator_backfill,
 )
@@ -246,6 +249,12 @@ def main() -> int:
     p49ret.add_argument("--dry-run", action="store_true",
                         help="report what would delete without modifying")
 
+    p17wc = sub.add_parser("phase17-what-changed",
+                            help="§17.1 — operational change synthesis between two windows.")
+    p17wc.add_argument("--viewer-bloc-id", type=int, required=True)
+    p17wc.add_argument("--window-type", type=str, required=True,
+                        choices=["1h", "6h", "24h", "7d"])
+
     p_mkt = sub.add_parser("market-order-aggregator-backfill",
                            help="Emergency: aggregate market_orders → market_order_daily_aggregates.")
     p_mkt.add_argument("--start-date", type=str, required=True,
@@ -334,6 +343,8 @@ def main() -> int:
         return _run_phase49c_retention(args)
     if args.cmd == "market-order-aggregator-backfill":
         return _run_market_order_aggregator_backfill(args)
+    if args.cmd == "phase17-what-changed":
+        return _run_phase17_what_changed(args)
     parser.print_help()
     return 2
 
@@ -1003,4 +1014,31 @@ def _run_market_order_aggregator_backfill(args) -> int:
             r.set_generated_rows(int(stats.get("rows_affected") or 0))
             r.set_stats(stats or {})
     log.info("market-order-aggregator-backfill complete", stats)
+    return 0
+
+
+def _run_phase17_what_changed(args) -> int:
+    cfg = Config.from_env()
+    with connection(cfg) as conn:
+        with ComputeLog(conn, lane="intelligence_generation",
+                        pipeline="phase17-what-changed",
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        args={"window_type": args.window_type}) as r:
+            try:
+                stats = retry(
+                    lambda: phase17_change_synthesis(
+                        conn, cfg,
+                        viewer_bloc_id=args.viewer_bloc_id,
+                        window_type=args.window_type,
+                    ),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="intelligence_generation",
+                    pipeline="phase17-what-changed", run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase17-what-changed skipped — circuit open", {})
+                return 0
+            r.set_generated_rows(int(stats.get("findings_written") or 0))
+            r.set_stats(stats or {})
+    log.info("phase17-what-changed complete", stats)
     return 0

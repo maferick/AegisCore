@@ -20,3 +20,13 @@
 5,20,35,50  * * * * cd /opt/AegisCore && make ci-phase4-incidents          >> /opt/AegisCore/scripts/log/phase4-incidents.log 2>&1
 0,30        * * * * cd /opt/AegisCore && make ci-phase45-force-compositions >> /opt/AegisCore/scripts/log/phase45-force-compositions.log 2>&1
 5,35        * * * * cd /opt/AegisCore && make ci-phase45-force-transitions >> /opt/AegisCore/scripts/log/phase45-force-transitions.log 2>&1
+
+# §17.1 — operational change synthesis ("what changed?").
+# Cadence chosen so each window's cards refresh roughly twice per
+# its TTL: 1h every 15m, 6h every hour, 24h every 4h, 7d daily 04:30 UTC.
+# Pipeline is read-only on shipped surfaces, so safe to layer on top
+# of the freshness writers above.
+3,18,33,48  * * * * cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=1h  make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1
+12          * * * * cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=6h  make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1
+22          */4 * * * cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=24h make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1
+30          4 * * *   cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=7d  make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1

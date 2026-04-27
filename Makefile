@@ -585,6 +585,11 @@ ci-phase47-strategic-alerts:
 ci-phase47-incident-narratives:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase47-incident-narratives --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
 
+# §17.1 — operational change synthesis ("what changed?").
+# Args: VIEWER_BLOC=1 WINDOW=24h (1h | 6h | 24h | 7d)
+ci-phase17-what-changed:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase17-what-changed --viewer-bloc-id $(VIEWER_BLOC) --window-type $(WINDOW) $(CI_ARGS)
+
 # Counter-Intel Phase 4.8 — governance + trust + analyst controls.
 # Args: VIEWER_BLOC=1 CI_ARGS="--window-days 30"
 ci-phase48-alert-suppression:
