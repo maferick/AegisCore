@@ -254,19 +254,25 @@ considered closed for v1.
 
 ## 14. Calibration
 
-- ☐ collect 200+ analyst feedback events spanning all 7 instrumented
-  surfaces (alert / digest / narrative / incident / corridor /
-  alliance_profile / threat_surface)
-- ☐ replay feedback through trust metrics; verify trust_score
-  diverges from 0.50 baseline as expected
-- ☐ recalibrate severity thresholds for `incident_explosion` /
-  `corridor_explosion` / `doctrine_mismatch_explosion` against the
-  first 4 weeks of real platform data
+- ☑ ADR 0011 — v1 calibration policy: what gets calibrated,
+  how (capture → analyse → propose → adopt), when (one-off
+  on analyst complaint, quarterly sweep, major data shifts),
+  authority + audit (no autonomous calibration; recalibration
+  commits include verification/calibration/<date>_<reason>.md)
+- ☑ baseline snapshot 2026-04-27:
+  `verification/calibration/baseline_2026_04_27.json`
+  captures bloc-1 incident/cluster/corridor counts, doctrine
+  match rate, alert distribution, trust scores at snapshot
+  time, all detector thresholds active. Future recalibrations
+  diff against this.
+- ☐ collect 200+ analyst feedback events spanning all 7
+  instrumented surfaces (gate for trust-weight recalibration)
+- ☐ first quarterly recalibration sweep (90 days post-freeze)
 - ☐ recalibrate operational_style classifier when April force
-  compositions accrue
-- **Gate**: trust scores no longer at baseline; severity thresholds
-  re-derived from 4-week percentiles; first calibration ADR drafted
-  (`docs/adr/0007-v1-calibration.md`).
+  composition coverage thickens
+- **Gate**: ADR + baseline shipped. Quarterly cadence kicks in
+  90d post-freeze. Trust-weight recalibration gated on the
+  200-event / 5-surface corpus criterion.
 
 ## 15. UX
 
@@ -288,15 +294,21 @@ considered closed for v1.
 
 - ☑ verification/phase4/ docs for every phase (4.1 → 4.9B)
 - ☑ ADR-0001 → 0006 covering placement, ESI, market, hub overlay
-- ☑ AGENTS.md plane boundary rules
-- ☑ CLAUDE.md project brief
-- ☐ docs/RETENTION.md — TTL ladder + sweep operations + restore
+- ☑ AGENTS.md plane boundary rules — refreshed with V1 closure section
+- ☑ CLAUDE.md project brief — refreshed with V1 closure status
+- ☑ docs/RETENTION.md — TTL ladder + sweep operations + restore
   procedure
-- ☐ docs/RUNBOOK.md — when X happens, do Y (orphans, parser drift,
-  thread starvation, Neo4j thread audit, SDE bump rollback)
-- ☐ docs/CONTRACTS.md — already exists; refresh outbox event list
-  with v1 final state
-- ☐ docs/adr/0007-v1-calibration.md (depends on §14 gate)
+- ☑ docs/RUNBOOK.md — recipe per quality_event detector + lane state
+  + known incidents (orphans, parser drift, thread starvation, SDE
+  rollback, partial backups, retry/circuit breaker triage)
+- ☑ docs/CONTRACTS.md — refreshed with V1 operational contracts
+  + V1 closure references
+- ☑ docs/adr/0011-v1-calibration-policy.md (was 0007 in original
+  plan; bumped because 0007-0010 were already taken)
+- ☑ docs/ROADMAP.md — Phase 4 + V1/V2 boundary documented
+- ☑ docs/ADR-market-orders-partitioning.md — proposed for v2
+- ☑ verification/storage/db_storage_audit.md
+- ☑ verification/calibration/baseline_2026_04_27.json
 - **Gate**: runbook covers every quality_event detector + every
   lane state transition with a known recipe.
 

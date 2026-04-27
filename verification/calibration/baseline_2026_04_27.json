@@ -1,0 +1,113 @@
+{
+  "captured_at": "2026-04-27T00:25:00Z",
+  "snapshot_version": "v1.0",
+  "purpose": "v1-closure baseline. Future calibrations diff against this snapshot to detect threshold drift before retuning.",
+  "blocs": [
+    {
+      "viewer_bloc_id": 1,
+      "incidents": {
+        "30d_total": 5340,
+        "daily_mean": 178.0,
+        "daily_min": 48,
+        "daily_max": 392,
+        "severity_distribution_30d": {
+          "noise": 5060,
+          "tactical": 250,
+          "strategic": 28,
+          "escalation": 2,
+          "coalition_level": 0
+        }
+      },
+      "clusters": {
+        "30d_total": 6174,
+        "daily_mean": 205.8
+      },
+      "force_compositions": {
+        "total_observed": 42,
+        "doctrine_match_rate": 0.3571,
+        "matched": 15,
+        "unmatched": 27
+      },
+      "corridors": {
+        "total": 3144,
+        "new_per_7d": 193,
+        "prior_7d": 128,
+        "route_classification": {
+          "unclassified": 2011,
+          "transit": 649,
+          "deployment_migration": 474,
+          "reinforcement": 8,
+          "staging": 2
+        }
+      },
+      "alerts_30d": {
+        "watch": 194,
+        "elevated": 30,
+        "urgent": 0,
+        "info": 0
+      },
+      "trust_scores_at_baseline": {
+        "alert": 0.477,
+        "digest": 0.500,
+        "narrative": 0.500,
+        "incident": 0.500,
+        "corridor": 0.500,
+        "alliance_profile": 0.500,
+        "threat_surface": 0.500
+      }
+    }
+  ],
+  "feedback_corpus_at_baseline": {
+    "total_events": 1,
+    "by_kind": {
+      "useful": 1
+    },
+    "note": "Single test feedback row. Real corpus accumulation begins post-v1-freeze as analysts use the platform during real coalition events."
+  },
+  "thresholds_at_baseline": {
+    "incident_explosion": {
+      "ratio_warning": 4,
+      "ratio_elevated": 6,
+      "ratio_critical": 10,
+      "abs_floor": 200,
+      "tuned_against": "bloc-1 30d mean 178/d, max 392/d"
+    },
+    "doctrine_mismatch_explosion": {
+      "rate_warning": 0.70,
+      "rate_elevated": 0.80,
+      "rate_critical": 0.90,
+      "tuned_against": "bloc-1 baseline 0.6429 mismatch rate (sparse April composition data)"
+    },
+    "corridor_explosion": {
+      "ratio_threshold": 5,
+      "abs_floor": 50,
+      "tuned_against": "stable since Phase 4.9E.1 — no retune yet"
+    },
+    "neo4j_thread_pressure": {
+      "warning_pct": 0.80,
+      "critical_pct": 1.00,
+      "bolt_max": 16,
+      "tuned_against": "Neo4j config server.bolt.thread_pool_max_size=16"
+    },
+    "current_parser_drift": {
+      "rate_warning": 0.05,
+      "rate_elevated": 0.10,
+      "rate_critical": 0.20,
+      "min_events_floor": 100,
+      "tuned_against": "intuition + post-incident calibration 2026-04-26"
+    },
+    "stale_compute_chain": {
+      "hours_warning": 36,
+      "hours_elevated": 60,
+      "hours_critical": 96,
+      "tuned_against": "expected daily-cron + 12h drift tolerance"
+    }
+  },
+  "analyst_feedback_corpus_eligibility": {
+    "min_events_for_recalibration": 200,
+    "min_distinct_surfaces": 5,
+    "current_event_count": 1,
+    "current_distinct_surfaces": 1,
+    "recalibration_eligible": false
+  }
+}

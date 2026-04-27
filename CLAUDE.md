@@ -79,3 +79,12 @@ Pre-approved defaults — apply without asking:
 - **Idempotency before commit**: every new worker gets a re-run byte-identical check before the feature commit.
 - **FK / CHECK failures mid-migration**: investigate the referenced table first (role keys, column types), don't silently relax the constraint.
 - **Caveman mode**: stays active until explicit "stop caveman" or "normal mode". Tool call planning allowed to be verbose, user-facing output stays terse.
+
+## V1 closure status
+
+Platform is in **v1 freeze**. No new intelligence capabilities. Burn down [`docs/V1_COMPLETION_CHECKLIST.md`](docs/V1_COMPLETION_CHECKLIST.md) gates only.
+
+- **Hardening surfaces shipped**: governance (Phase 4.8), freshness (4.9), orchestration + quality guards (4.9A/E), retry+circuit (4.9D), retention (4.9C), audit log (§11), single-source TTL (§13), calibration policy (§14).
+- **Operator entry points**: [`docs/RUNBOOK.md`](docs/RUNBOOK.md) (incident recipes), [`docs/RETENTION.md`](docs/RETENTION.md) (TTL ladder), [`/portal/intelligence/platform-health`](http://localhost/portal/intelligence/platform-health) (live state).
+- **DB pressure**: 651 GB data dir, 90% in 5 tables. Audit at `verification/storage/db_storage_audit.md`. market_orders partitioning gated by ADR `docs/ADR-market-orders-partitioning.md` — execution waits for v2.
+- **v1/v2 split**: see `memory/project_v1_v2_split.md`. Predictive AI / recommendations / autonomous scoring / Phase 6 stylometry are deferred.
