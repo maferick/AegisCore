@@ -37,7 +37,7 @@
                 </a>
             @endforeach
             <span style="margin-left:auto; font-size:0.65rem; color:#7a7a82;">
-                {{ $bloc_alliance_count }} blue alliance{{ $bloc_alliance_count === 1 ? '' : 's' }} in bloc · cached 5 min
+                {{ $bloc_alliance_count }} blue alliance{{ $bloc_alliance_count === 1 ? '' : 's' }} in bloc
             </span>
         </div>
 

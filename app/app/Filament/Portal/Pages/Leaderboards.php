@@ -22,9 +22,12 @@ use UnitEnum;
  *     hostile alliances seen, top hostile corps)
  *   - Fleet — bloc-scoped fleet participation surface
  *
- * Read-only. No actions, no mutations. Heavy queries — runtime
- * caches each section keyed by (bloc, window) for 5 minutes so
- * a refresh of the page doesn't hammer killmails repeatedly.
+ * Read-only. No actions, no mutations. Each section uses a
+ * LIMIT 10 + indexed range filter on killed_at — total cost
+ * stays under the 2 s page-render envelope, so we run the
+ * queries fresh each render rather than caching DB row objects
+ * (Redis stdClass round-trip stripped classes to
+ * __PHP_Incomplete_Class on this stack).
  */
 class Leaderboards extends Page
 {
@@ -80,23 +83,20 @@ class Leaderboards extends Page
             ->map(fn ($v) => (int) $v)
             ->all();
 
-        $cache = "leaderboards.bloc{$blocId}.{$window}";
-        $data = cache()->remember($cache, 300, function () use ($interval, $blocId, $blocAllianceIds) {
-            return [
-                'top_killers'         => $this->topKillers($interval, $blocAllianceIds),
-                'top_losses'          => $this->topLosses($interval, $blocAllianceIds),
-                'top_isk_destroyed'   => $this->topIskDestroyed($interval, $blocAllianceIds),
-                'top_isk_lost'        => $this->topIskLost($interval, $blocAllianceIds),
-                'fav_hulls_killing'   => $this->favHullsKilling($interval, $blocAllianceIds),
-                'fav_hulls_lost'      => $this->favHullsLost($interval, $blocAllianceIds),
-                'hot_systems'         => $this->hotSystems($interval),
-                'hostile_alliances'   => $this->hostileAlliances($interval, $blocAllianceIds),
-                'hostile_corps'       => $this->hostileCorps($interval, $blocAllianceIds),
-                'fleet_hours'         => $this->fleetHours($interval, $blocId),
-                'fleet_killers'       => $this->fleetKillers($interval, $blocId),
-                'fleet_talkers'       => $this->fleetTalkers($interval, $blocId),
-            ];
-        });
+        $data = [
+            'top_killers'         => $this->topKillers($interval, $blocAllianceIds),
+            'top_losses'          => $this->topLosses($interval, $blocAllianceIds),
+            'top_isk_destroyed'   => $this->topIskDestroyed($interval, $blocAllianceIds),
+            'top_isk_lost'        => $this->topIskLost($interval, $blocAllianceIds),
+            'fav_hulls_killing'   => $this->favHullsKilling($interval, $blocAllianceIds),
+            'fav_hulls_lost'      => $this->favHullsLost($interval, $blocAllianceIds),
+            'hot_systems'         => $this->hotSystems($interval),
+            'hostile_alliances'   => $this->hostileAlliances($interval, $blocAllianceIds),
+            'hostile_corps'       => $this->hostileCorps($interval, $blocAllianceIds),
+            'fleet_hours'         => $this->fleetHours($interval, $blocId),
+            'fleet_killers'       => $this->fleetKillers($interval, $blocId),
+            'fleet_talkers'       => $this->fleetTalkers($interval, $blocId),
+        ];
 
         return [
             'no_bloc' => false,
