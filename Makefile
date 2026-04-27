@@ -630,6 +630,13 @@ market-order-aggregator-backfill:
 	$(COMPOSE) --profile tools run --rm --build counter_intel \
 	  market-order-aggregator-backfill --start-date $(START) --end-date-exclusive $(END) $(REGIONS)
 
+# Daily partition rotation for market_orders.
+# Drops partitions outside 72h hot window + creates 90 days of
+# future partitions. Metadata-only on InnoDB (<60s).
+# Override: AEGIS_MARKET_RETENTION_DAYS / AEGIS_MARKET_FUTURE_DAYS / AEGIS_MARKET_DRY_RUN
+market-orders-rotate:
+	@bash scripts/market-orders-rotate.sh
+
 # V1 §13 — verify TTL config single-source consistency.
 # python/counter_intel/intel_ttl.json (canonical) MUST equal
 # app/config/intel_ttl.json. Edit one, then run this; or edit

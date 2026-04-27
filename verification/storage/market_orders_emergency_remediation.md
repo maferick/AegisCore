@@ -309,7 +309,33 @@ small regions × yesterday + today). Hourly cadence means
 worst-case freshness lag = 1 hour + run time. Aggregator
 runtime stays well under the cron interval.
 
-### E.3 — daily-partitioned `market_orders_v2` (NOT executed)
+### E.3 — daily-partitioned `market_orders_v2` (in progress 2026-04-27 16:00 UTC)
+
+Operator OK 2026-04-27 15:57 UTC. Sequence:
+
+1. **Backup confirmed** — 12:58 UTC, 24.8 GB compressed,
+   3 hours old.
+2. **Pollers stopped** —
+   `docker compose stop market_poll_scheduler market_import_scheduler outbox_relay`
+   at 15:58 UTC.
+3. **`market_orders_v2` created** — 257 daily partitions
+   covering 2026-04-20 → 2027-01-01 + p_future. 0 rows.
+   Schema cloned via `CREATE TABLE … LIKE market_orders` +
+   `REMOVE PARTITIONING` + monthly→daily PARTITION BY RANGE
+   reapply.
+4. **72h INSERT running** — `INSERT INTO market_orders_v2
+   SELECT * FROM market_orders WHERE observed_at >= NOW() -
+   INTERVAL 72 HOUR`. Background; monitor reporting row
+   counts as they land.
+5. RENAME TABLE pending — fires on INSERT completion.
+6. Pollers restart pending — fires on RENAME completion.
+7. `market_orders_old` kept read-only for 7 days as
+   rollback window.
+8. `DROP TABLE market_orders_old` — separate operator
+   step after 7-day window expires.
+9. Daily rotation cron — pre-built at
+   `scripts/market-orders-rotate.sh` + Make target. Will be
+   installed after RENAME confirmed clean.
 
 Sequence (operator-led):
 
