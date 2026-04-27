@@ -28,7 +28,7 @@ class KillmailBrowserResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-magnifying-glass';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intel';
+    protected static string|UnitEnum|null $navigationGroup = 'Combat';
 
     protected static ?string $navigationLabel = 'Kill Browser';
 

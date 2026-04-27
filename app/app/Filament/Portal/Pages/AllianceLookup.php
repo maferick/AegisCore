@@ -28,7 +28,7 @@ class AllianceLookup extends Page
 
     protected static ?string $navigationLabel = 'Alliance Lookup';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Lookups';
 
     protected static ?int $navigationSort = 6;
 

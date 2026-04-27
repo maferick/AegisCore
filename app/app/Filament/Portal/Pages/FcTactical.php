@@ -23,7 +23,7 @@ class FcTactical extends Page
 
     protected static ?string $navigationLabel = 'FC tactical';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Daily ops';
 
     protected static ?int $navigationSort = 7;
 

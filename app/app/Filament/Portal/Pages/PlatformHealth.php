@@ -26,7 +26,7 @@ class PlatformHealth extends Page
 
     protected static ?string $navigationLabel = 'Platform health';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Admin';
 
     protected static ?int $navigationSort = 13;
 
@@ -223,9 +223,36 @@ class PlatformHealth extends Page
             ->where('start_at', '>=', now()->subHours(24))
             ->count();
 
+        // One-line verdict for the top of the page so an operator
+        // gets the answer at a glance instead of scanning eight
+        // tables. Severity is the worst signal across:
+        //   - failed/stale surfaces
+        //   - open circuits
+        //   - running-too-long pipelines
+        //   - open critical/elevated quality events
+        $verdict = $this->buildVerdict(
+            $surfaceHealth, $openCircuits, $runningTooLong, $qualityEvents,
+        );
+
+        // Split lanes by instrumentation status so the dashboard can
+        // collapse the wall of repeated "no instrumented pipelines
+        // reporting" rows into a single summary line.
+        $instrumentedLanes = [];
+        $notInstrumentedLanes = [];
+        foreach ($lanes as $l) {
+            if (($l->lane_state ?? null) === 'not_instrumented') {
+                $notInstrumentedLanes[] = $l;
+            } else {
+                $instrumentedLanes[] = $l;
+            }
+        }
+
         return [
             'no_bloc' => false,
-            'lanes' => $lanes,
+            'verdict' => $verdict,
+            'lanes' => $lanes,  // legacy alias, blade migrates off
+            'instrumented_lanes' => $instrumentedLanes,
+            'not_instrumented_lanes' => $notInstrumentedLanes,
             'recent_runs' => $recentRuns,
             'running_too_long' => $runningTooLong,
             'quality_events' => $qualityEvents,
@@ -239,6 +266,66 @@ class PlatformHealth extends Page
             'lane_retry' => $laneRetry,
             'top_retry_pipelines' => $topRetryPipelines,
         ];
+    }
+
+    /**
+     * Compose the page-level verdict — `severity`, `headline`, and
+     * a short `details` list. Severity bands map to UI colour
+     * (info=neutral, warning=yellow, elevated=orange, critical=red).
+     *
+     * @param  array<string, string>  $surfaceHealth
+     * @return array{severity:string, headline:string, details:array<int, string>}
+     */
+    private function buildVerdict(array $surfaceHealth, $openCircuits, $runningTooLong, $qualityEvents): array
+    {
+        $failedSurfaces = array_keys(array_filter($surfaceHealth, fn ($s) => $s === 'failed'));
+        $staleSurfaces  = array_keys(array_filter($surfaceHealth, fn ($s) => $s === 'stale'));
+        $agingSurfaces  = array_keys(array_filter($surfaceHealth, fn ($s) => $s === 'aging'));
+
+        $criticalQE = collect($qualityEvents)->filter(fn ($e) => $e->severity === 'critical')->count();
+        $elevatedQE = collect($qualityEvents)->filter(fn ($e) => $e->severity === 'elevated')->count();
+
+        $details = [];
+        if ($failedSurfaces) {
+            $details[] = count($failedSurfaces) . ' surface' . (count($failedSurfaces) === 1 ? '' : 's')
+                . ' failed: ' . implode(', ', array_map(fn ($s) => str_replace('_', ' ', $s), $failedSurfaces));
+        }
+        if ($staleSurfaces) {
+            $details[] = count($staleSurfaces) . ' stale: ' . implode(', ', array_map(fn ($s) => str_replace('_', ' ', $s), $staleSurfaces));
+        }
+        if (count($openCircuits) > 0) {
+            $details[] = count($openCircuits) . ' open circuit' . (count($openCircuits) === 1 ? '' : 's');
+        }
+        if (count($runningTooLong) > 0) {
+            $details[] = count($runningTooLong) . ' pipeline' . (count($runningTooLong) === 1 ? '' : 's') . ' running > 15m';
+        }
+        if ($criticalQE > 0) {
+            $details[] = "{$criticalQE} critical quality event" . ($criticalQE === 1 ? '' : 's');
+        }
+        if ($elevatedQE > 0) {
+            $details[] = "{$elevatedQE} elevated quality event" . ($elevatedQE === 1 ? '' : 's');
+        }
+
+        // Severity ladder (worst wins).
+        $severity = 'info';
+        $headline = 'System healthy';
+        if ($criticalQE > 0 || count($openCircuits) > 0) {
+            $severity = 'critical';
+            $headline = 'System degraded — needs attention';
+        } elseif (count($failedSurfaces) > 0 || count($runningTooLong) > 0) {
+            $severity = 'elevated';
+            $headline = count($failedSurfaces) === 1
+                ? 'One surface failed'
+                : 'System degraded';
+        } elseif ($elevatedQE > 0 || count($staleSurfaces) > 0) {
+            $severity = 'warning';
+            $headline = 'Stale data observed';
+        } elseif (count($agingSurfaces) > 0) {
+            $severity = 'info';
+            $headline = 'System healthy — some surfaces aging';
+        }
+
+        return ['severity' => $severity, 'headline' => $headline, 'details' => $details];
     }
 
     /**

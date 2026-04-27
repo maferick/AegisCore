@@ -25,7 +25,7 @@ class CounterIntelWatchlist extends Page
 
     protected static ?string $navigationLabel = 'Counter-Intel Watchlist';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Watchlist & verified';
 
     protected static ?int $navigationSort = 6;
 

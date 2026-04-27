@@ -31,7 +31,7 @@ class WhatChanged extends Page
 
     protected static ?string $navigationLabel = 'What changed';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Daily ops';
 
     protected static ?int $navigationSort = 14;
 

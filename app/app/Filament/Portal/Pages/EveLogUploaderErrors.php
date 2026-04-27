@@ -30,7 +30,7 @@ class EveLogUploaderErrors extends Page
 
     protected static ?string $navigationLabel = 'Parser Errors';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Admin';
 
     protected static ?int $navigationSort = 9;
 

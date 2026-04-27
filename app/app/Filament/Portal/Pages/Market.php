@@ -24,7 +24,7 @@ class Market extends Page
 
     protected static ?string $navigationLabel = 'Market';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Market';
 
     protected static ?int $navigationSort = 30;
 

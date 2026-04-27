@@ -24,7 +24,7 @@ class VerifiedIntelligence extends Page
 
     protected static ?string $navigationLabel = 'Verified intelligence';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Watchlist & verified';
 
     protected static ?int $navigationSort = 10;
 

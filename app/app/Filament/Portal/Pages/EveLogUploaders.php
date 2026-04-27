@@ -27,7 +27,7 @@ class EveLogUploaders extends Page
 
     protected static ?string $navigationLabel = 'EVE Log Uploaders';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Admin';
 
     protected static ?int $navigationSort = 8;
 

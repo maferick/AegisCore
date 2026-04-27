@@ -24,7 +24,7 @@ class TrustOverview extends Page
 
     protected static ?string $navigationLabel = 'Trust overview';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Strategic';
 
     protected static ?int $navigationSort = 11;
 

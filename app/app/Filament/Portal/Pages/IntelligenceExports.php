@@ -26,7 +26,7 @@ class IntelligenceExports extends Page
 
     protected static ?string $navigationLabel = 'Intel exports';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Strategic';
 
     protected static ?int $navigationSort = 12;
 

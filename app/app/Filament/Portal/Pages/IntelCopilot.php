@@ -22,7 +22,7 @@ class IntelCopilot extends Page
 
     protected static ?string $navigationLabel = 'Intel Copilot';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Tools';
 
     protected static ?int $navigationSort = 30;
 

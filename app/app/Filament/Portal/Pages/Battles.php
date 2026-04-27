@@ -38,7 +38,7 @@ class Battles extends Page implements HasTable
 
     protected static ?string $navigationLabel = 'Battles';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Strategic';
 
     protected static ?int $navigationSort = 20;
 

@@ -27,7 +27,7 @@ class CounterIntelDashboard extends Page
 
     protected static ?string $navigationLabel = 'Counter-Intel Overview';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Daily ops';
 
     protected static ?int $navigationSort = 4;
 

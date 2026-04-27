@@ -52,6 +52,22 @@ class PortalPanelProvider extends PanelProvider
             ->discoverResources(in: app_path('Filament/Portal/Resources'), for: 'App\\Filament\\Portal\\Resources')
             ->discoverPages(in: app_path('Filament/Portal/Pages'), for: 'App\\Filament\\Portal\\Pages')
             ->discoverWidgets(in: app_path('Filament/Portal/Widgets'), for: 'App\\Filament\\Portal\\Widgets')
+            // Explicit group ordering — operator workflow first
+            // (daily ops, lookups, watchlist), then strategic
+            // surfaces, combat / market, then admin/account at
+            // the bottom. Each page sets its navigationGroup to
+            // one of these strings.
+            ->navigationGroups([
+                'Daily ops',
+                'Lookups',
+                'Watchlist & verified',
+                'Strategic',
+                'Combat',
+                'Market',
+                'Tools',
+                'Admin',
+                'Account',
+            ])
             ->navigationItems([
                 NavigationItem::make('Home')
                     ->url('/')

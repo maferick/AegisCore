@@ -30,7 +30,7 @@ class OperationalSearch extends Page
 
     protected static ?string $navigationLabel = 'Operational search';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Lookups';
 
     protected static ?int $navigationSort = 9;
 

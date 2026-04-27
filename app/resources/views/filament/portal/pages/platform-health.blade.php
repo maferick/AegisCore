@@ -5,6 +5,12 @@
         </div>
     @else
         @php
+            $verdictColors = [
+                'info' => ['bg' => 'rgba(134,239,172,0.10)', 'border' => '#86efac', 'fg' => '#86efac'],
+                'warning' => ['bg' => 'rgba(253,230,138,0.10)', 'border' => '#fde68a', 'fg' => '#fde68a'],
+                'elevated' => ['bg' => 'rgba(253,186,116,0.12)', 'border' => '#fdba74', 'fg' => '#fdba74'],
+                'critical' => ['bg' => 'rgba(251,113,133,0.14)', 'border' => '#fb7185', 'fg' => '#fb7185'],
+            ];
             $laneStateColors = [
                 'healthy' => '#86efac', 'degraded' => '#fde68a',
                 'backlogged' => '#fdba74', 'starved' => '#fb923c',
@@ -23,6 +29,26 @@
             $statusColors = ['running' => '#7dd3fc', 'succeeded' => '#86efac',
                              'failed' => '#fb7185', 'aborted' => '#9ca3af'];
         @endphp
+
+        {{-- Verdict banner --}}
+        @php $vc = $verdictColors[$verdict['severity']] ?? $verdictColors['info']; @endphp
+        <div class="fi-section rounded-xl"
+             style="padding:0.7rem 1rem; margin-bottom:0.75rem;
+                    background:{{ $vc['bg'] }}; border:1px solid {{ $vc['border'] }};">
+            <div style="display:flex; gap:0.6rem; align-items:baseline; flex-wrap:wrap;">
+                <span style="font-size:0.55rem; padding:2px 8px; border-radius:3px; background:rgba(0,0,0,0.18); color:{{ $vc['fg'] }}; text-transform:uppercase; letter-spacing:0.1em;">
+                    {{ $verdict['severity'] }}
+                </span>
+                <strong style="font-size:0.95rem; color:#e5e7eb;">{{ $verdict['headline'] }}</strong>
+            </div>
+            @if (count($verdict['details']) > 0)
+                <ul style="margin:0.4rem 0 0 1.2rem; padding:0; font-size:0.72rem; color:#cbd5e1; line-height:1.55;">
+                    @foreach ($verdict['details'] as $d)
+                        <li>{{ $d }}</li>
+                    @endforeach
+                </ul>
+            @endif
+        </div>
 
         {{-- Top pulse strip --}}
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-bottom:0.75rem;">
@@ -65,7 +91,14 @@
                         @endforeach
                     </tbody>
                 </table>
-                <p style="font-size:0.6rem; color:#7a7a82; margin:0.4rem 0 0;">Inspect via <code>/portal/eve-log/uploader-errors</code>; replay queue with <code>php artisan eve-log:retry-parse-errors</code> after parser fix.</p>
+                <p style="font-size:0.65rem; color:#cbd5e1; margin:0.4rem 0 0;">
+                    Review the queue at
+                    <a href="/portal/eve-log/uploader-errors" style="color:#7dd3fc;">Parser Errors</a>.
+                </p>
+                <details style="margin-top:0.3rem;">
+                    <summary style="font-size:0.6rem; color:#7a7a82; cursor:pointer;">admin · replay command</summary>
+                    <p style="font-size:0.6rem; color:#7a7a82; margin:0.3rem 0 0;">After fixing parser logic, replay the queue: <code>php artisan eve-log:retry-parse-errors</code>.</p>
+                </details>
             </div>
         @endif
 
@@ -77,42 +110,68 @@
                     @if (count($lanes) === 0)
                         <p style="font-size:0.75rem; color:#7a7a82; font-style:italic;">No lane metrics yet — run <code>make ci-phase49a-lane-metrics</code>.</p>
                     @else
-                        <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
-                            <thead style="color:#7a7a82;">
-                                <tr><th style="text-align:left;">lane</th><th style="text-align:left;">state</th><th style="text-align:right;">running</th><th style="text-align:right;">succ 24h</th><th style="text-align:right;">fail 24h</th><th style="text-align:right;">retries</th><th style="text-align:right;">avg ms</th><th style="text-align:right;">p95 ms</th><th style="text-align:right;">oldest pend</th><th style="text-align:right;">tput/h</th></tr>
+                        <table style="width:100%; font-size:0.72rem; color:#e2e8f0; border-collapse:separate; border-spacing:0;">
+                            <thead style="color:#cbd5e1; background:rgba(255,255,255,0.04);">
+                                <tr>
+                                    <th style="text-align:left; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);">lane</th>
+                                    <th style="text-align:left; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);">state</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Pipelines currently in 'running' status">running</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Successful runs in last 24h">succ 24h</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Failed runs in last 24h">fail 24h</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Retry attempts / runs that hit retry / open circuits">retries</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Average run duration in ms (last 24h)">avg ms</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="95th-percentile run duration in ms — slowest 5% are slower than this">p95 ms</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Oldest pipeline still in 'running' status (minutes since started)">oldest pend</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Throughput per hour — runs completed per hour over the window">tput/h</th>
+                                </tr>
                             </thead>
                             <tbody>
-                                @foreach ($lanes as $l)
+                                @foreach ($instrumented_lanes as $l)
                                     @php
                                         $col = $laneStateColors[$l->lane_state] ?? '#9ca3af';
-                                        $notInstrumented = ($l->lane_state === 'not_instrumented');
+                                        $r = $lane_retry[$l->lane] ?? ['retries' => 0, 'retried_runs' => 0, 'runs_24h' => 0, 'open_circuits' => 0];
+                                        $retryColor = $r['open_circuits'] > 0 ? '#fb7185' : ($r['retries'] > 0 ? '#fdba74' : '#9ca3af');
+                                        $stripe = $loop->iteration % 2 === 0 ? 'background:rgba(255,255,255,0.02);' : '';
                                     @endphp
-                                    <tr style="border-top:1px solid rgba(255,255,255,0.05);{{ $notInstrumented ? ' opacity:0.55;' : '' }}">
-                                        <td style="padding:3px 4px;"><strong>{{ str_replace('_', ' ', $l->lane) }}</strong></td>
-                                        <td style="padding:3px 4px; color:{{ $col }};">{{ str_replace('_', ' ', $l->lane_state) }}</td>
-                                        @if ($notInstrumented)
-                                            <td colspan="8" style="padding:3px 4px; text-align:left; color:#7a7a82; font-style:italic;">no instrumented pipelines reporting · expected for ingest/parser/graph until ComputeLog wraps the relevant CLI entries</td>
-                                        @else
-                                            @php
-                                                $r = $lane_retry[$l->lane] ?? ['retries' => 0, 'retried_runs' => 0, 'runs_24h' => 0, 'open_circuits' => 0];
-                                                $retryColor = $r['open_circuits'] > 0 ? '#fb7185' : ($r['retries'] > 0 ? '#fdba74' : '#7a7a82');
-                                            @endphp
-                                            <td style="padding:3px 4px; text-align:right; color:{{ $l->running_jobs > 0 ? '#7dd3fc' : '#7a7a82' }};">{{ $l->running_jobs }}</td>
-                                            <td style="padding:3px 4px; text-align:right;">{{ $l->succeeded_24h }}</td>
-                                            <td style="padding:3px 4px; text-align:right; color:{{ $l->failed_24h > 0 ? '#fb7185' : '#7a7a82' }};">{{ $l->failed_24h }}</td>
-                                            <td style="padding:3px 4px; text-align:right; color:{{ $retryColor }};">
-                                                {{ $r['retries'] }}@if ($r['retried_runs'] > 0) <span style="color:#7a7a82;">/ {{ $r['retried_runs'] }} runs</span>@endif
-                                                @if ($r['open_circuits'] > 0)
-                                                    <span style="margin-left:0.3rem; padding:1px 4px; border-radius:3px; background:rgba(251,113,133,0.15); color:#fb7185; font-size:0.5rem; text-transform:uppercase;">⚡ {{ $r['open_circuits'] }} circuit{{ $r['open_circuits'] === 1 ? '' : 's' }}</span>
-                                                @endif
-                                            </td>
-                                            <td style="padding:3px 4px; text-align:right;">{{ $l->avg_duration_ms ?? '—' }}</td>
-                                            <td style="padding:3px 4px; text-align:right;">{{ $l->p95_duration_ms ?? '—' }}</td>
-                                            <td style="padding:3px 4px; text-align:right;">{{ $l->oldest_pending_seconds ? floor($l->oldest_pending_seconds / 60).'m' : '—' }}</td>
-                                            <td style="padding:3px 4px; text-align:right;">{{ number_format((float) $l->throughput_per_hour, 2) }}</td>
-                                        @endif
+                                    <tr style="border-top:1px solid rgba(255,255,255,0.08); {{ $stripe }}">
+                                        <td style="padding:6px 8px;"><strong>{{ str_replace('_', ' ', $l->lane) }}</strong></td>
+                                        <td style="padding:6px 8px; color:{{ $col }}; font-weight:600;">{{ str_replace('_', ' ', $l->lane_state) }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:{{ $l->running_jobs > 0 ? '#7dd3fc' : '#9ca3af' }};">{{ $l->running_jobs }}</td>
+                                        <td style="padding:6px 8px; text-align:right;">{{ $l->succeeded_24h }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:{{ $l->failed_24h > 0 ? '#fb7185' : '#9ca3af' }};">{{ $l->failed_24h }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:{{ $retryColor }};">
+                                            {{ $r['retries'] }}@if ($r['retried_runs'] > 0) <span style="color:#9ca3af;">/ {{ $r['retried_runs'] }} runs</span>@endif
+                                            @if ($r['open_circuits'] > 0)
+                                                <span style="margin-left:0.3rem; padding:1px 4px; border-radius:3px; background:rgba(251,113,133,0.15); color:#fb7185; font-size:0.55rem; text-transform:uppercase;">⚡ {{ $r['open_circuits'] }} circuit{{ $r['open_circuits'] === 1 ? '' : 's' }}</span>
+                                            @endif
+                                        </td>
+                                        <td style="padding:6px 8px; text-align:right;">{{ $l->avg_duration_ms ?? '—' }}</td>
+                                        <td style="padding:6px 8px; text-align:right;">{{ $l->p95_duration_ms ?? '—' }}</td>
+                                        <td style="padding:6px 8px; text-align:right;">{{ $l->oldest_pending_seconds ? floor($l->oldest_pending_seconds / 60).'m' : '—' }}</td>
+                                        <td style="padding:6px 8px; text-align:right;">{{ number_format((float) $l->throughput_per_hour, 2) }}</td>
                                     </tr>
                                 @endforeach
+                                @if (count($not_instrumented_lanes) > 0)
+                                    <tr style="border-top:1px solid rgba(255,255,255,0.08);">
+                                        <td colspan="10" style="padding:6px 8px; color:#9ca3af;">
+                                            <details>
+                                                <summary style="cursor:pointer;">
+                                                    <span style="color:#7a7a82; font-style:italic;">
+                                                        {{ count($not_instrumented_lanes) }} lane{{ count($not_instrumented_lanes) === 1 ? '' : 's' }} pending instrumentation
+                                                        ({{ collect($not_instrumented_lanes)->pluck('lane')->map(fn ($x) => str_replace('_', ' ', $x))->join(', ') }})
+                                                        — expected
+                                                    </span>
+                                                </summary>
+                                                <p style="margin:0.4rem 0 0; font-size:0.65rem; color:#7a7a82;">
+                                                    These lanes have CLI entry points but their pipelines don't yet
+                                                    wrap themselves in <code>ComputeLog</code>. No runs reporting in
+                                                    means no metrics shown — not a failure. Schedule + instrumentation
+                                                    work is tracked in V1_COMPLETION_CHECKLIST §7.
+                                                </p>
+                                            </details>
+                                        </td>
+                                    </tr>
+                                @endif
                             </tbody>
                         </table>
                     @endif
@@ -122,9 +181,18 @@
                 @if (count($surface_freshness) > 0)
                     <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
                         <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Surface health</h3>
-                        <table style="width:100%; font-size:0.7rem; color:#cbd5e1; border-collapse:collapse;">
-                            <thead style="color:#7a7a82;">
-                                <tr><th style="text-align:left;">surface</th><th style="text-align:left;">badge</th><th style="text-align:right;">newest age</th><th style="text-align:right;">total</th><th style="text-align:right; color:#86efac;">fresh</th><th style="text-align:right; color:#fde68a;">aging</th><th style="text-align:right; color:#fdba74;">stale</th><th style="text-align:right; color:#fb7185;">expired</th></tr>
+                        <table style="width:100%; font-size:0.72rem; color:#e2e8f0; border-collapse:separate; border-spacing:0;">
+                            <thead style="color:#cbd5e1; background:rgba(255,255,255,0.04);">
+                                <tr>
+                                    <th style="text-align:left; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);">surface</th>
+                                    <th style="text-align:left; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Per-surface health badge derived from the age of the newest row vs the TTL ladder in config/intel_ttl.json">badge</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);" title="Age of the newest row on this surface — answers 'is the latest data fresh enough to act on?'">newest age</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.15);">total</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; color:#86efac; border-bottom:1px solid rgba(255,255,255,0.15);" title="Rows within the surface's fresh TTL window">fresh</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; color:#fde68a; border-bottom:1px solid rgba(255,255,255,0.15);" title="Rows within the surface's aging TTL window">aging</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; color:#fdba74; border-bottom:1px solid rgba(255,255,255,0.15);" title="Rows within the surface's stale TTL window">stale</th>
+                                    <th style="text-align:right; padding:6px 8px; font-weight:600; color:#fb7185; border-bottom:1px solid rgba(255,255,255,0.15);" title="Rows past the surface's expired TTL window — historical / sealed records">expired</th>
+                                </tr>
                             </thead>
                             <tbody>
                                 @foreach ($surface_freshness as $surface => $tally)
@@ -135,16 +203,17 @@
                                         $ageDisplay = $ageH === null
                                             ? '—'
                                             : ($ageH < 1 ? '<1h' : ($ageH < 48 ? "{$ageH}h" : floor($ageH / 24) . 'd'));
+                                        $stripe = $loop->iteration % 2 === 0 ? 'background:rgba(255,255,255,0.02);' : '';
                                     @endphp
-                                    <tr style="border-top:1px solid rgba(255,255,255,0.05);">
-                                        <td style="padding:3px 4px;">{{ str_replace('_', ' ', $surface) }}</td>
-                                        <td style="padding:3px 4px;"><span style="font-size:0.55rem; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:{{ $col }};">{{ $health }}</span></td>
-                                        <td style="padding:3px 4px; text-align:right; color:{{ $col }};">{{ $ageDisplay }}</td>
-                                        <td style="padding:3px 4px; text-align:right;">{{ number_format($tally['total']) }}</td>
-                                        <td style="padding:3px 4px; text-align:right; color:#86efac;">{{ $tally['fresh'] ?? 0 }}</td>
-                                        <td style="padding:3px 4px; text-align:right; color:#fde68a;">{{ $tally['aging'] ?? 0 }}</td>
-                                        <td style="padding:3px 4px; text-align:right; color:#fdba74;">{{ $tally['stale'] ?? 0 }}</td>
-                                        <td style="padding:3px 4px; text-align:right; color:#fb7185;">{{ $tally['expired'] ?? 0 }}</td>
+                                    <tr style="border-top:1px solid rgba(255,255,255,0.08); {{ $stripe }}">
+                                        <td style="padding:6px 8px;">{{ str_replace('_', ' ', $surface) }}</td>
+                                        <td style="padding:6px 8px;"><span style="font-size:0.6rem; padding:2px 8px; border-radius:3px; background:rgba(255,255,255,0.06); color:{{ $col }}; font-weight:600;">{{ $health }}</span></td>
+                                        <td style="padding:6px 8px; text-align:right; color:{{ $col }}; font-weight:600;">{{ $ageDisplay }}</td>
+                                        <td style="padding:6px 8px; text-align:right;">{{ number_format($tally['total']) }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:#86efac;">{{ $tally['fresh'] ?? 0 }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:#fde68a;">{{ $tally['aging'] ?? 0 }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:#fdba74;">{{ $tally['stale'] ?? 0 }}</td>
+                                        <td style="padding:6px 8px; text-align:right; color:#fb7185;">{{ $tally['expired'] ?? 0 }}</td>
                                     </tr>
                                 @endforeach
                             </tbody>

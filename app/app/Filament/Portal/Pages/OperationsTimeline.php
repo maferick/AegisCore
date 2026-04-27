@@ -24,7 +24,7 @@ class OperationsTimeline extends Page
 
     protected static ?string $navigationLabel = 'Operations Timeline';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Intelligence';
+    protected static string|UnitEnum|null $navigationGroup = 'Daily ops';
 
     protected static ?int $navigationSort = 7;
 
