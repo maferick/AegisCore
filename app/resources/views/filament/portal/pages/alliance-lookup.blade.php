@@ -63,11 +63,11 @@
                     <li>Drill in from a killmail, character lookup, or watchlist entry instead of typing.</li>
                 </ul>
                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.6rem;">
-                    <a href="/portal/intelligence/director-strategic"
+                    <a href="/portal/intelligence/director"
                        style="text-decoration:none; padding:6px 12px; background:rgba(165,180,252,0.10); color:#a5b4fc; border:1px solid rgba(165,180,252,0.25); border-radius:5px; font-size:0.75rem;">
                         Director strategic view →
                     </a>
-                    <a href="/portal/intelligence/operations-heatmap"
+                    <a href="/portal/operations/heatmap"
                        style="text-decoration:none; padding:6px 12px; background:rgba(253,186,116,0.10); color:#fdba74; border:1px solid rgba(253,186,116,0.25); border-radius:5px; font-size:0.75rem;">
                         Operations heatmap →
                     </a>

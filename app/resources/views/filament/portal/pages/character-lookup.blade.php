@@ -85,7 +85,7 @@
                    style="text-decoration:none; padding:6px 12px; background:rgba(165,180,252,0.10); color:#a5b4fc; border:1px solid rgba(165,180,252,0.25); border-radius:5px; font-size:0.75rem;">
                     Top review priority candidates →
                 </a>
-                <a href="/portal/intelligence/alliance-lookup"
+                <a href="/portal/alliances/lookup"
                    style="text-decoration:none; padding:6px 12px; background:rgba(255,255,255,0.04); color:#cbd5e1; border:1px solid rgba(255,255,255,0.10); border-radius:5px; font-size:0.75rem;">
                     Alliance lookup →
                 </a>

@@ -85,7 +85,7 @@
                         </div>
 
                         <h3 style="font-size:1rem; color:#e2e8f0; margin:0.4rem 0 0.2rem;">
-                            <a href="/portal/intelligence/character-lookup?cid={{ $c['character_id'] }}" style="color:inherit; text-decoration:none; border-bottom:1px dotted rgba(255,255,255,0.15);">{{ $c['character_name'] }}</a>
+                            <a href="/portal/characters/lookup?cid={{ $c['character_id'] }}" style="color:inherit; text-decoration:none; border-bottom:1px dotted rgba(255,255,255,0.15);">{{ $c['character_name'] }}</a>
                         </h3>
                         <p style="font-size:0.78rem; color:#cbd5e1; margin:0 0 0.4rem; line-height:1.5;">
                             {{ $c['summary'] }}

@@ -20,8 +20,8 @@
                 if ($i === 3) return ['#3', '#fdba74'];
                 return ['#'.$i, '#7a7a82'];
             };
-            $charLink = fn ($cid) => $cid ? "/portal/intelligence/character-lookup?cid={$cid}" : null;
-            $alliLink = fn ($aid) => $aid ? "/portal/intelligence/alliance-lookup?aid={$aid}" : null;
+            $charLink = fn ($cid) => $cid ? "/portal/characters/lookup?cid={$cid}" : null;
+            $alliLink = fn ($aid) => $aid ? "/portal/alliances/lookup?aid={$aid}" : null;
         @endphp
 
         {{-- Window switch --}}

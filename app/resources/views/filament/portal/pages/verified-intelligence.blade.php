@@ -71,7 +71,7 @@
                     pinnable findings.
                 </p>
                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                    <a href="/portal/intelligence/strategic-alerts"
+                    <a href="/portal/intelligence/alerts"
                        style="text-decoration:none; padding:6px 12px; background:rgba(125,211,252,0.12); color:#7dd3fc; border:1px solid rgba(125,211,252,0.25); border-radius:5px; font-size:0.75rem;">
                         Strategic alerts →
                     </a>
