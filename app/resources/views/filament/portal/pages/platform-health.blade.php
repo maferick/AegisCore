@@ -31,24 +31,7 @@
         @endphp
 
         {{-- Verdict banner --}}
-        @php $vc = $verdictColors[$verdict['severity']] ?? $verdictColors['info']; @endphp
-        <div class="fi-section rounded-xl"
-             style="padding:0.7rem 1rem; margin-bottom:0.75rem;
-                    background:{{ $vc['bg'] }}; border:1px solid {{ $vc['border'] }};">
-            <div style="display:flex; gap:0.6rem; align-items:baseline; flex-wrap:wrap;">
-                <span style="font-size:0.55rem; padding:2px 8px; border-radius:3px; background:rgba(0,0,0,0.18); color:{{ $vc['fg'] }}; text-transform:uppercase; letter-spacing:0.1em;">
-                    {{ $verdict['severity'] }}
-                </span>
-                <strong style="font-size:0.95rem; color:#e5e7eb;">{{ $verdict['headline'] }}</strong>
-            </div>
-            @if (count($verdict['details']) > 0)
-                <ul style="margin:0.4rem 0 0 1.2rem; padding:0; font-size:0.72rem; color:#cbd5e1; line-height:1.55;">
-                    @foreach ($verdict['details'] as $d)
-                        <li>{{ $d }}</li>
-                    @endforeach
-                </ul>
-            @endif
-        </div>
+        <x-verdict-banner :verdict="$verdict" />
 
         {{-- Top pulse strip --}}
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-bottom:0.75rem;">
@@ -234,14 +217,17 @@
                                 </thead>
                                 <tbody>
                                     @foreach ($recent_runs as $r)
-                                        @php $sCol = $statusColors[$r->status] ?? '#9ca3af'; @endphp
-                                        <tr style="border-top:1px solid rgba(255,255,255,0.05);">
-                                            <td style="padding:2px 4px; color:#9ca3af; font-family:ui-monospace,monospace;">{{ $r->compute_started_at }}</td>
-                                            <td style="padding:2px 4px;">{{ str_replace('_', ' ', $r->lane) }}</td>
-                                            <td style="padding:2px 4px;">{{ $r->pipeline }}</td>
-                                            <td style="padding:2px 4px; color:{{ $sCol }};">{{ $r->status }}</td>
-                                            <td style="padding:2px 4px; text-align:right;">{{ $r->compute_duration_ms ?? '—' }}</td>
-                                            <td style="padding:2px 4px; text-align:right; color:#7a7a82;">{{ $r->source_row_count ?? '—' }}→{{ $r->generated_row_count ?? '—' }}</td>
+                                        @php
+                                            $sCol = $statusColors[$r->status] ?? '#9ca3af';
+                                            $stripe = $loop->iteration % 2 === 0 ? 'background:rgba(255,255,255,0.02);' : '';
+                                        @endphp
+                                        <tr style="border-top:1px solid rgba(255,255,255,0.08); {{ $stripe }}">
+                                            <td style="padding:4px 6px; color:#cbd5e1;"><x-relative-time :ts="$r->compute_started_at" /></td>
+                                            <td style="padding:4px 6px;">{{ str_replace('_', ' ', $r->lane) }}</td>
+                                            <td style="padding:4px 6px;">{{ $r->pipeline }}</td>
+                                            <td style="padding:4px 6px; color:{{ $sCol }}; font-weight:600;">{{ $r->status }}</td>
+                                            <td style="padding:4px 6px; text-align:right;">{{ $r->compute_duration_ms ?? '—' }}</td>
+                                            <td style="padding:4px 6px; text-align:right; color:#9ca3af;">{{ $r->source_row_count ?? '—' }}→{{ $r->generated_row_count ?? '—' }}</td>
                                         </tr>
                                     @endforeach
                                 </tbody>
@@ -270,8 +256,8 @@
                                     @if ($e->summary)
                                         <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.2rem;">{{ $e->summary }}</div>
                                     @endif
-                                    <div style="margin-top:0.3rem; font-size:0.55rem; color:#7a7a82; display:flex; gap:0.4rem;">
-                                        <span>{{ $e->detected_at }}</span>
+                                    <div style="margin-top:0.3rem; font-size:0.6rem; color:#9ca3af; display:flex; gap:0.4rem;">
+                                        <span><x-relative-time :ts="$e->detected_at" /></span>
                                         @if ($e->metric_value !== null && $e->threshold_value !== null)
                                             <span>· metric {{ rtrim(rtrim((string) $e->metric_value, '0'), '.') }} vs threshold {{ rtrim(rtrim((string) $e->threshold_value, '0'), '.') }}</span>
                                         @endif

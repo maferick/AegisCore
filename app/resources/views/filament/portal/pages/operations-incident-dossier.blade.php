@@ -78,7 +78,7 @@
                         @endif
                         <span style="margin-left:auto; font-size:0.55rem; color:#7a7a82; font-style:italic;">summary, not certainty</span>
                     </div>
-                    <div style="font-size:0.78rem; color:#e5e5e7; line-height:1.5;">{!! \Illuminate\Support\Str::of($narrative_md)->markdown() !!}</div>
+                    <x-aegis-md :body="$narrative_md" />
                     @if (! empty($narrative_sources))
                         <details style="margin-top:0.4rem;">
                             <summary style="font-size:0.55rem; color:#7dd3fc; cursor:pointer;">why did the system say this?</summary>

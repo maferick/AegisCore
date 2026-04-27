@@ -103,9 +103,42 @@ class FcTactical extends Page
             ->limit(10)
             ->get();
 
+        // Verdict — single-line tactical readout for the FC.
+        $criticalIncidents = collect($activeIncidents)
+            ->filter(fn ($i) => in_array($i->severity ?? '', ['escalation', 'coalition_level', 'strategic'], true))
+            ->count();
+        $hotSystemCount = count($hottestSystems);
+        $details = [];
+        if (count($activeIncidents) > 0) {
+            $details[] = count($activeIncidents) . ' active hostile incident' . (count($activeIncidents) === 1 ? '' : 's');
+        }
+        if ($criticalIncidents > 0) {
+            $details[] = $criticalIncidents . ' at strategic+ severity';
+        }
+        if (count($openAlerts) > 0) {
+            $details[] = count($openAlerts) . ' open alert' . (count($openAlerts) === 1 ? '' : 's');
+        }
+        if ($hotSystemCount > 0) {
+            $details[] = $hotSystemCount . ' hot system' . ($hotSystemCount === 1 ? '' : 's');
+        }
+        $severity = 'info';
+        $headline = 'Quiet — no active hostile contact in window';
+        if ($criticalIncidents > 0) {
+            $severity = 'critical';
+            $headline = 'Hostile contact: strategic-severity incidents active';
+        } elseif (count($activeIncidents) > 0) {
+            $severity = 'elevated';
+            $headline = 'Hostile contact in window';
+        } elseif (count($openAlerts) > 0 || $hotSystemCount > 0) {
+            $severity = 'warning';
+            $headline = 'Open alerts or hot systems present';
+        }
+        $verdict = ['severity' => $severity, 'headline' => $headline, 'details' => $details];
+
         return [
             'no_bloc' => false,
             'hours' => $this->hours,
+            'verdict' => $verdict,
             'active_incidents' => $activeIncidents,
             'open_alerts' => $openAlerts,
             'hot_corridors' => $hotCorridors,

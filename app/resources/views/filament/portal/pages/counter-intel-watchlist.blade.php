@@ -32,10 +32,25 @@
         </div>
 
         @if (count($rows) === 0)
-            <div class="fi-section rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                <p class="text-sm text-gray-600 dark:text-gray-300">
-                    No entries match this filter. Add characters to the watchlist from their lookup card.
+            <div class="fi-section rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                 style="font-size:0.8rem; color:#cbd5e1; line-height:1.55;">
+                <div style="font-size:0.75rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.4rem;">
+                    Empty queue
+                </div>
+                <p style="margin:0 0 0.6rem;">
+                    No watchlist entries match this filter. Add a pilot from their lookup card,
+                    or jump straight to the top review-priority candidates surfaced by Counter-Intel.
                 </p>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    <a href="/portal/intelligence/character-lookup"
+                       style="text-decoration:none; padding:6px 12px; background:rgba(125,211,252,0.12); color:#7dd3fc; border:1px solid rgba(125,211,252,0.25); border-radius:5px; font-size:0.75rem;">
+                        Look up a pilot →
+                    </a>
+                    <a href="/portal/intelligence/counter-intel"
+                       style="text-decoration:none; padding:6px 12px; background:rgba(165,180,252,0.10); color:#a5b4fc; border:1px solid rgba(165,180,252,0.25); border-radius:5px; font-size:0.75rem;">
+                        Top review candidates →
+                    </a>
+                </div>
             </div>
         @else
             <div class="fi-section rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="overflow:hidden;">

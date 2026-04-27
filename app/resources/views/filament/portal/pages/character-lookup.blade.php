@@ -64,6 +64,35 @@
         @endif
     </div>
 
+    {{-- Empty state — only when nothing searched and no card shown --}}
+    @if (! $character_id && ! $search)
+        <div class="fi-section rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-4"
+             style="font-size:0.78rem; color:#cbd5e1; line-height:1.55;">
+            <div style="font-size:0.75rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.4rem;">
+                How to find a pilot
+            </div>
+            <ul style="margin:0 0 0.5rem 1.2rem; padding:0;">
+                <li>Type 3+ characters of a pilot name to search the ESI cache.</li>
+                <li>Paste a name from EVE local chat — the search matches partial names.</li>
+                <li>Drill in from a killmail, watchlist entry, or alliance roster instead of typing.</li>
+            </ul>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.6rem;">
+                <a href="/portal/counter-intel/watchlist"
+                   style="text-decoration:none; padding:6px 12px; background:rgba(125,211,252,0.12); color:#7dd3fc; border:1px solid rgba(125,211,252,0.25); border-radius:5px; font-size:0.75rem;">
+                    Open watchlist →
+                </a>
+                <a href="/portal/intelligence/counter-intel"
+                   style="text-decoration:none; padding:6px 12px; background:rgba(165,180,252,0.10); color:#a5b4fc; border:1px solid rgba(165,180,252,0.25); border-radius:5px; font-size:0.75rem;">
+                    Top review priority candidates →
+                </a>
+                <a href="/portal/intelligence/alliance-lookup"
+                   style="text-decoration:none; padding:6px 12px; background:rgba(255,255,255,0.04); color:#cbd5e1; border:1px solid rgba(255,255,255,0.10); border-radius:5px; font-size:0.75rem;">
+                    Alliance lookup →
+                </a>
+            </div>
+        </div>
+    @endif
+
     @if ($character_id && $card)
         @if (! empty($data_since))
             <div style="font-size:0.7rem; color:#7a7a82; margin-bottom:0.75rem; font-style:italic;">

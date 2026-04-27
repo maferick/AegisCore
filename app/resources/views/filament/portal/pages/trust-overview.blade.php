@@ -16,8 +16,20 @@
             ];
         @endphp
 
+        {{-- Verdict banner --}}
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
         <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
-            <div style="font-size:0.7rem; color:#9ca3af;">window: <strong style="color:#e5e5e7;">{{ $latest_end ?? '—' }}</strong> · trust score = 0.6×useful_rate + 0.3×(1−fp_rate) + 0.1×(1−suppression_rate). Zero-feedback baseline = 0.5.</div>
+            <div style="font-size:0.72rem; color:#cbd5e1;">
+                window: <strong style="color:#e5e5e7;">{{ $latest_end ?? '—' }}</strong> ·
+                trust score formula:
+                <code title="useful_rate = analyst-confirmed-useful / total feedback;
+fp_rate = false-positive count / total feedback;
+suppression_rate = analyst-suppressed / total fired alerts.
+Zero-feedback baseline = 0.5 (no signal yet, neutral prior).">
+                    0.6 × useful_rate + 0.3 × (1−fp_rate) + 0.1 × (1−suppression_rate)
+                </code>
+            </div>
         </div>
 
         {{-- Freshness rollup strip --}}

@@ -58,8 +58,28 @@
 
         {{-- Items --}}
         @if (count($items) === 0)
-            <div class="fi-section rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
-                <p style="font-size:0.8rem; color:#9ca3af;">No verified items match the current filters.</p>
+            <div class="fi-section rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                 style="font-size:0.8rem; color:#cbd5e1; line-height:1.55;">
+                <div style="font-size:0.75rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.4rem;">
+                    Verified intelligence layer
+                </div>
+                <p style="margin:0 0 0.6rem;">
+                    No verified items match the current filter. This is where you pin
+                    operator-validated findings — confirmed alts, hostile patterns, doctrines
+                    worth tracking — so they survive across calibration cycles. Use the form
+                    above to add the first one, or jump to a surface that often produces
+                    pinnable findings.
+                </p>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    <a href="/portal/intelligence/strategic-alerts"
+                       style="text-decoration:none; padding:6px 12px; background:rgba(125,211,252,0.12); color:#7dd3fc; border:1px solid rgba(125,211,252,0.25); border-radius:5px; font-size:0.75rem;">
+                        Strategic alerts →
+                    </a>
+                    <a href="/portal/operations/incidents"
+                       style="text-decoration:none; padding:6px 12px; background:rgba(165,180,252,0.10); color:#a5b4fc; border:1px solid rgba(165,180,252,0.25); border-radius:5px; font-size:0.75rem;">
+                        Operational incidents →
+                    </a>
+                </div>
             </div>
         @else
             <div style="display:grid; gap:0.4rem;">
@@ -79,10 +99,10 @@
                             <x-intel-freshness surface="verified"
                                 :timestamp="$i->verified_at ?? $i->created_at"
                                 :persisted="$i->freshness_state ?? null" />
-                            <span style="font-size:0.55rem; color:#7a7a82;">{{ $i->created_at }}</span>
+                            <span style="font-size:0.55rem; color:#9ca3af;"><x-relative-time :ts="$i->created_at" /></span>
                         </div>
                         @if ($i->body_md)
-                            <div style="margin-top:0.3rem; font-size:0.75rem; color:#cbd5e1; line-height:1.5;">{!! \Illuminate\Support\Str::of($i->body_md)->markdown() !!}</div>
+                            <x-aegis-md :body="$i->body_md" />
                         @endif
                         <div style="display:flex; gap:0.4rem; margin-top:0.3rem; font-size:0.6rem; color:#7a7a82;">
                             @if ($i->related_incident_id)

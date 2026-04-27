@@ -9,6 +9,9 @@
                           'coalition_level' => '#d8b4fe', 'escalation' => '#fca5a5', 'strategic' => '#fdba74', 'tactical' => '#fde68a'];
         @endphp
 
+        {{-- Verdict banner --}}
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
         {{-- Window switch --}}
         <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
             <div style="display:flex; gap:0.5rem; align-items:center; font-size:0.7rem;">

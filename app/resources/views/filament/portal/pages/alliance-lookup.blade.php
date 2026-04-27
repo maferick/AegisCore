@@ -51,9 +51,33 @@
     </div>
 
     @if (! $alliance)
-        <div style="font-size:0.78rem; color:#7a7a82; font-style:italic; padding:0.5rem;">
-            Pick an alliance to see its structure.
-        </div>
+        @if (! $search)
+            <div class="fi-section rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-4"
+                 style="font-size:0.78rem; color:#cbd5e1; line-height:1.55;">
+                <div style="font-size:0.75rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.4rem;">
+                    How to look up an alliance
+                </div>
+                <ul style="margin:0 0 0.5rem 1.2rem; padding:0;">
+                    <li>Type 3+ characters of an alliance name (e.g. <em>Goon</em>, <em>Frat</em>, <em>TEST</em>).</li>
+                    <li>Search by ticker tag too — most alliances are searchable by either.</li>
+                    <li>Drill in from a killmail, character lookup, or watchlist entry instead of typing.</li>
+                </ul>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.6rem;">
+                    <a href="/portal/intelligence/director-strategic"
+                       style="text-decoration:none; padding:6px 12px; background:rgba(165,180,252,0.10); color:#a5b4fc; border:1px solid rgba(165,180,252,0.25); border-radius:5px; font-size:0.75rem;">
+                        Director strategic view →
+                    </a>
+                    <a href="/portal/intelligence/operations-heatmap"
+                       style="text-decoration:none; padding:6px 12px; background:rgba(253,186,116,0.10); color:#fdba74; border:1px solid rgba(253,186,116,0.25); border-radius:5px; font-size:0.75rem;">
+                        Operations heatmap →
+                    </a>
+                </div>
+            </div>
+        @else
+            <div style="font-size:0.78rem; color:#7a7a82; font-style:italic; padding:0.5rem;">
+                No alliance match — refine the search above.
+            </div>
+        @endif
     @else
         @php $a = $alliance; $h = $headline ?? []; @endphp
 

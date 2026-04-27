@@ -105,8 +105,39 @@ class TrustOverview extends Page
             ->limit(20)
             ->get();
 
+        // Verdict — trust corpus snapshot.
+        $belowBaseline = collect($rows)->filter(fn ($r) => (float) $r->trust_score < 0.50);
+        $highTier      = collect($rows)->filter(fn ($r) => (float) $r->trust_score >= 0.70);
+        $totalFeedback = (int) collect($feedback)->sum('n');
+        $details = [];
+        if ($totalFeedback > 0) {
+            $details[] = "{$totalFeedback} feedback event" . ($totalFeedback === 1 ? '' : 's') . ' recorded';
+        }
+        if ($belowBaseline->count() > 0) {
+            $details[] = $belowBaseline->count() . ' surface' . ($belowBaseline->count() === 1 ? '' : 's')
+                . ' below baseline trust (0.50)';
+        }
+        if ($highTier->count() > 0) {
+            $details[] = $highTier->count() . ' surface' . ($highTier->count() === 1 ? '' : 's')
+                . ' at high trust (≥0.70)';
+        }
+        $severity = 'info';
+        $headline = 'Trust corpus building — most surfaces at baseline';
+        if ($belowBaseline->count() > 0) {
+            $severity = 'warning';
+            $headline = 'Trust drift on ' . $belowBaseline->count() . ' surface' . ($belowBaseline->count() === 1 ? '' : 's');
+        } elseif ($totalFeedback === 0) {
+            $severity = 'info';
+            $headline = 'No analyst feedback yet — trust corpus empty';
+        } elseif ($highTier->count() > 0) {
+            $severity = 'info';
+            $headline = 'Trust corpus healthy';
+        }
+        $verdict = ['severity' => $severity, 'headline' => $headline, 'details' => $details];
+
         return [
             'no_bloc' => false,
+            'verdict' => $verdict,
             'latest_end' => $latestEnd,
             'rows' => $rows,
             'feedback' => $feedback,

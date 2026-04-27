@@ -151,16 +151,16 @@
                     @endif
                 </div>
 
-                {{-- Internal pilots by hostile-cluster exposure --}}
+                {{-- Friendly pilots by hostile-contact exposure --}}
                 <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
                     <h3 style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:#7a7a82; margin:0 0 0.2rem;">
-                        Internal pilots · hostile-cluster exposure
+                        Friendly pilots · red-contact exposure
                     </h3>
                     <p style="font-size:0.6rem; color:#7a7a82; margin:0 0 0.4rem; font-style:italic; line-height:1.4;">
-                        These are <strong>your bloc's pilots</strong> ranked by the size of
-                        the hostile-pilot triangle that has engaged them. Investigative
-                        priority signal, not an accusation. Cross-check with review band
-                        before drawing conclusions.
+                        These are <strong>blue pilots</strong> ranked by the size of the
+                        hostile-pilot cluster that has engaged them. Investigative priority
+                        signal, not an accusation. Cross-check with review band before
+                        drawing conclusions.
                     </p>
                     @php
                         $bandColors = [

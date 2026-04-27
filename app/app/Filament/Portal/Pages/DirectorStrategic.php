@@ -98,9 +98,34 @@ class DirectorStrategic extends Page
             ->limit(15)
             ->get();
 
+        // Verdict — strategic snapshot for the director.
+        $strategic  = (int) ($heatTiers['strategic']  ?? 0);
+        $hot        = (int) ($heatTiers['hot']        ?? 0);
+        $contested  = (int) ($heatTiers['contested']  ?? 0);
+        $migrations = count($deployments);
+        $details = [];
+        if ($strategic > 0) $details[] = "{$strategic} strategic-tier system" . ($strategic === 1 ? '' : 's');
+        if ($hot > 0)       $details[] = "{$hot} hot-tier system" . ($hot === 1 ? '' : 's');
+        if ($contested > 0) $details[] = "{$contested} contested system" . ($contested === 1 ? '' : 's');
+        if ($migrations > 0) $details[] = "{$migrations} active deployment-migration corridor" . ($migrations === 1 ? '' : 's');
+        $severity = 'info';
+        $headline = 'Theatre quiet — no tier-flagged systems';
+        if ($strategic > 0) {
+            $severity = 'critical';
+            $headline = 'Strategic-tier activity active';
+        } elseif ($hot > 0 || $migrations >= 3) {
+            $severity = 'elevated';
+            $headline = 'Theatre warm — hostile pressure observed';
+        } elseif ($contested > 0 || $migrations > 0) {
+            $severity = 'warning';
+            $headline = 'Theatre contested in places';
+        }
+        $verdict = ['severity' => $severity, 'headline' => $headline, 'details' => $details];
+
         return [
             'no_bloc' => false,
             'days' => $this->days,
+            'verdict' => $verdict,
             'latest_profile_end' => $latestProfileEnd,
             'coalitions' => $coalitions,
             'alliances' => $alliances,

@@ -1,17 +1,4 @@
 <x-filament-panels::page>
-    <style>
-        .aegis-md h1, .aegis-md h2 { font-size: 1.05rem; color: #e5e5e7; margin: 1rem 0 0.4rem; font-weight: 600; }
-        .aegis-md h3 { font-size: 0.95rem; color: #cbd5e1; margin: 0.8rem 0 0.3rem; font-weight: 600; }
-        .aegis-md h4 { font-size: 0.85rem; color: #cbd5e1; margin: 0.6rem 0 0.25rem; font-weight: 600; }
-        .aegis-md p { margin: 0.4rem 0; }
-        .aegis-md ul, .aegis-md ol { margin: 0.4rem 0 0.4rem 1.4rem; }
-        .aegis-md li { margin: 0.15rem 0; }
-        .aegis-md code { background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; font-size: 0.78rem; }
-        .aegis-md a { color: #7dd3fc; text-decoration: underline; }
-        .aegis-md strong { color: #f1f5f9; }
-        .aegis-md hr { border: 0; border-top: 1px solid rgba(255,255,255,0.10); margin: 0.8rem 0; }
-        .aegis-md blockquote { border-left: 3px solid rgba(255,255,255,0.15); padding-left: 0.7rem; color: #94a3b8; margin: 0.5rem 0; }
-    </style>
     @if (! empty($no_bloc))
         <div class="fi-section rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10">
             <p class="text-sm text-gray-600 dark:text-gray-300">No bloc resolved.</p>
@@ -113,9 +100,7 @@
             {{-- Narrative --}}
             <div class="fi-section rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
                 <h3 style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#7a7a82; margin:0 0 0.4rem;">Brief</h3>
-                <div class="aegis-md" style="font-size:0.85rem; color:#e2e8f0; line-height:1.6;">
-                    {!! \Illuminate\Support\Str::markdown((string) $narrative_md) !!}
-                </div>
+                <x-aegis-md :body="$narrative_md" />
             </div>
 
             <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:1rem;">

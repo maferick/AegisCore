@@ -27,7 +27,7 @@
                 </a>
             @endforeach
             <span style="font-size:0.6rem; color:#7a7a82; margin-left:auto;">
-                latest pipeline run: <code>{{ $latest_generated_at ?? '—' }}</code>
+                latest pipeline run: <x-relative-time :ts="$latest_generated_at" />
             </span>
         </div>
 
@@ -132,7 +132,7 @@
                         <div style="margin-top:0.5rem; font-size:0.55rem; color:#7a7a82;">
                             current: {{ $c['current_window_start'] }} → {{ $c['current_window_end'] }}<br>
                             comparison: {{ $c['comparison_window_start'] }} → {{ $c['comparison_window_end'] }}<br>
-                            generated: {{ $c['generated_at'] }} · model: <code>{{ $c['ai_model'] ?? 'rule_based_v1' }}</code>
+                            generated: <x-relative-time :ts="$c['generated_at']" /> · model: <code>{{ $c['ai_model'] ?? 'rule_based_v1' }}</code>
                         </div>
                     </div>
                 @endforeach
