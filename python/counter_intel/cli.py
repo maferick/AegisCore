@@ -70,6 +70,9 @@ from counter_intel.phase49e_quality_guards import (
 from counter_intel.phase49c_retention import (
     run_retention_sweep as phase49c_retention_sweep,
 )
+from counter_intel.market_order_aggregator import (
+    run_backfill as market_order_aggregator_backfill,
+)
 from counter_intel.log import get
 
 log = get("counter_intel.cli")
@@ -243,6 +246,15 @@ def main() -> int:
     p49ret.add_argument("--dry-run", action="store_true",
                         help="report what would delete without modifying")
 
+    p_mkt = sub.add_parser("market-order-aggregator-backfill",
+                           help="Emergency: aggregate market_orders → market_order_daily_aggregates.")
+    p_mkt.add_argument("--start-date", type=str, required=True,
+                        help="YYYY-MM-DD inclusive")
+    p_mkt.add_argument("--end-date-exclusive", type=str, required=True,
+                        help="YYYY-MM-DD exclusive (do not include in-progress today)")
+    p_mkt.add_argument("--region-id", type=int, action="append", default=None,
+                        help="optional region filter; pass multiple times")
+
     args = parser.parse_args()
     if args.cmd == "features":
         return _run_features(args)
@@ -320,6 +332,8 @@ def main() -> int:
         return _run_phase49e_quality_guards(args)
     if args.cmd == "phase49c-retention":
         return _run_phase49c_retention(args)
+    if args.cmd == "market-order-aggregator-backfill":
+        return _run_market_order_aggregator_backfill(args)
     parser.print_help()
     return 2
 
@@ -968,4 +982,25 @@ def _run_phase49c_retention(args) -> int:
             r.set_generated_rows(int(stats.get("total_deleted") or 0))
             r.set_stats(stats or {})
     log.info("phase4.9C retention complete", stats)
+    return 0
+
+
+def _run_market_order_aggregator_backfill(args) -> int:
+    cfg = Config.from_env()
+    start = date.fromisoformat(args.start_date)
+    end_excl = date.fromisoformat(args.end_date_exclusive)
+    with connection(cfg) as conn:
+        with ComputeLog(conn, lane="maintenance",
+                        pipeline="market-order-aggregator-backfill",
+                        args={"start": start.isoformat(),
+                              "end_exclusive": end_excl.isoformat(),
+                              "region_ids": args.region_id}) as r:
+            stats = market_order_aggregator_backfill(
+                conn, cfg, start_date=start,
+                end_date_exclusive=end_excl,
+                region_ids=args.region_id,
+            )
+            r.set_generated_rows(int(stats.get("rows_affected") or 0))
+            r.set_stats(stats or {})
+    log.info("market-order-aggregator-backfill complete", stats)
     return 0

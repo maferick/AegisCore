@@ -617,6 +617,14 @@ ci-phase49e-quality-guards:
 ci-phase49c-retention:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase49c-retention $(CI_ARGS)
 
+# Emergency market_orders → market_order_daily_aggregates roller.
+# Args:
+#   START=YYYY-MM-DD END=YYYY-MM-DD (END exclusive)
+#   REGIONS="--region-id 10000002 --region-id 10000043" (optional)
+market-order-aggregator-backfill:
+	$(COMPOSE) --profile tools run --rm --build counter_intel \
+	  market-order-aggregator-backfill --start-date $(START) --end-date-exclusive $(END) $(REGIONS)
+
 # V1 §13 — verify TTL config single-source consistency.
 # python/counter_intel/intel_ttl.json (canonical) MUST equal
 # app/config/intel_ttl.json. Edit one, then run this; or edit
