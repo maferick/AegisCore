@@ -42,7 +42,7 @@ class CoalitionBlocSeeder extends Seeder
                 'is_active' => true,
             ],
             [
-                'bloc_code' => CoalitionBloc::CODE_CFC,
+                'bloc_code' => CoalitionBloc::CODE_IMPERIUM,
                 'display_name' => 'Imperium',
                 'default_role' => CoalitionBloc::ROLE_COMBAT,
                 'is_active' => true,

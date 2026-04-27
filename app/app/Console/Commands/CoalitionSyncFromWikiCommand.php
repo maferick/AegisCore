@@ -44,7 +44,7 @@ class CoalitionSyncFromWikiCommand extends Command
     private const SOURCES = [
         'imperium' => [
             'bloc_id' => 3,
-            'bloc_code' => 'cfc',
+            'bloc_code' => 'imperium',
             'url' => 'https://wiki.goonswarm.org/w/The_Imperium',
             'wiki_source' => 'wiki:imperium',
             'parser' => 'parseImperium',

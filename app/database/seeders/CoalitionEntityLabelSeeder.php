@@ -75,9 +75,9 @@ class CoalitionEntityLabelSeeder extends Seeder
         ];
 
         // ---------------------------------------------------------------
-        // CFC / Imperium (cfc)
+        // Imperium
         // ---------------------------------------------------------------
-        $cfc = $blocs[CoalitionBloc::CODE_CFC];
+        $cfc = $blocs[CoalitionBloc::CODE_IMPERIUM];
 
         // CCP alliance IDs — verified against zkillboard. Previously
         // had The Initiative. at 99005338; the real CCP id is

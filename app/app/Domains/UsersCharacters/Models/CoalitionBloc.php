@@ -18,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * contract and why this lives as a table rather than a hard-coded enum.
  *
  * @property int                  $id
- * @property string               $bloc_code        'wc' | 'b2' | 'cfc' | 'panfam' | 'independent' | 'unknown'
+ * @property string               $bloc_code        'wc' | 'b2' | 'imperium' | 'panfam' | 'independent' | 'unknown'
  * @property string               $display_name
  * @property string               $default_role     'combat' | 'support' | 'logistics' | 'renter'
  * @property bool                 $is_active
@@ -31,7 +31,10 @@ class CoalitionBloc extends Model
 
     public const CODE_B2 = 'b2';
 
-    public const CODE_CFC = 'cfc';
+    public const CODE_IMPERIUM = 'imperium';
+
+    /** @deprecated 2026-04-27 — old name; use CODE_IMPERIUM. Kept so external callers compile. */
+    public const CODE_CFC = 'imperium';
 
     public const CODE_PANFAM = 'panfam';
 
