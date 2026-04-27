@@ -26,8 +26,13 @@ $ ls -la /opt/AegisCore/backups/mariadb/ | tail -3
 -rw-r--r-- aegiscore_20260427_060001.sql.gz  24,390,816,338 bytes  (Apr 27 06:57)
 ```
 
-- Root: 1.6 TB free (52% used). **Not critical**, but ~36
-  GB/day market_orders growth = ~44 days runway.
+- Root: 1.6 TB free (52% used). Visible headroom is large in
+  isolation, **but the operator has unrelated workloads
+  planned for this server that are not visible to the audit.**
+  Treat as operationally blocking per operator directive.
+- ~36 GB/day market_orders growth (180 GB data + 275 GB index
+  ÷ 11 days ≈ 41 GB/day on disk). Worst-case 365-day
+  projection: ~15 TB. Cannot continue uncapped.
 - mariadb data: 771 GB; market_orders alone is 456 GB
   (~59% of mariadb footprint).
 - Latest full backup: 24 GB compressed at 06:57 — fresh
@@ -35,8 +40,10 @@ $ ls -la /opt/AegisCore/backups/mariadb/ | tail -3
 - Aborted backup at 00:06 UTC (1.1 GB partial — caught
   during the prior storage audit; explained in RUNBOOK).
 
-**Decision:** disk not critical → ingest NOT throttled.
-Aggregate work proceeds while pollers continue.
+**Decision:** Stage A-D (build aggregate + verify) proceeds
+without ingest throttle so analyst surfaces stay live. Ingest
+throttle deferred to Stage E (cutover) once aggregates are
+proven complete and readers are switched.
 
 ---
 
@@ -123,14 +130,24 @@ the actual ingested set).
 Started 07:10 UTC across all regions, 2026-04-16 →
 2026-04-27 exclusive.
 
-Estimate revised given Jita-only distribution:
-- Jita: 5 min/day × 11 days = ~55 min
-- other regions: <1 min/day × 11 days = trivial
+Per-region per-day timing observed live:
+- region 10000002 (Jita): ~5 min/day, ~33,950 agg rows/day
+- region 10000003 (Domain): ~3 min/day, ~10,800 agg rows/day
+- region 10000023 (small, appeared 04-21): ~5 sec/day, ~1,170 agg rows/day
 
-**Total backfill: ~1 hour** (was 10-15 h estimate before
-region distribution was visible).
+Initial estimate of ~1 h was too optimistic — Jita has been
+running closer to 5 min/day instead of the 18 sec the very
+first batch suggested (cold-cache effect on the first
+batch). Real ETA: **~3 hours total** based on ~13 minutes
+per (date, all regions) × 11 days.
 
-Background; non-blocking against ingest.
+Progress at 09:18 UTC (≈ 2 h elapsed):
+- 7 of 11 days complete (04-16 → 04-22)
+- 04-23 / 04-24 / 04-25 / 04-26 still queued
+- ~40 minutes remaining
+
+Background; non-blocking against ingest. Pollers continue
+writing to `p2026_04` partition normally.
 
 Monitor progress:
 ```
