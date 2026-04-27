@@ -56,14 +56,19 @@ DOMAIN_BATTLE      = "battle"
 # Scores are normalised so a single weak signal stays under 1, and
 # multi-signal cross-domain combinations cross 3.
 SIGNAL_WEIGHTS: dict[str, float] = {
-    "review_priority_score":   3.0,   # already a composite signal
+    # Loop 3 rebalance — review_priority_score is itself composite,
+    # so over-weighting it (3.0) drowned out cross-domain
+    # corroboration. Knocked down so a battle-domain signal alone
+    # can never reach the score threshold without a graph or
+    # community signal joining it.
+    "review_priority_score":   2.0,
     "hostile_triangle":        2.0,
     "community_hostile_pct":   2.0,
     "asymmetric_pair":         1.5,
     "recent_hostile_join":     2.0,
     "graph_centrality":        1.0,
     "longitudinal_exposure":   1.5,
-    "incident_overlap":        2.5,   # operational telemetry
+    "incident_overlap":        2.5,   # operational telemetry (gated, see Loop 6)
     "corridor_overlap":        2.0,
     "synchronized_timing":     1.5,
 }
@@ -72,15 +77,27 @@ SIGNAL_WEIGHTS: dict[str, float] = {
 def _band_from_score(score: float, corroboration: int, longitudinal: bool) -> tuple[str, str]:
     """Return (confidence, severity) per ADR 0013 ladder.
 
-    Promotion to 'high' requires 2+ corroborating domains AND
-    score >= 3.0. Longitudinal persistence (signal observed >=30
-    days ago) bumps within the same band.
+    Promotion ladder, post-loop-1:
+      corroboration >= 3 + score >= 4.0 + longitudinal -> high / critical
+      corroboration >= 3 + score >= 4.0                -> high / elevated
+      corroboration >= 2 + score >= 3.0                -> medium / elevated|watch
+      corroboration >= 2 + score >= 2.0                -> medium / watch
+      corroboration >= 1 + score >= 1.5                -> low / watch
+      otherwise                                         -> low / info
+
+    Operator validation is what pushes 'high' to 'confirmed' — never
+    set by AI per ADR 0013.
     """
-    if corroboration >= 3 and score >= 4.0 and longitudinal:
-        return "high", "critical"
+    if corroboration >= 3 and score >= 4.0:
+        sev = "critical" if longitudinal else "elevated"
+        return "high", sev
     if corroboration >= 2 and score >= 3.0:
-        return "high" if longitudinal else "medium", "elevated" if score >= 4 else "watch"
-    if corroboration >= 2 and score >= 2.0:
+        return "medium", "elevated" if score >= 4 else "watch"
+    # Loop 12 — medium-band floor bumped from 2.0 → 2.5. Score 2.0
+    # admits too many borderline pilots whose only signals are
+    # cohort-routine (e.g. centrality + asymmetric pair). Lift the
+    # floor so 'medium' means a substantive multi-signal pattern.
+    if corroboration >= 2 and score >= 2.5:
         return "medium", "watch"
     if corroboration >= 1 and score >= 1.5:
         return "low", "watch"
@@ -88,21 +105,24 @@ def _band_from_score(score: float, corroboration: int, longitudinal: bool) -> tu
 
 
 def _hypothesis_summary(name: str, score: float, signals: list[dict[str, Any]]) -> str:
-    """Deterministic templated summary. EVE-flavoured language —
-    'pilot' not 'character', operator-as-investigator framing.
-    Hypothesis-shaped, never verdict-shaped.
+    """Deterministic templated summary — terse. The Command page's
+    disclaimer ribbon already handles the "hypothesis-not-verdict"
+    framing, so the summary itself stays tight and operationally
+    legible.
+
+    Loop 7: dropped the "warrants analyst review — not a verdict"
+    closer; it appeared on every card and added noise. The card's
+    disclaimer ribbon and confidence chip carry the framing.
     """
     pilot = name or "this pilot"
     n = len(signals)
     if n == 0:
         return f"{pilot}: insufficient signal."
     domains = sorted({s["domain"] for s in signals})
-    domain_str = ", ".join(domains)
     return (
-        f"{pilot} surfaces {n} corroborating signal{'s' if n != 1 else ''} "
-        f"across {len(domains)} domain{'s' if len(domains) != 1 else ''} "
-        f"({domain_str}). Suspicion score {score:.2f}. "
-        f"Hypothesis warrants analyst review — not a verdict."
+        f"{pilot}: {n} signal{'s' if n != 1 else ''} across "
+        f"{len(domains)} domain{'s' if len(domains) != 1 else ''} "
+        f"({', '.join(domains)}); score {score:.2f}."
     )
 
 
@@ -172,7 +192,11 @@ def _gather_signals(
 
         score = float(r.get("review_priority_score") or 0)
         band  = (r.get("review_priority_band") or "").lower()
-        if band in {"elevated", "high", "critical"} or score >= 0.40:
+        # Loop 4 — only fire on the explicit Phase 1 band, not on a
+        # raw score floor. The score is monotonic with the band, but
+        # the loose 0.40 fallback was admitting borderline cohort
+        # members. Restrict to `elevated` and above.
+        if band in {"elevated", "high", "critical"}:
             signals.append({
                 "kind": "review_priority_score",
                 "domain": DOMAIN_BATTLE,
@@ -180,12 +204,17 @@ def _gather_signals(
                 "band": band,
                 "weight": SIGNAL_WEIGHTS["review_priority_score"],
                 "strength": min(1.0, score / 0.80),
-                "evidence": f"Phase 1 composite review priority = {score:.3f} (band {band or 'n/a'})",
+                "evidence": f"Phase 1 composite review priority = {score:.3f} (band {band})",
             })
 
         triangle = int(r.get("hostile_triangle_count") or 0)
         triangle_top = int(r.get("hostile_triangle_top_size") or 0)
-        if triangle >= 3:
+        # Loops 9-10 — for a combat pilot in nullsec, 3 hostile
+        # triangles is routine. Tighten: require >=5 triangles AND
+        # the top triangle to involve >=4 hostile pilots so the
+        # signal flags genuine recurring multi-pilot adjacency, not
+        # opportunistic combat overlap.
+        if triangle >= 5 and triangle_top >= 4:
             signals.append({
                 "kind": "hostile_triangle",
                 "domain": DOMAIN_GRAPH,
@@ -197,13 +226,17 @@ def _gather_signals(
             })
 
         cmt = float(r.get("community_hostile_pct") or 0)
-        if cmt >= 0.20:
+        # Loop 5 — 20% hostile-community share is normal in nullsec
+        # because bloc members engage hostiles on every operation.
+        # Bump floor to 35% so the signal flags genuine community
+        # mismatch, not routine combat exposure.
+        if cmt >= 0.35:
             signals.append({
                 "kind": "community_hostile_pct",
                 "domain": DOMAIN_COMMUNITY,
                 "value": round(cmt, 4),
                 "weight": SIGNAL_WEIGHTS["community_hostile_pct"],
-                "strength": min(1.0, cmt / 0.60),
+                "strength": min(1.0, cmt / 0.65),
                 "evidence": f"Community hostile share = {cmt * 100:.1f}% of graph neighbours",
             })
 
@@ -245,10 +278,12 @@ def _gather_signals(
             })
 
         # Longitudinal exposure: hostile_alliance_count_history is a
-        # cumulative counter. >= 4 historically distinct hostile
-        # alliances → meaningful operator signal.
+        # cumulative counter. Loop 6 — 4 distinct hostile alliances
+        # is normal for a multi-year pilot. Threshold raised to 8 so
+        # the signal flags unusually broad hostile exposure, not
+        # routine combat history.
         hist = int(r.get("hostile_alliance_count_history") or 0)
-        if hist >= 4:
+        if hist >= 8:
             signals.append({
                 "kind": "longitudinal_exposure",
                 "domain": DOMAIN_TEMPORAL,
@@ -311,23 +346,26 @@ def _compute_one(
 
     confidence, severity = _band_from_score(score, corroboration, longitudinal)
 
-    # Suppress isolated weak anomalies — the spec's section 6 noise
-    # rule. The "fewer, stronger, more explainable" directive
-    # explicitly prefers no row over a low-confidence single-domain
-    # row. Thresholds:
-    #   - drop everything below 2 corroborating domains UNLESS the
-    #     score itself crosses 2.5 (single but loud signal)
-    #   - drop the very-weak floor (score < 1.5) unconditionally
-    if score < 1.5:
-        return None
-    if corroboration < 2 and score < 2.5:
+    # Loop 2 — drop the entire 'low' band. The Command page filters
+    # to 'medium' by default, so 'low' rows only sit in the table as
+    # noise. The "fewer, stronger" directive prefers no row over a
+    # below-threshold one. Floor: only write `medium` and above.
+    if confidence == "low":
         return None
 
     name = name_map.get(cid)
     summary = _hypothesis_summary(name, score, signals)
     caveats: list[str] = []
-    if not longitudinal:
-        caveats.append("no 30-day prior to corroborate longitudinal persistence")
+    # Loop 8 — longitudinal caveat now informative, not always-on.
+    # Only surface when prior data exists; phrase based on whether
+    # the signal is rising, persistent, or fading.
+    prior_30 = bundle.get("prior_score_30d")
+    if prior_30 is None:
+        caveats.append("no 30-day prior — fresh signal, persistence unverified")
+    elif longitudinal:
+        caveats.append(f"persistent: 30d-prior priority {prior_30:.2f} corroborates current state")
+    elif prior_30 < 0.40:
+        caveats.append(f"rising: 30d-prior priority was only {prior_30:.2f} — recent escalation")
     if corroboration < 2:
         caveats.append("single-domain signal — corroboration weak")
     if any(s["kind"] == "graph_centrality" for s in signals) and len(signals) == 1:
@@ -425,6 +463,12 @@ def run_hypothesis_fusion(
         written += 1
     conn.commit()
 
+    # Loop 13 — freshness decay. Hypotheses that haven't been
+    # strengthened recently lose their 'fresh' badge so the operator
+    # sees which rows are stable observations vs current ones.
+    decayed = _decay_freshness(conn, viewer_bloc_id, run_started)
+    conn.commit()
+
     # Hypothesis decay — any row in this bloc that did NOT get
     # recomputed in this run no longer meets the threshold. Mark it
     # archived (status) and expired (freshness) so the Command page
@@ -459,6 +503,30 @@ def _archive_stale(conn, bloc_id: int, run_started: datetime) -> int:
                AND status <> 'archived'
             """,
             (run_started, bloc_id, run_started),
+        )
+        return cur.rowcount or 0
+
+
+def _decay_freshness(conn, bloc_id: int, run_started: datetime) -> int:
+    """Loop 13 — flag stable hypotheses as `aging` after 7d without
+    a fresh strengthen, `stale` after 21d. Active rows recomputed
+    this run but with old last_strengthened_at lose their 'fresh'
+    badge so the operator can tell at a glance which rows are
+    *current* signals vs persistent-but-quiet observations."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE counter_intel_hypotheses
+               SET freshness_state = CASE
+                     WHEN last_strengthened_at >= %s - INTERVAL 7 DAY  THEN 'fresh'
+                     WHEN last_strengthened_at >= %s - INTERVAL 21 DAY THEN 'aging'
+                     ELSE 'stale'
+                   END,
+                   updated_at = %s
+             WHERE viewer_bloc_id = %s
+               AND status <> 'archived'
+            """,
+            (run_started, run_started, run_started, bloc_id),
         )
         return cur.rowcount or 0
 

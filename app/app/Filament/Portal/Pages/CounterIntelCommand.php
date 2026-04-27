@@ -75,7 +75,9 @@ class CounterIntelCommand extends Page
             ->whereIn('confidence', $bands)
             ->where('status', '<>', 'archived')
             ->orderByRaw("FIELD(confidence,'confirmed','high','medium','low')")
+            ->orderByRaw("FIELD(severity,'critical','elevated','watch','info')")
             ->orderByDesc('suspicion_score')
+            ->orderByDesc('last_strengthened_at')
             ->limit(50)
             ->get();
 

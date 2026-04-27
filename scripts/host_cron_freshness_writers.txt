@@ -30,3 +30,9 @@
 12          * * * * cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=6h  make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1
 22          */4 * * * cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=24h make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1
 30          4 * * *   cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=7d  make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1
+
+# §18 — Counter-Intel hypothesis fusion. Runs hourly so the
+# Command Surface picks up freshly-strengthened signals; freshness
+# decay means stable rows fade to `aging` after 7 days without a
+# bump. Cheap on the rolling table (~17k rows / ~3s).
+27          * * * *   cd /opt/AegisCore && VIEWER_BLOC=1 make ci-phase18-hypothesis-fusion >> /opt/AegisCore/scripts/log/phase18-hypothesis-fusion.log 2>&1
