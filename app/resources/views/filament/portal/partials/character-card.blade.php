@@ -797,8 +797,8 @@
                     </span>
                 </h3>
                 <div data-activity-map-for="{{ $c['character_id'] }}"
-                     style="min-height:520px; background:#0b0e14; border:1px solid rgba(255,255,255,0.06); border-radius:6px; display:flex; align-items:center; justify-content:center; color:#7a7a82; font-size:0.78rem;">
-                    Loading map…
+                     style="min-height:520px; background:#0b0e14; border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:1rem;">
+                    <x-skeleton :rows="6" height="22px" gap="10px" label="Loading recent flight map…" />
                 </div>
                 <script>
                     (function () {
