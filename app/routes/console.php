@@ -378,6 +378,18 @@ Schedule::command('market:derive-daily')
 // mounted docker socket. Invoke from the host via
 // `make battle-process-pending` (cron example in Makefile).
 
+// Refresh coalition_entity_labels from authoritative coalition
+// wikis (Imperium → bloc 3, Winter Coalition → bloc 1). Wikis
+// rarely change, so daily is plenty; off-cycle runs allowed via
+// `php artisan coalition:sync-from-wiki`. Alliances absent from
+// any wiki retain their seed/manual labels.
+Schedule::command('coalition:sync-from-wiki')
+    ->dailyAt('06:00')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(120)
+    ->name('coalition-sync-from-wiki');
+
 // Drain pending dscan.info snapshots referenced by intel events.
 // Rate-limited at 6 req/min, 20 fetches per run = ~3.3 min wall
 // time worst case; the */5 cadence keeps the queue near-empty
