@@ -86,10 +86,22 @@ revised: market_orders growth is **purely forward-looking**.
 
 `SELECT COUNT(*) FROM market_orders WHERE observed_at >= NOW() - INTERVAL 1 DAY;`
 returned **82.3 M rows in 24 h** — roughly 3.4 M/h, 57 K/min.
-At this rate:
-- 7 days = 575 M rows
-- 30 days = 2.5 B rows
-- p2026_04 alone projects to 1-2 B rows by month end if the
+
+Empirical 5-day distribution:
+
+| date       | rows           |
+|------------|---------------:|
+| 2026-04-27 | 21,415,843 (partial day) |
+| 2026-04-26 | 81,988,099     |
+| 2026-04-25 | 85,412,389     |
+| 2026-04-24 | 88,261,650     |
+| 2026-04-23 | 89,060,134     |
+| 2026-04-22 | 66,732,930 (ramp-up) |
+
+Steady-state ~85 M/day. At this rate:
+- 7 days = 595 M rows
+- 30 days = 2.55 B rows
+- p2026_04 projects to ~2.0-2.2 B rows by month end if the
   rate continues
 
 This is the budget pressure: the current single-month
