@@ -377,3 +377,16 @@ Schedule::command('market:derive-daily')
 // and the Laravel scheduler container has no docker CLI / no
 // mounted docker socket. Invoke from the host via
 // `make battle-process-pending` (cron example in Makefile).
+
+// Drain pending dscan.info snapshots referenced by intel events.
+// Rate-limited at 6 req/min, 20 fetches per run = ~3.3 min wall
+// time worst case; the */5 cadence keeps the queue near-empty
+// without overlapping. Without this scheduled, fresh dscans pile
+// up in 'pending' and downstream phase45-force-compositions stays
+// frozen on whatever snapshots last reached fetch_status=success.
+Schedule::command('eve-log:fetch-dscan')
+    ->cron('*/5 * * * *')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(10)
+    ->name('eve-log-fetch-dscan');

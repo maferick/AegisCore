@@ -1,0 +1,22 @@
+# Add to host crontab (`crontab -e`) to wake the operational
+# freshness writers. Each line wraps the Python compute pipeline
+# in `make` + a per-pipeline log so failures are visible.
+#
+# Why: phase4-incidents / phase45-force-compositions /
+# phase45-force-transitions / phase4-corridors have CLI entry
+# points + ComputeLog instrumentation but were never scheduled.
+# Surface health on /portal/intelligence/platform-health drifts
+# to stale/expired without them; the fix is wiring, not code.
+#
+# Cadence picked to stay below the data-stores' load:
+#   - incidents every 15 min  (cluster fusion, cheap on idle)
+#   - force-compositions every 30 min (depends on dscan fetch)
+#   - force-transitions every 30 min, offset by 5 min (depends on
+#     the freshly-written compositions)
+#
+# VIEWER_BLOC must match the bloc that owns the surface — set via
+# the Make variable defaulted in the targets.
+
+5,20,35,50  * * * * cd /opt/AegisCore && make ci-phase4-incidents          >> /opt/AegisCore/scripts/log/phase4-incidents.log 2>&1
+0,30        * * * * cd /opt/AegisCore && make ci-phase45-force-compositions >> /opt/AegisCore/scripts/log/phase45-force-compositions.log 2>&1
+5,35        * * * * cd /opt/AegisCore && make ci-phase45-force-transitions >> /opt/AegisCore/scripts/log/phase45-force-transitions.log 2>&1
