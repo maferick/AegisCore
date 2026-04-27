@@ -4,13 +4,30 @@
 
 **Update 2026-04-27** — see
 `verification/storage/market_storage_audit.md` for the
-follow-up audit. Critical correction: all 960 M rows live in
-a single `p2026_04` partition. Empty partitions exist for
-2025 and other 2026 months. **Real first-month rotation
-reclaim is 0 GB until the second-prior-month partition ages
-past the HOT window** (early-mid May 2026 at earliest). The
-30-300 GB estimate below remains valid as the steady-state
-projection but does not apply to the immediate first cycle.
+follow-up audit. Critical corrections:
+
+1. All 960 M rows live in a single `p2026_04` partition;
+   the platform's market_orders dataset is only 11 days
+   old (2026-04-16 → 2026-04-27). Empty 2025 + 2026-Q1
+   partitions were never populated. **First-cycle reclaim
+   is 0 GB** because there is no historical data to drop.
+2. **HOT retention target tightened to 3 days / 72 hours**
+   (operator decision 2026-04-27). MKT-3 confirmed every
+   raw `market_orders` consumer needs ≤ 3 days; the 7-day
+   Jita ticker need is served by `market_history` (the
+   aggregate), not raw orders.
+3. **Monthly partitioning cannot resolve a 3-day cutoff.**
+   This ADR's monthly-rotation strategy must be revised
+   before activation: either move to **daily** or **weekly**
+   partitioning (each requires a separate ALTER TABLE,
+   hours of locking on a 960 M-row table). Decision deferred
+   to v2; a follow-up ADR will document the daily-partition
+   migration plan.
+4. Steady-state reclaim at 3-day cutoff: **~335 GB**
+   (705 M rows dropped of the projected 960 M steady state).
+   Steady-state reclaim at 14-day cutoff: ~50 GB. The
+   30-300 GB estimate below was wrong on both ends — too
+   small for 3-day, too large for 14-day.
 
 **Context:** the `market_orders` table dominates the AegisCore
 data directory at 456 GB (180 GB data + 275 GB indexes, 939 M

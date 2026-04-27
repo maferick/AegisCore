@@ -180,15 +180,18 @@ Code paths that touch market_orders or market_history.
 | caller | purpose | minimum lookback needed |
 |--------|---------|------------------------|
 | `Filament/Portal/Pages/DoctrineMarket.php:574,610` | "stock from market_orders across stock hub(s)" — **live order book snapshot** | latest snapshot only (≤ a few hours) |
-| `Domains/UsersCharacters/Services/PersonalOrderPredictor.php:705` | Jita 7-day ticker fallback when live ticker absent | **7 days** |
+| `Domains/UsersCharacters/Services/PersonalOrderPredictor.php:705` | live Jita 4-4 sell floor lookup; aggregate fallback already in `market_history` | **6 hours** (`now()->subHours(6)`) |
 | `Console/Commands/DeriveMarketDailyCommand.php:113,138` | aggregator — reads yesterday's snapshots → writes market_history | **2-3 days** (close + 1 day overlap for safety) |
 | `python/outbox_relay/projectors/market_orders.py:149` | InfluxDB projection from outbox event | latest snapshot of named region/structure only |
 | `python/market_poller/persist.py` | the writer itself; never reads | n/a |
 
 **Finding:** every direct `market_orders` consumer needs
-**≤ 7 days** of live data. No analyst dashboard, no
-prediction pipeline, no operational surface depends on
-historical market_orders data older than a week.
+**≤ 3 days** of live data. The PersonalOrderPredictor already
+falls back to `market_history` (the aggregate) for the 7-day
+window when the 6h live lookup misses — the 7-day need is
+served by the aggregate, not by raw market_orders. No analyst
+dashboard, no prediction pipeline, no operational surface
+depends on raw market_orders past 3 days.
 
 ### Direct `market_history` reads (WARM data dependency)
 
@@ -224,11 +227,46 @@ hot-tier window**, leave warm + cold alone.
 
 | dimension | value |
 |-----------|-------|
-| Purpose   | live order-book snapshot for stock checks, Jita 7-day ticker fallback, daily aggregator input |
+| Purpose   | live order-book snapshot for stock checks, 6-hour live Jita lookup, daily aggregator input |
 | Granularity | per-snapshot, per-(observed_at, source, location, order) |
-| Retention | **14 days target** (extra 7-day safety beyond the 7-day Jita ticker need) |
-| Mechanism | monthly partition rotation: drop partitions whose `observed_at` is older than 14 days from the start-of-month boundary |
-| Operational guard | aggregator (`market:derive-daily`) must be confirmed run for every day in the window before its partition is dropped |
+| Retention | **3 days / 72 hours target** (operator-set 2026-04-27, tightened from prior 14d after MKT-3 confirmed every direct reader needs ≤ 3d) |
+| Mechanism | partition rotation. Monthly partitions are too coarse for a 3-day window; **daily or weekly partitioning required** as a prerequisite. ADR `ADR-market-orders-partitioning.md` updated to call this out. |
+| Operational guards | five prereqs (see Migration strategy below) before activation |
+
+**Migration strategy — must execute in order:**
+
+1. **Build aggregate layer** — confirm the existing
+   `market:derive-daily` aggregator covers every region the
+   pollers watch + every analytical metric currently read
+   from raw market_orders (price floor, daily avg, daily
+   high/low, volume). Add any missing aggregate columns
+   *before* dropping raw data they would have computed.
+2. **Backfill aggregates from current raw window** — run
+   `php artisan market:derive-daily` (already scheduled
+   hourly, but force a full sweep) over the entire current
+   11-day market_orders window. Confirm
+   `market_history` row count for `source='esi_derived_daily'`
+   has rows for every (date, region, type) combination that
+   appears in market_orders.
+3. **Verify historical pages** — analyst loads
+   `/portal/market`, `/portal/market/items/{id}/history`,
+   `/portal/market/doctrines` against the aggregate-only
+   view. No 404s, no missing data warnings.
+4. **Verify recommendations** — PersonalOrderPredictor /
+   DoctrineMarket prediction outputs match a baseline
+   captured before retention kicks in. Tolerance: < 5 %
+   prediction-value drift; > 5 % blocks activation.
+5. **Verify prediction inputs** — every input to the
+   prediction pipeline either reads raw market_orders within
+   the 3-day window, or reads market_history. Anything that
+   reads raw market_orders > 3 days back is a blocker; the
+   reader must migrate to market_history before retention
+   activates.
+6. **Backup ≤ 24 h old** + restore-tested.
+
+Only after all six prereqs hold may the rolling 3-day
+retention be activated. Activation is operator-led, not
+automated.
 
 ### WARM — `market_history`
 
@@ -261,31 +299,39 @@ the analytical needs documented in MKT-3.
 
 ### Reclaim estimates
 
-Given ingest rate ~82 M rows/day and current ~960 M total:
+Given ingest rate ~85 M rows/day and current ~960 M total
+(11-day window):
 
 | cutoff           | rows kept   | rows dropped  | data + idx kept | reclaim    | risk |
 |------------------|------------:|--------------:|----------------:|-----------:|------|
-| keep ≥ 14 days   | ~1.15 B     |  0 (currently)| ~456 GB         |  0 GB      | none — all current data inside window |
-| keep ≥ 7 days    | ~575 M      | ~385 M        | ~220 GB         | ~236 GB    | low — Jita ticker fallback covered |
-| keep ≥ 3 days    | ~245 M      | ~715 M        | ~95 GB          | ~361 GB    | medium — narrows aggregator safety overlap |
+| keep ≥ 14 days   | 960 M       |  0            | 456 GB          |  0 GB      | none — current span is only 11 d |
+| keep ≥ 7 days    | 595 M       | 365 M         | ~283 GB         | ~173 GB    | low — once daily partitioning lands |
+| keep ≥ 3 days    | 255 M       | 705 M         | ~121 GB         | ~335 GB    | low — confirmed by MKT-3 query map |
+| keep ≥ 24 h      |  85 M       | 875 M         |  ~40 GB         | ~416 GB    | high — narrows aggregator window beyond derive-daily safety |
 
-**Caveat:** the projection assumes uniform per-day row counts.
-Real distribution is poller-cyclical; daily counts may vary
-± 30%.
+**Operator-selected target: 3 days.** Reclaim ~335 GB at
+steady state. Caveats:
 
-**Today's actual reclaim opportunity:** 0 GB. The single
-populated partition (`p2026_04`) covers the past 27 days,
-all within any reasonable HOT cutoff. **No partition is
-currently dropable without losing data within the analysis
-window.**
+- Per-day projection assumes uniform distribution. Real
+  daily counts vary ±10 % (April 22 ramp-up was 66 M; April
+  23-26 averaged 86 M).
+- **Reclaim only materialises after daily/weekly
+  repartitioning lands.** Monthly partitions cannot resolve
+  a 3-day cutoff; the entire current month (~2 B rows by
+  month end) lives in one partition.
 
-The reclaim opportunity becomes real on May 1, when:
-- `p2026_04` becomes month-old → can be considered for drop
-  if April data is no longer needed for the rolling 14-day
-  window (it won't be, since May is in p2026_05)
-- Or sooner if we move from monthly partitioning to **daily
-  partitioning** (proposed in v2; see "Operational risk"
-  below)
+**Today's actual reclaim opportunity:** 0 GB. All current
+data inside any reasonable HOT cutoff (the platform's whole
+market_orders dataset is only 11 days old).
+
+Reclaim opportunity becomes real once **two milestones**
+hit:
+- daily/weekly partitioning ALTER TABLE completes (v2 ADR);
+- aggregate-coverage prereqs (steps 1-5 in HOT migration
+  strategy above) are signed off.
+
+Until both, the partition rotation cron is a no-op and the
+3-day target is theoretical.
 
 ### Migration complexity
 
@@ -352,24 +398,36 @@ demand it.
 
 1. **No destructive market_orders work** during v1 freeze.
    Confirmed: there is no actionable reclaim today (all
-   current data is inside any reasonable HOT window).
-2. **Partition rotation cron** ready to install once the
-   first month is fully outside the 14-day window
-   (early-mid May 2026). Until then, the cron would be a
-   no-op.
-3. **Existing aggregator** (`market:derive-daily`) is
-   sufficient to support the hot→warm transition. No new
-   aggregate columns or schema changes for v1.
-4. **`docs/ADR-market-orders-partitioning.md` recommendations
-   stand**, with the caveat that the 30-300 GB reclaim
-   estimate was inflated by an incorrect assumption about
-   historical data presence. **Real first-month rotation
-   reclaim:** 0 GB until p2026_04 ages past the cutoff.
-5. **v2 candidates** (NOT v1):
-   - daily / weekly repartitioning for finer reclaim grain
+   current data is inside any reasonable HOT window — the
+   platform only has 11 days of market_orders data).
+2. **HOT target tightened to 3 days / 72 hours**
+   (operator decision 2026-04-27). MKT-3 confirmed every
+   raw market_orders consumer needs ≤ 3 days; the 7-day
+   Jita ticker need is served by `market_history` (the
+   aggregate), not by raw orders.
+3. **Activation gated on six prereqs:** aggregate layer
+   built, aggregate backfill complete, historical pages
+   verified, recommendations verified, prediction inputs
+   verified, backup ≤ 24 h. Operator-led execution.
+4. **Partition rotation cron** cannot be installed at
+   monthly grain — daily/weekly partitioning is a
+   prerequisite for 3-day cutoff. Move to daily partitions
+   in v2 ADR before any rotation cron lands.
+5. **Existing aggregator** (`market:derive-daily`) is
+   architecturally sufficient. v1 task: confirm coverage
+   completeness across the current 11-day window before
+   trusting it for hot→warm migration.
+6. **`docs/ADR-market-orders-partitioning.md` recommendations
+   stand**, but reclaim estimates corrected:
+   - first-cycle reclaim: 0 GB (no historical data exists)
+   - steady-state reclaim at 3-day cutoff: ~335 GB
+   - steady-state reclaim at 14-day cutoff: ~50 GB
+7. **v2 candidates** (NOT v1):
+   - daily / weekly repartitioning (prereq for 3d cutoff)
    - additional aggregate metrics (spread, liquidity, depth)
    - InnoDB row compression for warm-tier columns
    - sub-region partitioning
+   - `market_aggregate_lag` quality detector
 
 V1 freeze posture per `docs/V1_FREEZE.md` allows this audit
 + documentation work. Implementation of any partition
