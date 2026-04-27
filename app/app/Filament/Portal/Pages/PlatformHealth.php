@@ -222,9 +222,14 @@ class PlatformHealth extends Page
 
     private function ingestPulse(): array
     {
+        // Window keys on created_at (ingest time) to match parserPulse.
+        // Re-uploads of historical logs would otherwise undercount n_24h
+        // and make the parse-error ratio meaningless. `latest` still
+        // reports the newest event_timestamp seen so operators can
+        // notice when fresh data has stopped arriving.
         try {
             $row = DB::table('eve_log_events')
-                ->where('event_timestamp', '>=', now()->subHours(24))
+                ->where('created_at', '>=', now()->subHours(24))
                 ->selectRaw('COUNT(*) AS n, MAX(event_timestamp) AS latest')
                 ->first();
             return [
@@ -238,15 +243,19 @@ class PlatformHealth extends Page
 
     private function parserPulse(): array
     {
+        // All three windows key on created_at (ingest time), not
+        // event_timestamp. Re-uploads of historical logs land rows now
+        // with old event_timestamps; mixing the two time bases produces
+        // bogus rates (errors_24h / events_24h > 1).
         try {
             $errors = DB::table('eve_log_parse_errors')
                 ->where('created_at', '>=', now()->subHours(24))
                 ->count();
             $events = DB::table('eve_log_events')
-                ->where('event_timestamp', '>=', now()->subHours(24))
+                ->where('created_at', '>=', now()->subHours(24))
                 ->count();
             $unknown = DB::table('eve_log_events')
-                ->where('event_timestamp', '>=', now()->subHours(24))
+                ->where('created_at', '>=', now()->subHours(24))
                 ->where('event_type', 'unknown')
                 ->count();
             return [
