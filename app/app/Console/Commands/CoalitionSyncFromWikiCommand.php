@@ -189,6 +189,44 @@ class CoalitionSyncFromWikiCommand extends Command
                 }
             }
 
+            // Wiki is authoritative. Deactivate any other active label
+            // for the same entity that disagrees on bloc — typically a
+            // stale `seed` row from before the wiki sync existed.
+            // Conflicts surface in the audit trail with action=
+            // 'deactivate-conflict'.
+            $supersededByWiki = 0;
+            foreach ($resolved as $a) {
+                $stale = DB::table('coalition_entity_labels')
+                    ->where('entity_type', $a['entity_type'])
+                    ->where('entity_id', (int) $a['entity_id'])
+                    ->where('is_active', 1)
+                    ->where('source', '<>', $cfg['wiki_source'])
+                    ->where('bloc_id', '<>', $cfg['bloc_id'])
+                    ->get(['id', 'source', 'bloc_id', 'raw_label', 'entity_name']);
+                foreach ($stale as $row) {
+                    if (! $dryRun) {
+                        DB::table('coalition_entity_labels')
+                            ->where('id', $row->id)
+                            ->update(['is_active' => 0, 'updated_at' => now()]);
+                    }
+                    $changes[] = [
+                        'action' => 'deactivate-conflict',
+                        'name' => $row->entity_name,
+                        'eid' => (int) $a['entity_id'],
+                        'etype' => $a['entity_type'],
+                        'diff' => [
+                            'previous' => "{$row->source} bloc={$row->bloc_id} label={$row->raw_label}",
+                            'wiki'     => "{$cfg['wiki_source']} bloc={$cfg['bloc_id']}",
+                        ],
+                    ];
+                    $supersededByWiki++;
+                }
+            }
+            if ($supersededByWiki > 0) {
+                $deactivated += $supersededByWiki;
+                $this->warn("{$supersededByWiki} stale labels deactivated where bloc disagreed with wiki");
+            }
+
             $this->info("changes: {$upserts} upserts, {$deactivated} deactivated" . ($dryRun ? ' (dry-run)' : ''));
             foreach ($changes as $c) {
                 $line = "  [{$c['action']}] {$c['name']} ({$c['etype']} #{$c['eid']})";
