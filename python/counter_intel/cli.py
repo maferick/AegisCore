@@ -73,6 +73,9 @@ from counter_intel.phase49c_retention import (
 from counter_intel.phase17_change_synthesis import (
     run_change_synthesis as phase17_change_synthesis,
 )
+from counter_intel.phase18_hypothesis_fusion import (
+    run_hypothesis_fusion as phase18_hypothesis_fusion,
+)
 from counter_intel.market_order_aggregator import (
     run_backfill as market_order_aggregator_backfill,
 )
@@ -255,6 +258,10 @@ def main() -> int:
     p17wc.add_argument("--window-type", type=str, required=True,
                         choices=["1h", "6h", "24h", "7d"])
 
+    p18hf = sub.add_parser("phase18-hypothesis-fusion",
+                            help="§18 — fuse CI signals into ranked hypotheses.")
+    p18hf.add_argument("--viewer-bloc-id", type=int, required=True)
+
     p_mkt = sub.add_parser("market-order-aggregator-backfill",
                            help="Emergency: aggregate market_orders → market_order_daily_aggregates.")
     p_mkt.add_argument("--start-date", type=str, required=True,
@@ -345,6 +352,8 @@ def main() -> int:
         return _run_market_order_aggregator_backfill(args)
     if args.cmd == "phase17-what-changed":
         return _run_phase17_what_changed(args)
+    if args.cmd == "phase18-hypothesis-fusion":
+        return _run_phase18_hypothesis_fusion(args)
     parser.print_help()
     return 2
 
@@ -1041,4 +1050,28 @@ def _run_phase17_what_changed(args) -> int:
             r.set_generated_rows(int(stats.get("findings_written") or 0))
             r.set_stats(stats or {})
     log.info("phase17-what-changed complete", stats)
+    return 0
+
+
+def _run_phase18_hypothesis_fusion(args) -> int:
+    cfg = Config.from_env()
+    with connection(cfg) as conn:
+        with ComputeLog(conn, lane="operational",
+                        pipeline="phase18-hypothesis-fusion",
+                        viewer_bloc_id=args.viewer_bloc_id, args={}) as r:
+            try:
+                stats = retry(
+                    lambda: phase18_hypothesis_fusion(
+                        conn, cfg, viewer_bloc_id=args.viewer_bloc_id,
+                    ),
+                    POLICIES["compute_default"],
+                    conn=conn, lane="operational",
+                    pipeline="phase18-hypothesis-fusion", run_log=r,
+                )
+            except CircuitOpenError:
+                log.warning("phase18-hypothesis-fusion skipped — circuit open", {})
+                return 0
+            r.set_generated_rows(int(stats.get("hypotheses_written") or 0))
+            r.set_stats(stats or {})
+    log.info("phase18-hypothesis-fusion complete", stats)
     return 0

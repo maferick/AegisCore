@@ -590,6 +590,11 @@ ci-phase47-incident-narratives:
 ci-phase17-what-changed:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase17-what-changed --viewer-bloc-id $(VIEWER_BLOC) --window-type $(WINDOW) $(CI_ARGS)
 
+# §18 — Counter-Intel hypothesis fusion (Command Surface).
+# Args: VIEWER_BLOC=1
+ci-phase18-hypothesis-fusion:
+	$(COMPOSE) --profile tools run --rm --build counter_intel phase18-hypothesis-fusion --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Counter-Intel Phase 4.8 — governance + trust + analyst controls.
 # Args: VIEWER_BLOC=1 CI_ARGS="--window-days 30"
 ci-phase48-alert-suppression:
