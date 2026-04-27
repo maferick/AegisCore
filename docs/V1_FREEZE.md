@@ -1,14 +1,22 @@
 # V1 Freeze — operational watch mode
 
-**Effective:** 2026-04-27.
+**Effective:** 2026-04-27 (reframed same day for single-operator
+reality — see ADR 0012).
 **Author:** v1 closure pass.
 **Lifts when:** v2 entry criteria in
-[`memory/project_v1_v2_split.md`](../../.claude/projects/-opt-AegisCore/memory/project_v1_v2_split.md)
-are observed live for the documented window.
+[`docs/adr/0012-single-operator-ai-assist.md`](adr/0012-single-operator-ai-assist.md)
+§ "V2 entry criteria — single-operator revision" are observed
+live for the documented window.
 
 This document defines what is allowed and what is forbidden
 during v1 freeze. Burn-down for the open gates is in
-[`V1_COMPLETION_CHECKLIST.md`](V1_COMPLETION_CHECKLIST.md).
+[`V1_COMPLETION_CHECKLIST.md`](V1_COMPLETION_CHECKLIST.md). The
+allowed-AI scope was expanded 2026-04-27 by ADR 0012 to include
+safe AI assistance (summarization, ranking, dedup, narrative
+generation, "what changed?" synthesis, investigation
+suggestions, confidence estimation, alert prioritization,
+incident grouping). Operator attribution + punitive automation
+remain forbidden.
 
 ---
 
@@ -53,6 +61,15 @@ The following are explicitly OK to ship without lifting freeze:
 9. **Test coverage** on shipped pipelines.
 10. **Incident response** — anything in
     [`docs/RUNBOOK.md`](RUNBOOK.md).
+11. **Safe AI assistance** per ADR 0012 — summarization,
+    anomaly ranking, dedup, narrative generation tied to
+    traceable rows, cluster / doctrine-evolution explanation,
+    operational change detection, "what changed?" synthesis,
+    investigation suggestions (queries only), confidence
+    estimation, alert prioritization within an existing queue,
+    incident grouping suggestions. Operator stays in the loop;
+    AI proposes, operator commits. Source citation required;
+    audit trail required (`intel_audit_log` actor_kind='ai').
 
 ---
 
@@ -60,30 +77,41 @@ The following are explicitly OK to ship without lifting freeze:
 
 The following are blocked until v2 entry approved:
 
-1. **New intelligence surfaces** of any kind. No new
-   `/portal/intelligence/...` pages. No new operator surfaces.
-2. **Predictive features** — escalation likelihood, corridor
-   pressure forecasting, doctrine trend prediction, fleet-size
-   projections.
-3. **Recommendation engines** — FC advisories, route advisories,
-   "you should engage / disengage" prompts.
-4. **Autonomous action** — auto-tune of thresholds, auto-suppress
-   of alerts on machine-derived signals (manual operator
-   suppression is fine), auto-rotate of severity classifications
-   without analyst review.
-5. **Phase 6 stylometry compute** — see ADR 0010, deferred.
-6. **Advanced operator-behavior clustering / communication
-   pattern intelligence.**
-7. **New trust-weight formulas** without the 200/5/below-baseline
-   eligibility per ADR 0011 Rule 5.
-8. **Schema-changing migrations** that add net-new functional
-   tables. Schema change for hardening (audit, retry, freshness)
-   is fine. Schema change to add a new analyst surface is not.
-9. **Adopting new external dependencies** — new ESI scopes, new
-   third-party APIs, new SDKs — without a freeze-lift exception
-   logged in `calibration_proposals` (kind=`dependency_addition`)
-   and dual sign-off.
-10. **Any change that puts humans in the calibration loop as the
+1. **New intelligence surfaces outside the safe-AI scope above.**
+   No new `/portal/intelligence/...` pages that infer about
+   operators-as-humans or take action without operator
+   confirmation.
+2. **Predictive accusations** — AI claims that X *will* betray,
+   X is hostile, X is an alt. Predictive *patterns* about
+   operations (escalation likelihood, corridor pressure,
+   doctrine trends, fleet-size projections) stay deferred to v2.
+3. **Autonomous recommendations with operational action
+   attached** — "kick this pilot", "deny fleet invite", "auto-
+   suspend on these signals". Recommendation alone is fine
+   (see safe-AI scope); attached action is not.
+4. **Autonomous mutation of analyst-visible state** — auto-tune
+   of thresholds, auto-suppress of alerts on machine-derived
+   signals (manual operator suppression is fine), auto-rotate
+   of severity classifications without analyst acknowledgement.
+5. **Stylometry / typed-text similarity / writing-style
+   inference** — ADR 0010 deferred to v2 and gated on a separate
+   privacy/ABAC ADR + dual operator review even at v2 entry.
+6. **Operator attribution** — AI claims about who runs what
+   character, identity inference, alt detection.
+7. **Punitive automation** — suspension, access removal,
+   watchlist auto-add, or any action against an operator
+   without explicit operator confirmation.
+8. **Aggressive behavioral profiling** — operator-behavior
+   clustering, communication-pattern intelligence beyond what
+   the safe-AI scope already covers.
+9. **Schema-changing migrations** that add net-new functional
+   tables outside what the safe-AI scope requires. Schema
+   change for hardening (audit, retry, freshness) is fine.
+10. **Adopting new external dependencies** — new ESI scopes, new
+    third-party APIs, new SDKs — without a freeze-lift exception
+    logged in `calibration_proposals` (kind=`dependency_addition`)
+    and dual sign-off.
+11. **Any change that puts humans in the calibration loop as the
     calibrated entity.** Per ADR 0011 Rule 6, the platform never
     auto-suppresses analysts, never down-weights their feedback,
     never attributes "low-quality reporter" labels. Do not weaken
@@ -155,7 +183,8 @@ shift — these qualify. Single-incident triage does **not** qualify.
 ## Exit criteria — when freeze lifts
 
 V1 freeze ends when ALL of the following are observed live for
-their documented window:
+their documented window. Reframed 2026-04-27 by ADR 0012 to
+match single-operator reality.
 
 1. **Platform-health stable** — 14 consecutive days with zero
    open critical quality events that survive 24h after detection
@@ -163,11 +192,13 @@ their documented window:
 2. **Retention proven** — 7 consecutive daily retention sweeps,
    each completing < 60 s, no errors, no rows past TTL on
    spot-check.
-3. **Telemetry corpus** — uploader diversity (≥ 5 active, ≥ 3
-   timezones, ≥ 7 days), dscan coverage (≥ 60 days), doctrine
-   coverage (≥ 200 matched compositions across ≥ 5 alliances).
-4. **Analyst feedback** — `intel_feedback_events` ≥ 200 spanning
-   ≥ 5 surfaces, ≥ 1 surface trust_score below 0.50.
+3. **Operator usage** — operator has worked the platform across
+   ≥ 5 distinct operational events with notes captured (replaces
+   the original uploader-diversity gate; single-operator can't
+   manufacture 5 uploaders).
+4. **Operator feedback** — `intel_feedback_events` ≥ 50 spanning
+   ≥ 3 surfaces (relaxed from 200/5 — single-operator volume
+   can't reach the original gate within reasonable time).
 5. **Storage hardening Stage 2 done** — three redundant indexes
    dropped (24 GB reclaim).
 6. **Storage Stage 3 ADR signed off** — `docs/ADR-market-orders-partitioning.md`
@@ -175,11 +206,16 @@ their documented window:
    `verified_intelligence_items`, dry-run completed in test
    schema.
 7. **No outstanding critical RUNBOOK items.**
+8. **Safe-AI surface validated** — at least one safe-AI surface
+   per ADR 0012 demonstrates measurable operator-time savings
+   on a documented analyst workflow. This is the new gate that
+   replaces the third-party calibration corpus the original
+   v1 plan assumed.
 
-When all 7 are observed, the operator drafting the v2 entry
-note opens a new ADR (`0012-v1-freeze-exit.md`) capturing the
-evidence and proposing v2.1 work. No v2 work starts until that
-ADR is reviewed.
+When all 8 are observed, the operator drafting the v2 entry
+note opens `docs/adr/0013-v1-freeze-exit.md` capturing the
+evidence and proposing v2 work order. Predictive / behavioral
+work does not start until that ADR is reviewed.
 
 ---
 

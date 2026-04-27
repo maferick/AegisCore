@@ -1,8 +1,19 @@
 # V1 Completion Checklist
 
 Burn-down for v1 operational closure. Goal: trustworthy intelligence
-infrastructure. Predictive / recommendation / autonomous / Phase 6
-features stay deferred to v2 — see `memory/project_v1_v2_split.md`.
+infrastructure + safe AI force-multiplier surfaces for a single
+operator. Predictive accusations, operator attribution, punitive
+automation, stylometry stay deferred to v2 — see
+[`docs/adr/0012-single-operator-ai-assist.md`](adr/0012-single-operator-ai-assist.md)
+and `memory/project_v1_v2_split.md`.
+
+**Gate authority:** ADR 0012 (single-operator reframe, 2026-04-27)
+revises any gate that assumed an analyst team or alliance rollout.
+The revised gates appear in V1_FREEZE.md § "Exit criteria". Where
+this checklist still references the original 200-feedback-events /
+5-uploaders gate, treat ADR 0012's relaxed numbers as canonical
+(50 events / 3 surfaces; ≥5 operational events used; 1 safe-AI
+surface validated).
 
 Status legend:
 - ☑ done
@@ -297,6 +308,53 @@ considered closed for v1.
   pin incident, advance window)
 - **Gate**: usable on tablet (≥768px viewport); analyst workflow
   exercised by ≥3 different humans for ≥1 week each.
+
+## 17. Safe AI assistance (added 2026-04-27, ADR 0012)
+
+Surfaces that summarize / rank / explain / dedupe / synthesize
+already-trusted operational data. Force multiplier for the
+single operator. Operator stays in the loop; AI proposes,
+operator commits.
+
+- ☐ "what changed?" synthesis between two operator-chosen
+  windows over already-rendered surfaces (alerts / incidents /
+  corridors / digest). Pure window diff; cheapest first win;
+  no new schema.
+- ☐ narrative summarization for incidents / clusters with
+  source-row citation (`actor_kind='ai'` rows in
+  `intel_audit_log`).
+- ☐ anomaly ranking — reorder existing alert / incident lists
+  by AI-estimated severity within the queue.
+- ☐ deduplication suggestions for overlapping incidents /
+  alerts / narratives. Suggest only — operator clicks merge.
+- ☐ confidence estimation calibrated against operator
+  feedback corpus (depends on §6 / §14 corpus growth).
+- ☐ investigation-suggestion panel (queries the operator can
+  run, never actions).
+- ☐ alert prioritization within an analyst's already-visible
+  queue.
+- ☐ incident-grouping suggestions.
+- ☐ cluster / doctrine-evolution explanation surfaces (why
+  was this clustered, what shifted).
+- ☐ runtime: extend `intel_copilot` (ADR 0007) rather than
+  introducing a new container.
+- ☐ render contract: every AI surface cites source rows,
+  shows confidence band (low/medium/high), shows one-line
+  caveat. No naked claims.
+- ☐ audit contract: AI artifacts that influence analyst
+  decisions write to `intel_audit_log` with `actor_kind='ai'`.
+- **Gate**: ≥1 safe-AI surface live; operator reports
+  measurable time savings on a documented analyst workflow
+  (this gate is also v1 freeze exit criterion 8 in
+  V1_FREEZE.md).
+
+**FORBIDDEN even within this section** (per ADR 0012):
+- stylometry / writing-style inference
+- operator attribution
+- punitive automation
+- autonomous escalation
+- predictive accusations about people
+- AI surfaces that take action without operator confirmation
 
 ## 16. Documentation
 
