@@ -23,20 +23,49 @@ final class IntelFreshness
     /**
      * Per-surface TTL ladder in hours: [fresh, aging, stale].
      * Anything past `stale` is `expired`.
+     *
+     * Source of truth: app/config/intel_ttl.json (mirrored from
+     * python/counter_intel/intel_ttl.json — `make verify-ttl-config`
+     * enforces equality). Loaded once at first access.
      */
-    public const SURFACE_TTL = [
+    private static ?array $ttlCache = null;
+
+    public static function surfaceTtl(): array
+    {
+        if (self::$ttlCache === null) {
+            $path = config_path('intel_ttl.json');
+            $raw = is_file($path) ? @file_get_contents($path) : false;
+            if ($raw === false) {
+                self::$ttlCache = [];
+            } else {
+                $decoded = json_decode($raw, true);
+                self::$ttlCache = is_array($decoded['freshness_ttl_hours'] ?? null)
+                    ? $decoded['freshness_ttl_hours']
+                    : [];
+            }
+        }
+        return self::$ttlCache;
+    }
+
+    /**
+     * Backwards-compatible static accessor. Code that referenced
+     * `IntelFreshness::SURFACE_TTL` should migrate to
+     * `IntelFreshness::surfaceTtl()` — but the legacy access pattern
+     * still works via __callStatic-free constant fallback below.
+     */
+    public const SURFACE_TTL_FALLBACK = [
         'digest'             => [6, 24, 72],
         'alert'              => [1, 6, 24],
         'incident'           => [0.5, 6, 48],
         'cluster'            => [0.5, 6, 48],
-        'corridor'           => [24, 24 * 7, 24 * 30],
-        'force_composition'  => [24, 24 * 7, 24 * 30],
-        'threat_surface'     => [24, 24 * 7, 24 * 14],
-        'alliance_profile'   => [24, 24 * 7, 24 * 30],
-        'coalition'          => [24, 24 * 7, 24 * 30],
-        'narrative'          => [6, 24, 24 * 7],
-        'doctrine_evolution' => [24 * 7, 24 * 30, 24 * 90],
-        'verified'           => [24 * 7, 24 * 30, 24 * 90],
+        'corridor'           => [24, 168, 720],
+        'force_composition'  => [24, 168, 720],
+        'threat_surface'     => [24, 168, 336],
+        'alliance_profile'   => [24, 168, 720],
+        'coalition'          => [24, 168, 720],
+        'narrative'          => [6, 24, 168],
+        'doctrine_evolution' => [168, 720, 2160],
+        'verified'           => [168, 720, 2160],
     ];
 
     public const STATES = ['fresh', 'aging', 'stale', 'expired'];
@@ -56,7 +85,8 @@ final class IntelFreshness
     public static function classify(string $surface, ?string $timestamp, ?DateTimeInterface $now = null): string
     {
         if ($timestamp === null) return 'expired';
-        $ttl = self::SURFACE_TTL[$surface] ?? [24, 24 * 7, 24 * 30];
+        $cfg = self::surfaceTtl();
+        $ttl = $cfg[$surface] ?? self::SURFACE_TTL_FALLBACK[$surface] ?? [24, 168, 720];
 
         $ref = ($now instanceof CarbonInterface) ? $now : Carbon::now('UTC');
         try {

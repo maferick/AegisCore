@@ -26,8 +26,10 @@ Runtime safety:
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pymysql
 
@@ -37,8 +39,21 @@ from counter_intel.log import get
 log = get("counter_intel.phase49c_retention")
 
 
+def _load_ttl_config() -> dict:
+    p = Path(__file__).parent / "intel_ttl.json"
+    with p.open() as f:
+        return json.load(f)
+
+
+_TTL_CONFIG = _load_ttl_config()
+
+
 # ----------------------------------------------------------------------
 # Per-table retention spec.
+#
+# Source of truth: `intel_ttl.json` (mirrored to PHP at
+# app/config/intel_ttl.json — `make verify-ttl-config` enforces
+# equality).
 #
 # Each entry: (table, ts_col, ttl_days, where_clause, batch_size)
 #
@@ -50,92 +65,11 @@ log = get("counter_intel.phase49c_retention")
 # violations.
 # ----------------------------------------------------------------------
 
+# Specs loaded from canonical JSON. Each entry coerced to tuple
+# of (table, ts_col, ttl_days, where_clause, batch_size).
 RETENTION: list[tuple[str, str, int, str, int]] = [
-    # Outbox: processed events older than 7d. The relay only needs
-    # a recent replay window for debugging. Storage audit 2026-04-27
-    # showed 8.1M unprocessed rows after a relay outage; leaving
-    # processed rows around indefinitely compounds the bloat. NEVER
-    # drops unprocessed rows (processed_at IS NULL) — those are
-    # actively-pending events.
-    ("outbox", "processed_at", 7, "processed_at IS NOT NULL", 5000),
-
-    # Compute trace ages out fast — rollups are authoritative.
-    ("compute_run_log", "compute_started_at", 30, "1=1", 5000),
-
-    # Resolved quality events ageing.
-    ("system_quality_events", "resolved_at", 90,
-     "resolved_at IS NOT NULL", 1000),
-
-    # Export artifacts: hard-expire when expires_at < now (already
-    # set 30d on creation; this just drops the row when expired).
-    ("intel_export_artifacts", "expires_at", 0,
-     "expires_at IS NOT NULL AND expires_at < NOW()", 500),
-
-    # Resolved/dismissed feedback older than 180d folds into trust
-    # rollups; the raw event corpus stops being read.
-    ("intel_feedback_events", "created_at", 180, "1=1", 5000),
-
-    # Audit log retains 365 days. Long enough for any reasonable
-    # retrospective analyst review window. Append-only so the
-    # retention sweep is the only path that ever drops rows.
-    ("intel_audit_log", "created_at", 365, "1=1", 5000),
-
-    # Trust metrics roll forward — old window snapshots redundant
-    # past 90 days.
-    ("system_trust_metrics", "computed_at", 90, "1=1", 1000),
-
-    # Force composition + transitions: 365d. Doctrine evolution
-    # already aggregated by then.
-    ("operational_force_transitions", "computed_at", 365, "1=1", 2000),
-    ("operational_force_compositions", "computed_at", 365, "1=1", 2000),
-
-    # Operational artefacts: 365d. Battle linkage is the long-form
-    # record past that point.
-    ("operational_incidents", "start_at", 365, "1=1", 5000),
-    ("operational_hostile_clusters", "start_at", 365, "1=1", 5000),
-    ("operational_corridors", "last_seen_at", 365, "1=1", 5000),
-
-    # Activity heatmap: 180d.
-    ("system_operational_activity", "activity_date", 180, "1=1", 5000),
-
-    # Daily digest archive: 90d.
-    ("daily_operational_digest", "digest_date", 90, "1=1", 1000),
-
-    # Incident narratives ride along with their incident parent —
-    # 365d to match.
-    ("incident_narratives", "computed_at", 365, "1=1", 5000),
-
-    # Strategic alerts that have been archived / resolved age out at
-    # 180d. Open / suppressed never auto-deleted.
-    ("strategic_alerts", "detected_at", 180,
-     "(analyst_status IN ('archived','false_positive') OR dismissed_at IS NOT NULL)", 5000),
-
-    # Doctrine evolution events: 365d. Long-form trends are kept in
-    # alliance_operational_profiles.
-    ("doctrine_evolution_events", "computed_at", 365, "1=1", 1000),
-
-    # Verified intelligence items: 365d unless pinned. Pinned items
-    # are operator-curated and never auto-deleted.
-    ("verified_intelligence_items", "created_at", 365,
-     "pinned = 0", 1000),
-
-    # Parse errors: 30d for resolved (retried/dismissed/reparsed_ok);
-    # open errors stay until acted on.
-    ("eve_log_parse_errors", "updated_at", 30,
-     "status IN ('retried','dismissed','reparsed_ok')", 5000),
-
-    # dscan snapshots: 60d successful, 7d failed.
-    ("eve_log_dscan_snapshots", "last_seen_at", 60,
-     "fetch_status = 'success'", 5000),
-    ("eve_log_dscan_snapshots", "last_seen_at", 7,
-     "fetch_status != 'success'", 5000),
-
-    # Raw eve log events: 90d. Operational aggregates have already
-    # consumed the signal we needed.
-    ("eve_log_events", "event_timestamp", 90, "1=1", 10000),
-
-    # Entity resolutions follow their event parent. Same TTL.
-    ("eve_log_entity_resolutions", "created_at", 90, "1=1", 10000),
+    (str(s[0]), str(s[1]), int(s[2]), str(s[3]), int(s[4]))
+    for s in _TTL_CONFIG["retention_specs"]
 ]
 
 

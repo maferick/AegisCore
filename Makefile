@@ -617,6 +617,15 @@ ci-phase49e-quality-guards:
 ci-phase49c-retention:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase49c-retention $(CI_ARGS)
 
+# V1 §13 — verify TTL config single-source consistency.
+# python/counter_intel/intel_ttl.json (canonical) MUST equal
+# app/config/intel_ttl.json. Edit one, then run this; or edit
+# both and let it fail loudly until they match.
+verify-ttl-config:
+	@diff -u python/counter_intel/intel_ttl.json app/config/intel_ttl.json \
+	  && echo "ttl-config: in sync" \
+	  || (echo "ttl-config: DRIFT — Python and PHP intel_ttl.json differ. Reconcile before commit." && exit 1)
+
 # Phase 3 — cross-compile the Windows EVE Log Uploader (.NET 8
 # Worker Service) using the dotnet/sdk:8.0 container. Produces a
 # single-file self-contained .exe in

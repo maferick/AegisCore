@@ -242,10 +242,15 @@ considered closed for v1.
 - ☑ Python compute pass + PHP read-time helper
 - ☑ TTL ladder per surface, shared between Python + PHP
 - ☑ pills wired on 8+ pages
-- ◐ TTL ladder duplicated in two places — single-source via JSON
-  config or Python-emitted PHP class
+- ☑ TTL ladder centralised: `python/counter_intel/intel_ttl.json`
+  (canonical) mirrored to `app/config/intel_ttl.json`. Both
+  sides load at startup. `make verify-ttl-config` enforces
+  byte-identical equality and exits 1 on drift. Python loads
+  via importlib path; PHP loads via `config_path('intel_ttl.json')`
+  with first-call cache + fallback constants.
 - **Gate**: TTL config defined once, consumed by both Python +
-  PHP at startup. No drift possible between sides.
+  PHP at startup. No drift possible between sides — verified by
+  Make target.
 
 ## 14. Calibration
 

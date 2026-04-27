@@ -1,0 +1,43 @@
+{
+  "_doc": "Single source of truth for intel platform TTL ladders. Mirrored at app/config/intel_ttl.json — `make verify-ttl-config` enforces equality. Edit BOTH files when changing values, then verify.",
+  "version": 1,
+  "freshness_ttl_hours": {
+    "digest": [6, 24, 72],
+    "alert": [1, 6, 24],
+    "incident": [0.5, 6, 48],
+    "cluster": [0.5, 6, 48],
+    "corridor": [24, 168, 720],
+    "force_composition": [24, 168, 720],
+    "threat_surface": [24, 168, 336],
+    "alliance_profile": [24, 168, 720],
+    "coalition": [24, 168, 720],
+    "narrative": [6, 24, 168],
+    "doctrine_evolution": [168, 720, 2160],
+    "verified": [168, 720, 2160]
+  },
+  "retention_specs": [
+    ["outbox", "processed_at", 7, "processed_at IS NOT NULL", 5000],
+    ["compute_run_log", "compute_started_at", 30, "1=1", 5000],
+    ["system_quality_events", "resolved_at", 90, "resolved_at IS NOT NULL", 1000],
+    ["intel_export_artifacts", "expires_at", 0, "expires_at IS NOT NULL AND expires_at < NOW()", 500],
+    ["intel_feedback_events", "created_at", 180, "1=1", 5000],
+    ["intel_audit_log", "created_at", 365, "1=1", 5000],
+    ["system_trust_metrics", "computed_at", 90, "1=1", 1000],
+    ["operational_force_transitions", "computed_at", 365, "1=1", 2000],
+    ["operational_force_compositions", "computed_at", 365, "1=1", 2000],
+    ["operational_incidents", "start_at", 365, "1=1", 5000],
+    ["operational_hostile_clusters", "start_at", 365, "1=1", 5000],
+    ["operational_corridors", "last_seen_at", 365, "1=1", 5000],
+    ["system_operational_activity", "activity_date", 180, "1=1", 5000],
+    ["daily_operational_digest", "digest_date", 90, "1=1", 1000],
+    ["incident_narratives", "computed_at", 365, "1=1", 5000],
+    ["strategic_alerts", "detected_at", 180, "(analyst_status IN ('archived','false_positive') OR dismissed_at IS NOT NULL)", 5000],
+    ["doctrine_evolution_events", "computed_at", 365, "1=1", 1000],
+    ["verified_intelligence_items", "created_at", 365, "pinned = 0", 1000],
+    ["eve_log_parse_errors", "updated_at", 30, "status IN ('retried','dismissed','reparsed_ok')", 5000],
+    ["eve_log_dscan_snapshots", "last_seen_at", 60, "fetch_status = 'success'", 5000],
+    ["eve_log_dscan_snapshots", "last_seen_at", 7, "fetch_status != 'success'", 5000],
+    ["eve_log_events", "event_timestamp", 90, "1=1", 10000],
+    ["eve_log_entity_resolutions", "created_at", 90, "1=1", 10000]
+  ]
+}

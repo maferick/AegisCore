@@ -3,6 +3,12 @@
 Per-surface TTL ladder classifies each row as
 fresh / aging / stale / expired.
 
+The TTL ladder itself comes from `intel_ttl.json` (single source
+of truth, mirrored to app/config/intel_ttl.json for PHP). Static
+table-specific bindings (timestamp column, predicate, etc.) stay
+hard-coded here because they're SQL-shape concerns rather than
+ladder values.
+
 Idempotent. Reads the row's authoritative timestamp (varies by
 surface), compares to current UTC, derives the state, and updates
 the freshness_state column. Also fills source_window_start /
@@ -15,7 +21,9 @@ on the PHP side so freshness is recomputed live for hot rows.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pymysql
 
@@ -25,81 +33,55 @@ from counter_intel.log import get
 log = get("counter_intel.phase4_freshness")
 
 
+def _load_ttl_config() -> dict:
+    p = Path(__file__).parent / "intel_ttl.json"
+    with p.open() as f:
+        return json.load(f)
+
+
+_TTL = _load_ttl_config()
+_FRESHNESS_HOURS = _TTL["freshness_ttl_hours"]
+
+
 # Per-surface TTL ladder (hours). State is determined by comparing
 # (now - authoritative_timestamp) against these thresholds.
+# Bindings — table + timestamp column + predicate. TTL hours come
+# from intel_ttl.json (canonical) so PHP + Python share values.
+def _surface_entry(surface_key: str, ts_col: str, ws: str | None, we: str | None, where: str) -> dict:
+    fresh, aging, stale = _FRESHNESS_HOURS[surface_key]
+    return {
+        "ts_col": ts_col, "fresh": fresh, "aging": aging, "stale": stale,
+        "window_start_col": ws, "window_end_col": we, "where": where,
+    }
+
+
 SURFACE_TTL: dict[str, dict] = {
-    "daily_operational_digest": {
-        "ts_col": "generated_at",
-        "fresh": 6, "aging": 24, "stale": 72,
-        "window_start_col": None, "window_end_col": "generated_at",
-        "where": "1=1",
-    },
-    "strategic_alerts": {
-        "ts_col": "detected_at",
-        "fresh": 1, "aging": 6, "stale": 24,
-        "window_start_col": "window_start", "window_end_col": "window_end",
-        "where": "dismissed_at IS NULL",
-    },
-    "operational_incidents": {
-        "ts_col": "end_at",
-        "fresh": 0.5, "aging": 6, "stale": 48,
-        "window_start_col": "start_at", "window_end_col": "end_at",
-        "where": "1=1",
-    },
-    "operational_hostile_clusters": {
-        "ts_col": "end_at",
-        "fresh": 0.5, "aging": 6, "stale": 48,
-        "window_start_col": "start_at", "window_end_col": "end_at",
-        "where": "1=1",
-    },
-    "operational_corridors": {
-        "ts_col": "last_seen_at",
-        "fresh": 24, "aging": 24 * 7, "stale": 24 * 30,
-        "window_start_col": "first_seen_at", "window_end_col": "last_seen_at",
-        "where": "1=1",
-    },
-    "operational_force_compositions": {
-        "ts_col": "snapshot_at",
-        "fresh": 24, "aging": 24 * 7, "stale": 24 * 30,
-        "window_start_col": "snapshot_at", "window_end_col": "snapshot_at",
-        "where": "snapshot_at IS NOT NULL",
-    },
-    "system_threat_surface": {
-        "ts_col": "computed_at",
-        "fresh": 24, "aging": 24 * 7, "stale": 24 * 14,
-        "window_start_col": None, "window_end_col": "computed_at",
-        "where": "1=1",
-    },
-    "alliance_operational_profiles": {
-        "ts_col": "computed_at",
-        "fresh": 24, "aging": 24 * 7, "stale": 24 * 30,
-        "window_start_col": "window_start", "window_end_col": "window_end",
-        "where": "1=1",
-    },
-    "coalition_behavior_comparisons": {
-        "ts_col": "computed_at",
-        "fresh": 24, "aging": 24 * 7, "stale": 24 * 30,
-        "window_start_col": "window_start", "window_end_col": "window_end",
-        "where": "1=1",
-    },
-    "incident_narratives": {
-        "ts_col": "computed_at",
-        "fresh": 6, "aging": 24, "stale": 24 * 7,
-        "window_start_col": None, "window_end_col": "computed_at",
-        "where": "1=1",
-    },
-    "doctrine_evolution_events": {
-        "ts_col": "computed_at",
-        "fresh": 24 * 7, "aging": 24 * 30, "stale": 24 * 90,
-        "window_start_col": None, "window_end_col": "window_end",
-        "where": "1=1",
-    },
-    "verified_intelligence_items": {
-        "ts_col": "verified_at",
-        "fresh": 24 * 7, "aging": 24 * 30, "stale": 24 * 90,
-        "window_start_col": "verified_at", "window_end_col": "expires_at",
-        "where": "verified_at IS NOT NULL",
-    },
+    "daily_operational_digest": _surface_entry(
+        "digest", "generated_at", None, "generated_at", "1=1"),
+    "strategic_alerts": _surface_entry(
+        "alert", "detected_at", "window_start", "window_end", "dismissed_at IS NULL"),
+    "operational_incidents": _surface_entry(
+        "incident", "end_at", "start_at", "end_at", "1=1"),
+    "operational_hostile_clusters": _surface_entry(
+        "cluster", "end_at", "start_at", "end_at", "1=1"),
+    "operational_corridors": _surface_entry(
+        "corridor", "last_seen_at", "first_seen_at", "last_seen_at", "1=1"),
+    "operational_force_compositions": _surface_entry(
+        "force_composition", "snapshot_at", "snapshot_at", "snapshot_at",
+        "snapshot_at IS NOT NULL"),
+    "system_threat_surface": _surface_entry(
+        "threat_surface", "computed_at", None, "computed_at", "1=1"),
+    "alliance_operational_profiles": _surface_entry(
+        "alliance_profile", "computed_at", "window_start", "window_end", "1=1"),
+    "coalition_behavior_comparisons": _surface_entry(
+        "coalition", "computed_at", "window_start", "window_end", "1=1"),
+    "incident_narratives": _surface_entry(
+        "narrative", "computed_at", None, "computed_at", "1=1"),
+    "doctrine_evolution_events": _surface_entry(
+        "doctrine_evolution", "computed_at", None, "window_end", "1=1"),
+    "verified_intelligence_items": _surface_entry(
+        "verified", "verified_at", "verified_at", "expires_at",
+        "verified_at IS NOT NULL"),
 }
 
 
