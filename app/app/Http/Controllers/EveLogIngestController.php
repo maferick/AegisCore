@@ -120,14 +120,6 @@ class EveLogIngestController extends Controller
         }
         $effectiveOffsetEnd = (int) $data['offset_start'] + strlen($contentBytes);
 
-        // Encoding normalisation. EVE chat logs on Windows can be
-        // UTF-16 LE (older builds) or UTF-8 (modern builds), with or
-        // without BOM. Detect by leading BOM bytes and convert to
-        // UTF-8 before parsing. The on-the-wire bytes (and the sha256
-        // we just verified) stay UTF-16 — only the parser-side string
-        // is normalised.
-        $parserText = $this->normaliseToUtf8($contentBytes);
-
         // 4. Resolve / create the file record.
         $now = now();
         $logType = $data['log_type'] ?? null;
@@ -138,6 +130,12 @@ class EveLogIngestController extends Controller
                 $data['listener'] ?? null,
             );
         }
+
+        // Detect chunk encoding from leading BOM. Used both to decode
+        // this chunk and (on chunk 0) to persist the encoding on the
+        // file row so chunks 1..N — which carry no BOM — convert
+        // correctly.
+        $detectedEncoding = $this->detectEncodingFromBom($contentBytes);
 
         $file = DB::table('eve_log_files')
             ->where('client_id', $data['client_id'])
@@ -162,6 +160,7 @@ class EveLogIngestController extends Controller
                 'channel_name' => $data['channel_name'] ?? null,
                 'channel_id' => $data['channel_id'] ?? null,
                 'session_started_at' => $data['session_started_at'] ?? null,
+                'encoding' => $detectedEncoding,
                 'size_received' => 0,
                 'last_offset' => 0,
                 'first_seen_at' => $now,
@@ -171,6 +170,14 @@ class EveLogIngestController extends Controller
             ]);
             $file = DB::table('eve_log_files')->where('id', $newId)->first();
         }
+
+        // Convert chunk to UTF-8 using the per-file encoding.
+        // Precedence: BOM on this chunk (rare past chunk 0 but
+        // possible) > encoding persisted on file row > fallback UTF-8.
+        $effectiveEncoding = $detectedEncoding !== 'utf-8'
+            ? $detectedEncoding
+            : ($file->encoding ?? 'utf-8');
+        $parserText = $this->convertChunkToUtf8($contentBytes, $effectiveEncoding);
 
         // 5. Offset continuity. Append-only: chunk must start exactly
         //    at last_offset.
@@ -404,26 +411,47 @@ class EveLogIngestController extends Controller
     }
 
     /**
-     * Detect the chunk's text encoding from leading BOM bytes and
-     * return a UTF-8 string suitable for the parser. Falls back to
-     * the raw bytes interpreted as UTF-8 when no BOM is present.
+     * Inspect leading BOM bytes and return the matching encoding tag.
+     * Returns 'utf-8' both for an explicit UTF-8 BOM (which the parser
+     * strips on its own) and for the no-BOM case.
      *
-     * Detection covers:
-     *   FF FE        — UTF-16 LE BOM
-     *   FE FF        — UTF-16 BE BOM
-     *   EF BB BF     — UTF-8 BOM (passed through; parser strips on its own)
-     *   none         — assume UTF-8 (modern EVE)
+     *   FF FE        — UTF-16 LE
+     *   FE FF        — UTF-16 BE
+     *   EF BB BF     — UTF-8
+     *   none         — assume UTF-8
      */
-    private function normaliseToUtf8(string $bytes): string
+    private function detectEncodingFromBom(string $bytes): string
     {
-        $len = strlen($bytes);
-        if ($len === 0) return '';
-        if ($len >= 2 && $bytes[0] === "\xFF" && $bytes[1] === "\xFE") {
-            $converted = @mb_convert_encoding(substr($bytes, 2), 'UTF-8', 'UTF-16LE');
+        if (strlen($bytes) >= 2 && $bytes[0] === "\xFF" && $bytes[1] === "\xFE") {
+            return 'utf-16le';
+        }
+        if (strlen($bytes) >= 2 && $bytes[0] === "\xFE" && $bytes[1] === "\xFF") {
+            return 'utf-16be';
+        }
+        return 'utf-8';
+    }
+
+    /**
+     * Decode a chunk to UTF-8 using the supplied encoding tag. Strips
+     * a leading BOM where present. Returns the original bytes when
+     * conversion fails so the parser can still attempt a best-effort
+     * pass (and surface the line in eve_log_parse_errors).
+     */
+    private function convertChunkToUtf8(string $bytes, string $encoding): string
+    {
+        if ($bytes === '') return '';
+        if ($encoding === 'utf-16le') {
+            $payload = (strlen($bytes) >= 2 && $bytes[0] === "\xFF" && $bytes[1] === "\xFE")
+                ? substr($bytes, 2)
+                : $bytes;
+            $converted = @mb_convert_encoding($payload, 'UTF-8', 'UTF-16LE');
             return $converted !== false ? $converted : $bytes;
         }
-        if ($len >= 2 && $bytes[0] === "\xFE" && $bytes[1] === "\xFF") {
-            $converted = @mb_convert_encoding(substr($bytes, 2), 'UTF-8', 'UTF-16BE');
+        if ($encoding === 'utf-16be') {
+            $payload = (strlen($bytes) >= 2 && $bytes[0] === "\xFE" && $bytes[1] === "\xFF")
+                ? substr($bytes, 2)
+                : $bytes;
+            $converted = @mb_convert_encoding($payload, 'UTF-8', 'UTF-16BE');
             return $converted !== false ? $converted : $bytes;
         }
         return $bytes;
