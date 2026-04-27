@@ -149,6 +149,38 @@ Progress at 09:18 UTC (≈ 2 h elapsed):
 Background; non-blocking against ingest. Pollers continue
 writing to `p2026_04` partition normally.
 
+### Backfill final state (11:04 UTC)
+
+```
+{"days": 11, "batches": 27, "rows_affected": 521143, "total_seconds": 5023.0}
+```
+
+- **521,143 aggregate rows** across the 11-day window
+- 27 (date, region) batches
+- 84 minutes total runtime (cron-friendly cadence)
+- Per-day row counts ~44K-46K (steady regions: Jita +
+  Domain + small regions); 04-26 elevated to 71K due to
+  prior partial Jita-only backfill being merged
+
+Per (date, region) coverage table verified:
+
+| date | region 10000002 | region 10000003 | region 10000023 |
+|------|----------------:|----------------:|----------------:|
+| 04-16 | 33,900 | 9,806 | — |
+| 04-17 | 33,962 | 10,269 | — |
+| 04-18 | 33,952 | 10,844 | — |
+| 04-19 | 33,978 | 10,829 | — |
+| 04-20 | 33,974 | 10,809 | — |
+| 04-21 | 33,981 | 10,809 | 1,169 |
+| 04-22 | 33,969 | 10,780 | 1,176 |
+| 04-23 | 33,915 | 10,736 | 1,223 |
+| 04-24 | 33,884 | 10,797 | 1,205 |
+| 04-25 | 33,889 |  8,704 | 912 |
+| 04-26 | 33,890 |  3,891 | — |
+
+(04-26 region 10000003 / 10000023 lower because backfill
+ran before end-of-day; live pollers continue.)
+
 Monitor progress:
 ```
 docker exec mariadb mariadb -uaegiscore -paegiscore aegiscore -NBe \
@@ -157,9 +189,44 @@ docker exec mariadb mariadb -uaegiscore -paegiscore aegiscore -NBe \
 
 ---
 
-## Stage D — verification (in progress)
+## Stage D — verification
 
-Tasks still to run after backfill completes:
+### Spot-check parity (Tritanium Jita 4-4 sell, 2026-04-26)
+
+```
+src        min_p   max_p     orders   unique
+aggregate  4.01   999.00     11,477     109
+raw        4.01   999.00     11,477     109
+```
+
+**Identical.** MIN, MAX, COUNT(*), COUNT(DISTINCT order_id)
+all match between the new aggregate and the raw scan over
+the same window.
+
+### Coverage check
+
+11 days × 2-3 active regions = 27 (date, region) batches in
+the worker output. All 27 confirmed present in
+`market_order_daily_aggregates`. No missing day-region pairs.
+
+### Pages render (manual smoke — pending)
+
+The major historical/charting consumers (`MarketItemHistory`,
+`JitaValuationService`, `MarketHubComparisonService`,
+`PersonalOrderPredictor.regionalBaseline`) already read from
+`market_history` (the per-region daily aggregate maintained
+by `php artisan market:derive-daily`). They do **not** touch
+the new `market_order_daily_aggregates` table — that's the
+location-level aggregate added today for the
+DoctrineMarket-style stock query path.
+
+Operator-led smoke test queue (post-cutover):
+- `/portal/market` overview render
+- `/portal/market/items/34/history` (Tritanium chart)
+- `/portal/market/doctrines` (DoctrineMarket stock query)
+- `PersonalOrderPredictor` predictions on a known order
+
+### Tasks still to run after operator approves cutover:
 
 1. **Coverage** — for each (date, region) in the source
    window, confirm a corresponding aggregate row set:
