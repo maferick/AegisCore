@@ -41,14 +41,35 @@
             </p>
         </div>
 
-        {{-- Top stats row --}}
+        {{-- One-line verdict — scan-in-seconds answer to
+             "what needs my attention?" Lifted from the Platform
+             Health pattern; same component, same colour ladder. --}}
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
+        {{-- Top stats row — KPI tiles with severity icon for
+             category recognition. Layout: dot icon + count
+             centred + label below. Reduces extraneous cognitive
+             load by giving each tile a visual anchor. --}}
+        @php
+            $bandIcons = [
+                'critical' => '⬤', 'high' => '◆', 'elevated' => '▲',
+                'note_only' => '●', 'clean' => '○',
+            ];
+        @endphp
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
             @foreach (['critical', 'high', 'elevated', 'note_only', 'clean'] as $band)
-                @php $n = $band_dist[$band] ?? 0; @endphp
-                <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="text-align:center;">
-                    <div style="font-size:0.6rem; text-transform:uppercase; letter-spacing:0.08em; color:{{ $bandColors[$band] ?? '#9ca3af' }};">{{ str_replace('_', ' ', $band) }}</div>
-                    <div style="font-size:1.5rem; font-weight:600; color:#e5e5e7; margin-top:0.2rem;">{{ number_format($n) }}</div>
-                    <div style="font-size:0.55rem; color:#6b7280; margin-top:0.1rem;">last 24h renders</div>
+                @php
+                    $n = $band_dist[$band] ?? 0;
+                    $col = $bandColors[$band] ?? '#9ca3af';
+                @endphp
+                <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                     style="text-align:center; {{ $n > 0 && in_array($band, ['critical','high','elevated'], true) ? 'border:1px solid '.$col.';' : '' }}">
+                    <div style="display:flex; gap:0.4rem; align-items:center; justify-content:center;">
+                        <span style="font-size:0.85rem; color:{{ $col }};">{{ $bandIcons[$band] ?? '·' }}</span>
+                        <div style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $col }}; font-weight:600;">{{ str_replace('_', ' ', $band) }}</div>
+                    </div>
+                    <div style="font-size:1.7rem; font-weight:700; color:{{ $n > 0 ? '#e5e7eb' : '#7a7a82' }}; margin-top:0.3rem; line-height:1;">{{ number_format($n) }}</div>
+                    <div style="font-size:0.55rem; color:#6b7280; margin-top:0.25rem;">active hypotheses</div>
                 </div>
             @endforeach
         </div>

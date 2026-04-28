@@ -209,10 +209,32 @@ class CounterIntelDashboard extends Page
                 'spoken_messages', 'confidence',
             ]);
 
+        // One-line verdict — research-distilled "scan in seconds"
+        // affordance. Operator should see the answer to "what
+        // needs my attention?" before reading any tile or row.
+        $critical  = (int) ($bandDist['critical'] ?? 0);
+        $high      = (int) ($bandDist['high']     ?? 0);
+        $elevated  = (int) ($bandDist['elevated'] ?? 0);
+        $details = [];
+        if ($critical > 0) $details[] = "{$critical} critical";
+        if ($high > 0)     $details[] = "{$high} high-confidence";
+        if ($elevated > 0) $details[] = "{$elevated} elevated";
+        $totalRev = $critical + $high + $elevated;
+        if ($totalRev === 0) {
+            $verdict = ['severity' => 'info', 'headline' => 'No high-priority hypotheses', 'details' => []];
+        } elseif ($critical > 0) {
+            $verdict = ['severity' => 'critical', 'headline' => 'Critical-confidence hypotheses warrant review', 'details' => $details];
+        } elseif ($high > 0) {
+            $verdict = ['severity' => 'elevated', 'headline' => 'High-confidence hypotheses warrant review', 'details' => $details];
+        } else {
+            $verdict = ['severity' => 'warning', 'headline' => 'Elevated-band hypotheses present', 'details' => $details];
+        }
+
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $blocId,
             'viewer_bloc_name' => $blocName,
+            'verdict' => $verdict,
             'top_rows' => $topRows,
             'band_dist' => $bandDist,
             'escalations' => $escalations,
