@@ -48,6 +48,55 @@
         };
     @endphp
 
+    {{-- War report — centered, large, glowing call-out. Active conflict
+         (WinterCo vs Goons + Init) is the operator's primary frame
+         right now, so the entry point lives at the top of every
+         dashboard load above the per-character cards. --}}
+    <div style="display:flex; justify-content:center; margin:1.25rem 0 1.5rem 0;">
+        <a href="/portal/war-report" class="aegis-war-link">
+            <span class="aegis-war-link-icon">⚔</span>
+            <span class="aegis-war-link-text">
+                <span class="aegis-war-link-title">War Report</span>
+                <span class="aegis-war-link-sub">WinterCo vs Goonswarm + The Initiative. · since 2026-04-02 · ongoing</span>
+            </span>
+        </a>
+    </div>
+    <style>
+        .aegis-war-link {
+            display:inline-flex; align-items:center; gap:0.85rem;
+            padding:0.85rem 1.6rem;
+            border-radius:10px;
+            text-decoration:none;
+            background:linear-gradient(135deg, rgba(34,197,94,0.10) 0%, rgba(0,0,0,0.55) 50%, rgba(239,68,68,0.14) 100%);
+            border:1px solid rgba(253, 224, 71, 0.35);
+            color:#fde68a;
+            box-shadow: 0 0 24px rgba(253,224,71,0.30), 0 0 48px rgba(253,224,71,0.12);
+            transition: box-shadow 0.25s, transform 0.15s;
+            animation: aegis-war-glow 2.6s ease-in-out infinite;
+        }
+        .aegis-war-link:hover {
+            box-shadow: 0 0 32px rgba(253,224,71,0.55), 0 0 72px rgba(253,224,71,0.25);
+            transform: translateY(-1px);
+        }
+        .aegis-war-link-icon {
+            font-size:1.7rem; line-height:1;
+            text-shadow: 0 0 12px rgba(253,224,71,0.7);
+        }
+        .aegis-war-link-text { display:flex; flex-direction:column; gap:0.1rem; }
+        .aegis-war-link-title {
+            font-size:1.15rem; font-weight:700; letter-spacing:0.06em;
+            text-transform:uppercase; color:#fef3c7;
+        }
+        .aegis-war-link-sub {
+            font-size:0.7rem; color:#cbd5e1; letter-spacing:0.02em;
+        }
+        @keyframes aegis-war-glow {
+            0%   { box-shadow: 0 0 24px rgba(253,224,71,0.30), 0 0 48px rgba(253,224,71,0.12); }
+            50%  { box-shadow: 0 0 32px rgba(253,224,71,0.50), 0 0 64px rgba(253,224,71,0.22); }
+            100% { box-shadow: 0 0 24px rgba(253,224,71,0.30), 0 0 48px rgba(253,224,71,0.12); }
+        }
+    </style>
+
     @if (! empty($data_since))
         <div style="font-size:0.7rem; color:#7a7a82; margin-bottom:0.75rem; font-style:italic;">
             Kill + ISK stats cover killmails since
