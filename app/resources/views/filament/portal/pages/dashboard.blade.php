@@ -57,7 +57,7 @@
             <span class="aegis-war-link-icon">⚔</span>
             <span class="aegis-war-link-text">
                 <span class="aegis-war-link-title">War Report</span>
-                <span class="aegis-war-link-sub">WinterCo vs Goonswarm + The Initiative. · since 2026-04-02 · ongoing</span>
+                <span class="aegis-war-link-sub">WinterCo vs Imperium + The Initiative. · since 2026-04-02 · ongoing</span>
             </span>
         </a>
     </div>

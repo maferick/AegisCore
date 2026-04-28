@@ -33,7 +33,7 @@ class WarReport extends Page
 
     protected static ?int $navigationSort = 5;
 
-    protected static ?string $title = 'War Report — WinterCo vs Goons + Init';
+    protected static ?string $title = 'War Report — WinterCo vs Imperium + Initiative';
 
     protected static ?string $slug = 'war-report';
 
@@ -42,14 +42,12 @@ class WarReport extends Page
     /** Conflict floor — every query is bounded by this. */
     private const string WAR_START = '2026-04-02 00:00:00';
 
-    /** WinterCo bloc id (coalition_blocs.id). */
+    /** Bloc ids (coalition_blocs.id). Side membership is bloc-wide so
+     *  every alliance flying with the bloc shows up in victim tables /
+     *  pilot kills, not just the named lead alliance. */
     private const int WINTERCO_BLOC_ID = 1;
-
-    /** Goonswarm Federation alliance id. */
-    private const int GOONS_ALLIANCE_ID = 1354830081;
-
-    /** The Initiative. alliance id. */
-    private const int INITIATIVE_ALLIANCE_ID = 1900696668;
+    private const int IMPERIUM_BLOC_ID = 3;
+    private const int INITIATIVE_BLOC_ID = 7;
 
     /** Cache TTL — buildViewData scans 26+ days of killmails +
      *  killmail_attackers and takes ~90s uncached, which trips nginx's
@@ -64,7 +62,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v4';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v5';
 
     /**
      * @return array<string, mixed>
@@ -96,14 +94,13 @@ class WarReport extends Page
         $now = now();
         $totalDays = max(1, (int) Carbon::parse($start)->diffInDays($now));
 
-        $wcAlly = DB::table('coalition_entity_labels')
-            ->where('bloc_id', self::WINTERCO_BLOC_ID)
-            ->where('entity_type', 'alliance')
-            ->where('is_active', 1)
-            ->pluck('entity_id')->all();
-        $wcAlly = array_map('intval', $wcAlly);
-
-        $hostile = [self::GOONS_ALLIANCE_ID, self::INITIATIVE_ALLIANCE_ID];
+        // Bloc-wide alliance lists. Side membership is broad — every
+        // partner alliance flying with the bloc registers as victim /
+        // attacker, not just the named lead alliance.
+        $wcAlly = $this->blocAlliances(self::WINTERCO_BLOC_ID);
+        $imperiumAlly = $this->blocAlliances(self::IMPERIUM_BLOC_ID);
+        $initiativeAlly = $this->blocAlliances(self::INITIATIVE_BLOC_ID);
+        $hostile = array_values(array_unique(array_merge($imperiumAlly, $initiativeAlly)));
 
         // Materialise the war-attributable killmail set into a per-
         // connection temp table once, then JOIN against it for every
@@ -116,8 +113,8 @@ class WarReport extends Page
         // the rendered window) — used in the hero banner and tile row.
         $totals = [
             'wc'   => $this->sideLossTotals($start, $wcAlly, $hostile),
-            'goon' => $this->sideLossTotals($start, [self::GOONS_ALLIANCE_ID], $wcAlly),
-            'init' => $this->sideLossTotals($start, [self::INITIATIVE_ALLIANCE_ID], $wcAlly),
+            'goon' => $this->sideLossTotals($start, $imperiumAlly, $wcAlly),
+            'init' => $this->sideLossTotals($start, $initiativeAlly, $wcAlly),
         ];
 
         // Aggregated rollups per side — daily activity, ship-group
@@ -126,8 +123,8 @@ class WarReport extends Page
         // killmail lists are limited to a small "recent" strip.
         $rollups = [
             'wc'   => $this->sideRollups($start, $wcAlly, $hostile),
-            'goon' => $this->sideRollups($start, [self::GOONS_ALLIANCE_ID], $wcAlly),
-            'init' => $this->sideRollups($start, [self::INITIATIVE_ALLIANCE_ID], $wcAlly),
+            'goon' => $this->sideRollups($start, $imperiumAlly, $wcAlly),
+            'init' => $this->sideRollups($start, $initiativeAlly, $wcAlly),
         ];
 
         // Compact "recent" feed per side — last 15 mails so the
@@ -135,8 +132,8 @@ class WarReport extends Page
         // a 5k-row list.
         $recent = [
             'wc'   => $this->recentLosses($wcAlly, $hostile, 15),
-            'goon' => $this->recentLosses([self::GOONS_ALLIANCE_ID], $wcAlly, 15),
-            'init' => $this->recentLosses([self::INITIATIVE_ALLIANCE_ID], $wcAlly, 15),
+            'goon' => $this->recentLosses($imperiumAlly, $wcAlly, 15),
+            'init' => $this->recentLosses($initiativeAlly, $wcAlly, 15),
         ];
 
         $hotspots = $this->systemHotspots($start, $wcAlly, $hostile);
@@ -156,6 +153,21 @@ class WarReport extends Page
             'leaderboards' => $leaderboards,
             'wc_alliance_count' => count($wcAlly),
         ];
+    }
+
+    /**
+     * Active alliance ids for a coalition bloc.
+     *
+     * @return list<int>
+     */
+    private function blocAlliances(int $blocId): array
+    {
+        $rows = DB::table('coalition_entity_labels')
+            ->where('bloc_id', $blocId)
+            ->where('entity_type', 'alliance')
+            ->where('is_active', 1)
+            ->pluck('entity_id')->all();
+        return array_values(array_map('intval', $rows));
     }
 
     /**

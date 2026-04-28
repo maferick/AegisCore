@@ -3,8 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>War Report — WinterCo vs Goons + Init</title>
-    <meta name="description" content="WinterCo vs Goonswarm Federation + The Initiative. — live war report. Conflict floor 2026-04-02.">
+    <title>War Report — WinterCo vs Imperium + Initiative</title>
+    <meta name="description" content="WinterCo vs Imperium + The Initiative. — live war report. Conflict floor 2026-04-02.">
     <meta name="robots" content="index, follow">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%E2%9A%94%3C/text%3E%3C/svg%3E">
     <style>

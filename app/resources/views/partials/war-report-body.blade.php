@@ -13,9 +13,9 @@
             return '#fca5a5';
         };
         $tiles = [
-            'wc'   => ['label' => 'WinterCo losses',          'tint' => '#86efac', 'count' => $totals['wc']['kms'],   'isk' => $totals['wc']['isk']],
-            'goon' => ['label' => 'Goonswarm Federation losses', 'tint' => '#fca5a5', 'count' => $totals['goon']['kms'], 'isk' => $totals['goon']['isk']],
-            'init' => ['label' => 'The Initiative. losses',   'tint' => '#fdba74', 'count' => $totals['init']['kms'], 'isk' => $totals['init']['isk']],
+            'wc'   => ['label' => 'WinterCo losses',  'tint' => '#86efac', 'count' => $totals['wc']['kms'],   'isk' => $totals['wc']['isk']],
+            'goon' => ['label' => 'Imperium losses',  'tint' => '#fca5a5', 'count' => $totals['goon']['kms'], 'isk' => $totals['goon']['isk']],
+            'init' => ['label' => 'Initiative losses','tint' => '#fdba74', 'count' => $totals['init']['kms'], 'isk' => $totals['init']['isk']],
         ];
         $totalKms = $totals['wc']['kms'] + $totals['goon']['kms'] + $totals['init']['kms'];
         $totalIsk = $totals['wc']['isk'] + $totals['goon']['isk'] + $totals['init']['isk'];
@@ -31,7 +31,7 @@
                 <h1 style="margin:0 0 0.4rem 0; font-size:1.5rem; color:#e5e5e7; font-weight:700; letter-spacing:0.02em;">
                     <span style="color:#86efac;">WinterCo</span>
                     <span style="color:#7a7a82; font-weight:400;"> vs </span>
-                    <span style="color:#fca5a5;">Goonswarm Federation</span>
+                    <span style="color:#fca5a5;">Imperium</span>
                     <span style="color:#7a7a82; font-weight:400;"> + </span>
                     <span style="color:#fdba74;">The Initiative.</span>
                 </h1>
@@ -89,7 +89,7 @@
                 @foreach ($lb['most_valuable'] as $i => $m)
                     @php
                         $sideTint = $m->side === 'wc' ? '#86efac' : ($m->side === 'hostile' ? '#fca5a5' : '#9ca3af');
-                        $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? 'Goons/Init' : '—');
+                        $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? 'Imperium/Init' : '—');
                     @endphp
                     <a href="https://zkillboard.com/kill/{{ $m->killmail_id }}/" target="_blank" rel="noopener"
                        style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
@@ -169,7 +169,7 @@
                        style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
                         <div style="display:flex; align-items:baseline; gap:0.5rem;">
                             <span style="font-size:0.95rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $p->total_value) }}</span>
-                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? 'Goons/Init' : '—') }}</span>
+                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? 'Imperium/Init' : '—') }}</span>
                         </div>
                         <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.15rem;">{{ $p->victim_name ?: 'unknown pilot' }} <span style="color:#7a7a82;">· {{ $p->victim_alliance_name ?: '—' }}</span></div>
                         <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">{{ $p->system_name }} · {{ \Carbon\Carbon::parse($p->killed_at)->format('M d H:i') }}</div>
@@ -202,7 +202,7 @@
                         @foreach ($structures as $s)
                             @php
                                 $sideColor = $s->side === 'wc' ? '#86efac' : ($s->side === 'hostile' ? '#fca5a5' : '#9ca3af');
-                                $sideLbl = $s->side === 'wc' ? 'WinterCo' : ($s->side === 'hostile' ? 'Goons/Init' : '—');
+                                $sideLbl = $s->side === 'wc' ? 'WinterCo' : ($s->side === 'hostile' ? 'Imperium/Init' : '—');
                             @endphp
                             <tr style="border-top:1px solid rgba(255,255,255,0.04);">
                                 <td style="padding:0.35rem 0.6rem; color:#cbd5e1; white-space:nowrap;">{{ \Carbon\Carbon::parse($s->killed_at)->format('M d H:i') }}</td>
