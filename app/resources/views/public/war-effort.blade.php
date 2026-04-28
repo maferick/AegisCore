@@ -328,6 +328,66 @@
                 </div>
             @endif
 
+            {{-- Killboard slices: top + latest, kills + losses --}}
+            @php
+                $renderKillRow = function ($r, $isLoss = false) use ($fmtIsk) {
+                    $shipUrl = ! empty($r->victim_ship_type_id) ? '/img/type/'.$r->victim_ship_type_id.'?size=64' : null;
+                    return [
+                        'href' => '/kills/' . $r->killmail_id,
+                        'ship' => $r->victim_ship_type_name ?: '?',
+                        'ship_icon' => $shipUrl,
+                        'system' => $r->system_name,
+                        'isk' => $fmtIsk((float) $r->total_value),
+                        'when' => \Carbon\Carbon::parse($r->killed_at)->format('M d H:i'),
+                        'who' => $isLoss ? ($r->fb_char_name ?: 'unknown FB') : ($r->victim_name ?: 'unknown victim'),
+                        'who_alliance' => $isLoss ? ($r->fb_alliance_name ?: '—') : ($r->victim_alliance_name ?: '—'),
+                        'who_alliance_id' => $isLoss ? ($r->fb_alliance_id ?? null) : ($r->victim_alliance_id ?? null),
+                    ];
+                };
+                $killSections = [
+                    ['title' => '🥊 Your top 10 kills (by ISK)', 'rows' => $stats['top_isk_kills'] ?? [], 'tint' => '#86efac', 'isLoss' => false],
+                    ['title' => '💥 Your top 10 losses (by ISK)', 'rows' => $stats['top_isk_losses'] ?? [], 'tint' => '#fca5a5', 'isLoss' => true],
+                    ['title' => '⚡ Your 10 latest kills', 'rows' => $stats['latest_kills'] ?? [], 'tint' => '#86efac', 'isLoss' => false],
+                    ['title' => '☠ Your 10 latest losses', 'rows' => $stats['latest_losses'] ?? [], 'tint' => '#fca5a5', 'isLoss' => true],
+                ];
+            @endphp
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:0.7rem; margin-bottom:1.5rem;">
+                @foreach ($killSections as $sec)
+                    @if (count($sec['rows']) === 0) @continue @endif
+                    <div style="padding:0.85rem 1rem; border:1px solid {{ $sec['tint'] }}33; border-radius:8px; background:rgba(0,0,0,0.30);">
+                        <h3 style="margin:0 0 0.5rem 0; font-size:0.85rem; color:{{ $sec['tint'] }};">{{ $sec['title'] }}</h3>
+                        @foreach ($sec['rows'] as $i => $r)
+                            @php $row = $renderKillRow($r, $sec['isLoss']); @endphp
+                            <a href="{{ $row['href'] }}" style="display:flex; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04); text-decoration:none; color:inherit; align-items:center;">
+                                <span style="flex:0 0 18px; color:#7a7a82; font-size:0.6rem;">#{{ $i + 1 }}</span>
+                                @if ($row['ship_icon'])
+                                    <img src="{{ $row['ship_icon'] }}" loading="lazy" referrerpolicy="no-referrer" alt="" style="width:24px; height:24px; flex:0 0 24px;">
+                                @endif
+                                <div style="flex:1; min-width:0;">
+                                    <div style="font-size:0.7rem; color:#cbd5e1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        <span style="color:#fde68a; font-weight:700;">{{ $row['isk'] }}</span>
+                                        <span style="color:#7dd3fc;"> · {{ $row['system'] }}</span>
+                                        <span style="color:#cbd5e1;"> · {{ $row['ship'] }}</span>
+                                    </div>
+                                    <div style="font-size:0.55rem; color:#9ca3af; display:flex; align-items:center; gap:0.25rem;">
+                                        @if ($row['who_alliance_id'])
+                                            <img src="/img/alliance/{{ $row['who_alliance_id'] }}?size=32" loading="lazy" referrerpolicy="no-referrer" alt="" style="width:11px; height:11px;">
+                                        @endif
+                                        <span>{{ $row['who'] }}</span>
+                                        <span style="color:#7a7a82;">· {{ $row['who_alliance'] }}</span>
+                                        <span style="color:#7a7a82; margin-left:auto;">{{ $row['when'] }}</span>
+                                    </div>
+                                </div>
+                            </a>
+                        @endforeach
+                    </div>
+                @endforeach
+            </div>
+            <div style="text-align:center; margin:0.5rem 0 1.5rem;">
+                <a href="/war-report/{{ $conflict }}/me/killboard"
+                   style="display:inline-block; padding:0.5rem 1rem; border:1px solid rgba(125,211,252,0.30); border-radius:5px; background:rgba(125,211,252,0.05); color:#7dd3fc; text-decoration:none; font-size:0.7rem; letter-spacing:0.04em;">View full killboard →</a>
+            </div>
+
             {{-- Badges --}}
             <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Your badges</h2>
             <p style="margin:0 0 0.8rem 0; font-size:0.65rem; color:#9ca3af;">Each tier reflects your percentile rank vs every pilot in this conflict. Top stays EVE-flavored, lower tiers go full reddit-meme — wear them with pride. Each card shows what you'd need to reach the next tier.</p>

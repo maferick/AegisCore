@@ -133,6 +133,9 @@ Route::get('/war-report/{conflict}/me', [\App\Http\Controllers\WarEffortControll
 Route::get('/war-report/{conflict}/me-loading', [\App\Http\Controllers\WarEffortController::class, 'loading'])
     ->where('conflict', 'vs-(imperium|initiative)')
     ->name('public.war-effort.loading');
+Route::get('/war-report/{conflict}/me/killboard', [\App\Http\Controllers\WarEffortController::class, 'killboard'])
+    ->where('conflict', 'vs-(imperium|initiative)')
+    ->name('public.war-effort.killboard');
 Route::post('/war-report/{conflict}/logout', [\App\Http\Controllers\WarEffortController::class, 'logout'])
     ->where('conflict', 'vs-(imperium|initiative)')
     ->name('public.war-effort.logout');

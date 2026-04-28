@@ -261,6 +261,12 @@ final class WarEffortController extends Controller
             JOIN battle_theater_killmails btk ON btk.killmail_id = wk.killmail_id
         ");
 
+        // Killboard slices: top by ISK + most recent, both sides.
+        $topIskKills = $this->charKillmailList($charId, 'attacker', 'isk', 10);
+        $topIskLosses = $this->charKillmailList($charId, 'victim', 'isk', 10);
+        $latestKills = $this->charKillmailList($charId, 'attacker', 'recent', 10);
+        $latestLosses = $this->charKillmailList($charId, 'victim', 'recent', 10);
+
         return [
             'kills' => (int) $row->kills,
             'final_blows' => (int) $row->final_blows,
@@ -279,7 +285,102 @@ final class WarEffortController extends Controller
             'top_enemies' => $topEnemies,
             'activity_map' => $activityMap,
             'daily_activity' => $this->dailyActivityVsAlliance($charId, $sinceUtc),
+            'top_isk_kills' => $topIskKills,
+            'top_isk_losses' => $topIskLosses,
+            'latest_kills' => $latestKills,
+            'latest_losses' => $latestLosses,
         ];
+    }
+
+    /**
+     * One killmail list slice for a character — attacker or victim
+     * side, ordered by ISK desc or killed_at desc, limited.
+     *
+     * @param  string  $side  'attacker' | 'victim'
+     * @param  string  $order 'isk' | 'recent'
+     * @return list<object>
+     */
+    private function charKillmailList(int $charId, string $side, string $order, int $limit): array
+    {
+        $orderBy = $order === 'isk' ? 'k.total_value DESC' : 'k.killed_at DESC';
+        if ($side === 'attacker') {
+            return DB::select("
+                SELECT k.killmail_id, k.killed_at, k.total_value,
+                       k.victim_ship_type_id, k.victim_ship_type_name,
+                       k.victim_character_id, k.victim_alliance_id,
+                       ss.name AS system_name,
+                       en.name AS victim_name,
+                       an.name AS victim_alliance_name
+                FROM _war_attackers a
+                JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                JOIN killmails k ON k.killmail_id = a.killmail_id
+                JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+                LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+                LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+                WHERE a.character_id = ?
+                  AND a.attacker_side <> wk.victim_side
+                GROUP BY k.killmail_id, k.killed_at, k.total_value, k.victim_ship_type_id,
+                         k.victim_ship_type_name, k.victim_character_id, k.victim_alliance_id,
+                         ss.name, en.name, an.name
+                ORDER BY $orderBy
+                LIMIT $limit
+            ", [$charId]);
+        }
+        // victim side: own losses
+        return DB::select("
+            SELECT k.killmail_id, k.killed_at, k.total_value,
+                   k.victim_ship_type_id, k.victim_ship_type_name,
+                   ss.name AS system_name,
+                   fb_n.name AS fb_char_name,
+                   fb.alliance_id AS fb_alliance_id,
+                   fb_an.name AS fb_alliance_name
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+            LEFT JOIN killmail_attackers fb ON fb.killmail_id = k.killmail_id AND fb.is_final_blow = 1
+            LEFT JOIN esi_entity_names fb_n ON fb_n.entity_id = fb.character_id AND fb_n.category = 'character'
+            LEFT JOIN esi_entity_names fb_an ON fb_an.entity_id = fb.alliance_id AND fb_an.category = 'alliance'
+            WHERE k.victim_character_id = ?
+            ORDER BY $orderBy
+            LIMIT $limit
+        ", [$charId]);
+    }
+
+    /**
+     * Full killboard view — every kill + loss for the character.
+     * Linked from the /me page's "view full killboard" CTA.
+     */
+    public function killboard(Request $request, string $conflict): View|RedirectResponse
+    {
+        if (! isset(WarReport::CONFLICTS[$conflict])) {
+            return redirect('/war-report');
+        }
+        $charId = (int) $request->session()->get('war_stats.character_id', 0);
+        if ($charId <= 0) {
+            return redirect('/war-report/' . $conflict . '/me');
+        }
+        $page = new WarReport();
+        $start = WarReport::CONFLICTS[$conflict]['start'] ?? '2026-04-02 00:00:00';
+        $wcAlly = $page->blocAlliances(1);
+        $opposingAlly = $conflict === WarReport::CONFLICT_INITIATIVE
+            ? $page->inferInitiativeAlly()
+            : $page->blocAlliances(3);
+        $page->materialiseWarKillSet($start, $wcAlly, $opposingAlly);
+
+        $kills = $this->charKillmailList($charId, 'attacker', 'recent', 1000);
+        $losses = $this->charKillmailList($charId, 'victim', 'recent', 1000);
+
+        return view('public.war-effort-killboard', [
+            'conflict' => $conflict,
+            'opposing_label' => WarReport::CONFLICTS[$conflict]['opposing_label'],
+            'opposing_tint' => WarReport::CONFLICTS[$conflict]['opposing_tint'],
+            'character_id' => $charId,
+            'character_name' => $request->session()->get('war_stats.character_name', ''),
+            'kills' => $kills,
+            'losses' => $losses,
+            'page_class' => $conflict,
+            'display_label' => WarReport::displayLabel($conflict),
+        ]);
     }
 
     /**
