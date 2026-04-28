@@ -378,6 +378,24 @@ Schedule::command('market:derive-daily')
 // mounted docker socket. Invoke from the host via
 // `make battle-process-pending` (cron example in Makefile).
 
+// market_orders daily partition rotation. Pure mariadb DDL, no
+// docker socket needed — replaces the host cron entry that ran
+// `scripts/market-orders-rotate.sh`. Drops partitions older than
+// 72 h, pre-creates partitions out 90 days. Idempotent: re-firing
+// the same day is a no-op. DROP/REORGANIZE PARTITION on InnoDB is
+// metadata-only, total runtime < 5 s.
+//
+// HOST CRON REMOVAL: the matching `30 3 * * * .../market-orders-rotate.sh`
+// line in root's crontab is now redundant. Both running on the same
+// schedule is harmless (idempotent) but adds noise — comment out the
+// host line.
+Schedule::command('market:rotate-partitions')
+    ->dailyAt('03:30')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(15)
+    ->name('market-rotate-partitions');
+
 // Refresh coalition_entity_labels from authoritative coalition
 // wikis (Imperium → bloc 3, Winter Coalition → bloc 1). Wikis
 // rarely change, so daily is plenty; off-cycle runs allowed via
