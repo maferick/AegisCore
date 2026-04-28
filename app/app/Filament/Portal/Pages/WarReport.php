@@ -98,6 +98,7 @@ class WarReport extends Page
         $hotspots = $this->systemHotspots($start, $wcAlly, $hostile);
         $structures = $this->upwellStructureTimeline($start, $wcAlly, $hostile);
         $topImplantPods = $this->topImplantPods($start, $wcAlly, $hostile);
+        $leaderboards = $this->leaderboards($start, $wcAlly, $hostile);
 
         return [
             'war_start' => $start,
@@ -108,7 +109,155 @@ class WarReport extends Page
             'hotspots' => $hotspots,
             'structures' => $structures,
             'top_implant_pods' => $topImplantPods,
+            'leaderboards' => $leaderboards,
             'wc_alliance_count' => count($wcAlly),
+        ];
+    }
+
+    /**
+     * Conflict-wide leaderboards. Each list is computed once in SQL,
+     * groups: most-valuable-single-kill, top pilot/alliance kills,
+     * top pilot/alliance losses (count + ISK).
+     *
+     * Kills = killmails the pilot/alliance was on the attacker side
+     * for, where the victim was on the opposing side.
+     * Losses = killmails where the pilot/alliance was the victim AND
+     * at least one attacker was on the opposing side.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $hostile
+     * @return array<string, list<object>>
+     */
+    private function leaderboards(string $start, array $wcAlly, array $hostile): array
+    {
+        if ($wcAlly === [] || $hostile === []) {
+            return [];
+        }
+        $wcStr = implode(',', $wcAlly);
+        $hStr = implode(',', $hostile);
+
+        // Top 10 most valuable single kills — any war-attributable km.
+        $mostValuable = DB::select("
+            SELECT k.killmail_id, k.killed_at, k.total_value,
+                   k.victim_ship_type_name, k.victim_character_id, k.victim_alliance_id,
+                   ss.name AS system_name,
+                   en.name AS victim_name, an.name AS victim_alliance_name,
+                   CASE
+                       WHEN k.victim_alliance_id IN ($wcStr) THEN 'wc'
+                       WHEN k.victim_alliance_id IN ($hStr) THEN 'hostile'
+                       ELSE 'other'
+                   END AS side
+            FROM killmails k
+            JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= ?
+              AND (
+                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
+                  OR
+                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
+              )
+            ORDER BY k.total_value DESC
+            LIMIT 10
+        ", [$start]);
+
+        // Top pilots by attacker involvements (war-attributable kills).
+        // COUNT(DISTINCT killmail_id) so a pilot appearing on multiple
+        // killmails counts each once. ISK is awarded by FB only to
+        // avoid blue-on-blue inflation.
+        $topPilotsKills = DB::select("
+            SELECT a.character_id AS id,
+                   COALESCE(en.name, CONCAT('#', a.character_id)) AS name,
+                   COALESCE(an.name, '?') AS alliance_name,
+                   COUNT(DISTINCT k.killmail_id) AS kills,
+                   SUM(CASE WHEN a.is_final_blow = 1 THEN k.total_value ELSE 0 END) AS isk_fb
+            FROM killmails k
+            JOIN killmail_attackers a ON a.killmail_id = k.killmail_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = a.character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= ?
+              AND a.character_id IS NOT NULL AND a.character_id > 0
+              AND (
+                  (a.alliance_id IN ($wcStr) AND k.victim_alliance_id IN ($hStr))
+                  OR
+                  (a.alliance_id IN ($hStr) AND k.victim_alliance_id IN ($wcStr))
+              )
+            GROUP BY a.character_id, en.name, an.name
+            ORDER BY kills DESC
+            LIMIT 10
+        ", [$start]);
+
+        // Top pilots by losses (count + isk).
+        $topPilotsLosses = DB::select("
+            SELECT k.victim_character_id AS id,
+                   COALESCE(en.name, CONCAT('#', k.victim_character_id)) AS name,
+                   COALESCE(an.name, '?') AS alliance_name,
+                   COUNT(*) AS losses,
+                   SUM(k.total_value) AS isk_lost
+            FROM killmails k
+            LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= ?
+              AND k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
+              AND (
+                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
+                  OR
+                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
+              )
+            GROUP BY k.victim_character_id, en.name, an.name
+            ORDER BY losses DESC
+            LIMIT 10
+        ", [$start]);
+
+        // Top alliances by total kills (any member on attacker list of
+        // a war-attributable km).
+        $topAllianceKills = DB::select("
+            SELECT a.alliance_id AS id,
+                   COALESCE(an.name, CONCAT('#', a.alliance_id)) AS name,
+                   COUNT(DISTINCT k.killmail_id) AS kills
+            FROM killmails k
+            JOIN killmail_attackers a ON a.killmail_id = k.killmail_id
+            LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= ?
+              AND a.alliance_id IS NOT NULL AND a.alliance_id > 0
+              AND (
+                  (a.alliance_id IN ($wcStr) AND k.victim_alliance_id IN ($hStr))
+                  OR
+                  (a.alliance_id IN ($hStr) AND k.victim_alliance_id IN ($wcStr))
+              )
+            GROUP BY a.alliance_id, an.name
+            ORDER BY kills DESC
+            LIMIT 10
+        ", [$start]);
+
+        // Top alliances by total losses (already partially in
+        // sideRollups, but here without the per-side filter so a
+        // single combined leaderboard lists everyone).
+        $topAllianceLosses = DB::select("
+            SELECT k.victim_alliance_id AS id,
+                   COALESCE(an.name, CONCAT('#', k.victim_alliance_id)) AS name,
+                   COUNT(*) AS losses,
+                   SUM(k.total_value) AS isk_lost
+            FROM killmails k
+            LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= ?
+              AND k.victim_alliance_id IS NOT NULL
+              AND (
+                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
+                  OR
+                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
+              )
+            GROUP BY k.victim_alliance_id, an.name
+            ORDER BY isk_lost DESC
+            LIMIT 10
+        ", [$start]);
+
+        return [
+            'most_valuable' => $mostValuable,
+            'top_pilots_kills' => $topPilotsKills,
+            'top_pilots_losses' => $topPilotsLosses,
+            'top_alliance_kills' => $topAllianceKills,
+            'top_alliance_losses' => $topAllianceLosses,
         ];
     }
 

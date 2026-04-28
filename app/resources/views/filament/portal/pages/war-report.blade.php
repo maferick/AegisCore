@@ -79,6 +79,82 @@
         </div>
     @endif
 
+    {{-- Leaderboards: most-valuable single kills + pilot/alliance rankings --}}
+    @php $lb = $leaderboards ?? []; @endphp
+    @if (! empty($lb['most_valuable']))
+        <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
+            <div style="display:flex; align-items:baseline; gap:0.6rem; margin-bottom:0.6rem; flex-wrap:wrap;">
+                <h2 style="margin:0; font-size:0.85rem; color:#e5e5e7;">Top 10 most valuable single kills</h2>
+                <span style="font-size:0.6rem; color:#7a7a82;">conflict-wide · click row → zKill</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:0.4rem;">
+                @foreach ($lb['most_valuable'] as $i => $m)
+                    @php
+                        $sideTint = $m->side === 'wc' ? '#86efac' : ($m->side === 'hostile' ? '#fca5a5' : '#9ca3af');
+                        $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? 'Goons/Init' : '—');
+                    @endphp
+                    <a href="https://zkillboard.com/kill/{{ $m->killmail_id }}/" target="_blank" rel="noopener"
+                       style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
+                        <div style="display:flex; align-items:baseline; gap:0.4rem; flex-wrap:wrap;">
+                            <span style="font-size:0.55rem; color:#7a7a82; min-width:14px;">#{{ $i + 1 }}</span>
+                            <span style="font-size:1rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $m->total_value) }}</span>
+                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $sideLbl }}</span>
+                        </div>
+                        <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.15rem;">{{ $m->victim_ship_type_name ?: 'Unknown' }} <span style="color:#7a7a82;">· {{ $m->victim_name ?: '—' }}</span></div>
+                        <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">
+                            {{ $m->victim_alliance_name ?: '—' }} · {{ $m->system_name }} · {{ \Carbon\Carbon::parse($m->killed_at)->format('M d H:i') }}
+                        </div>
+                    </a>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
+    {{-- Pilot + alliance leaderboards --}}
+    @if (! empty($lb))
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:0.6rem; margin-bottom:1rem;">
+            @php
+                $boards = [
+                    ['title' => 'Top 10 pilots — kills', 'rows' => $lb['top_pilots_kills'] ?? [], 'metric' => 'kills', 'second' => 'isk_fb', 'second_fmt' => 'isk', 'tint' => '#86efac', 'sub_label' => 'fb isk'],
+                    ['title' => 'Top 10 pilots — losses', 'rows' => $lb['top_pilots_losses'] ?? [], 'metric' => 'losses', 'second' => 'isk_lost', 'second_fmt' => 'isk', 'tint' => '#fca5a5', 'sub_label' => 'isk lost'],
+                    ['title' => 'Top 10 alliances — kills', 'rows' => $lb['top_alliance_kills'] ?? [], 'metric' => 'kills', 'second' => null, 'second_fmt' => null, 'tint' => '#86efac', 'sub_label' => null],
+                    ['title' => 'Top 10 alliances — losses', 'rows' => $lb['top_alliance_losses'] ?? [], 'metric' => 'losses', 'second' => 'isk_lost', 'second_fmt' => 'isk', 'tint' => '#fca5a5', 'sub_label' => 'isk lost'],
+                ];
+            @endphp
+            @foreach ($boards as $b)
+                @if (count($b['rows']) === 0) @continue @endif
+                @php
+                    $maxMetric = 1;
+                    foreach ($b['rows'] as $row) $maxMetric = max($maxMetric, (int) $row->{$b['metric']});
+                @endphp
+                <div style="padding:0.65rem 0.8rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
+                    <h3 style="margin:0 0 0.4rem 0; font-size:0.72rem; color:{{ $b['tint'] }}; letter-spacing:0.04em;">{{ $b['title'] }}</h3>
+                    @foreach ($b['rows'] as $i => $row)
+                        @php $w = max(2, (int) round(((int) $row->{$b['metric']} / $maxMetric) * 100)); @endphp
+                        <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; padding:0.18rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
+                            <span style="flex:0 0 14px; color:#7a7a82; font-size:0.55rem;">{{ $i + 1 }}</span>
+                            <div style="flex:1; min-width:0;">
+                                <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ $row->name }}">{{ $row->name }}</div>
+                                @if (isset($row->alliance_name))
+                                    <div style="color:#7a7a82; font-size:0.55rem;">{{ $row->alliance_name }}</div>
+                                @endif
+                            </div>
+                            <div style="flex:0 0 70px;">
+                                <div style="height:8px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
+                                    <div style="height:100%; width:{{ $w }}%; background:{{ $b['tint'] }}; opacity:0.65;"></div>
+                                </div>
+                            </div>
+                            <div style="flex:0 0 38px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $fmtNum($row->{$b['metric']}) }}</div>
+                            @if ($b['second'] !== null)
+                                <div style="flex:0 0 56px; text-align:right; color:#fde68a; font-size:0.55rem;">{{ $fmtIsk((float) ($row->{$b['second']} ?? 0)) }}</div>
+                            @endif
+                        </div>
+                    @endforeach
+                </div>
+            @endforeach
+        </div>
+    @endif
+
     {{-- Top implant losses (capsule kills with non-zero value) --}}
     @if (count($top_implant_pods ?? []) > 0)
         <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">

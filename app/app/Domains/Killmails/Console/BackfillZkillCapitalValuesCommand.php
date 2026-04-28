@@ -38,7 +38,9 @@ final class BackfillZkillCapitalValuesCommand extends Command
         {--apply : overwrite total_value when zkill is materially higher}
         {--limit=2000 : max kills to process this run}
         {--threshold=1.15 : zkill must exceed our value by this factor before overwrite}
-        {--refresh : refetch even rows that already have zkill_value_fetched_at}';
+        {--refresh : refetch even rows that already have zkill_value_fetched_at}
+        {--include-structures : also backfill upwell structures (Keepstars, etc.)}
+        {--structures-only : only structures, skip cap+ ships}';
 
     protected $description = 'Pull zKill totalValue/fittedValue for capital+ kills and (optionally) overwrite our under-priced hulls.';
 
@@ -52,6 +54,24 @@ final class BackfillZkillCapitalValuesCommand extends Command
         4594 => 'Lancer Dreadnought',
     ];
 
+    /**
+     * Structure groups also under-priced by EveRef:
+     * Keepstars audit-ed at 38-42B in our DB vs 220-230B on zKill (~80%
+     * gap). Fortizars stay close to zKill. Same correction pipeline
+     * applies — opt in with --include-structures.
+     */
+    private const array STRUCTURE_GROUPS = [
+        1657 => 'Citadel',           // Astrahus / Fortizar / Keepstar
+        1404 => 'Engineering Complex', // Raitaru / Azbel / Sotiyo
+        1406 => 'Refinery',          // Athanor / Tatara
+        4744 => 'Moon Drill',
+        1924 => 'Stronghold',
+        1408 => 'Upwell Jump Bridge',
+        2016 => 'Upwell Cyno Jammer',
+        2017 => 'Upwell Cyno Beacon',
+        1876 => 'Engineering Complex (variant)',
+    ];
+
     public function handle(ZkillKillmailValueService $svc): int
     {
         $since = (string) $this->option('since');
@@ -61,7 +81,13 @@ final class BackfillZkillCapitalValuesCommand extends Command
         $refresh = (bool) $this->option('refresh');
 
         $sinceDt = Carbon::parse($since)->toDateTimeString();
-        $groupIds = array_keys(self::CAPITAL_GROUPS);
+        $structuresOnly = (bool) $this->option('structures-only');
+        $includeStructures = $structuresOnly || (bool) $this->option('include-structures');
+        $groupIds = $structuresOnly ? [] : array_keys(self::CAPITAL_GROUPS);
+        if ($includeStructures) {
+            $groupIds = array_merge($groupIds, array_keys(self::STRUCTURE_GROUPS));
+        }
+        $labelMap = self::CAPITAL_GROUPS + self::STRUCTURE_GROUPS;
 
         $q = DB::table('killmails as k')
             ->join('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
@@ -129,7 +155,7 @@ final class BackfillZkillCapitalValuesCommand extends Command
                 $update['hull_value'] = $newHull;
                 $overwrites++;
                 $totalIskCorrected += ($val['total'] - $oldTotal);
-                $cls = self::CAPITAL_GROUPS[(int) $r->group_id] ?? 'cap';
+                $cls = $labelMap[(int) $r->group_id] ?? 'cap';
                 $this->line(sprintf(
                     "  [overwrite] km=%d %s %s : total %.2fB → %.2fB (Δ %.2fB) · hull → %.2fB",
                     $kmId, $cls, $r->victim_ship_type_name,
