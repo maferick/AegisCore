@@ -83,6 +83,40 @@
         .tier-8 { background:linear-gradient(180deg, #d4d4d8 0%, #71717a 100%); }
         .tier-9 { background:linear-gradient(180deg, #a3a3a3 0%, #525252 100%); }
         .tier-10 { background:linear-gradient(180deg, #71717a 0%, #404040 100%); }
+        /* Pure-CSS tabs (radio + labels). All radios are siblings of
+           the nav and the section panes so :checked ~ works. */
+        .aegis-tabs > input[type=radio] { display:none; }
+        .aegis-tab-nav {
+            display:flex; gap:0.3rem;
+            border-bottom:1px solid rgba(255,255,255,0.10);
+            margin-bottom:1.25rem;
+            flex-wrap:wrap;
+        }
+        .aegis-tab-nav label {
+            padding:0.55rem 1rem;
+            cursor:pointer;
+            font-size:0.7rem; letter-spacing:0.06em;
+            text-transform:uppercase;
+            color:#9ca3af;
+            border-bottom:2px solid transparent;
+            margin-bottom:-1px;
+            user-select:none;
+            transition:color 0.12s, border-color 0.12s;
+        }
+        .aegis-tab-nav label:hover { color:#e5e5e7; }
+        .aegis-tabs > section[data-tab] { display:none; }
+        .aegis-tabs > #atab-overview:checked  ~ section[data-tab="atab-overview"]  { display:block; }
+        .aegis-tabs > #atab-combat:checked    ~ section[data-tab="atab-combat"]    { display:block; }
+        .aegis-tabs > #atab-killboard:checked ~ section[data-tab="atab-killboard"] { display:block; }
+        .aegis-tabs > #atab-social:checked    ~ section[data-tab="atab-social"]    { display:block; }
+        .aegis-tabs > #atab-map:checked       ~ section[data-tab="atab-map"]       { display:block; }
+        .aegis-tabs > #atab-overview:checked  ~ .aegis-tab-nav label[for="atab-overview"],
+        .aegis-tabs > #atab-combat:checked    ~ .aegis-tab-nav label[for="atab-combat"],
+        .aegis-tabs > #atab-killboard:checked ~ .aegis-tab-nav label[for="atab-killboard"],
+        .aegis-tabs > #atab-social:checked    ~ .aegis-tab-nav label[for="atab-social"],
+        .aegis-tabs > #atab-map:checked       ~ .aegis-tab-nav label[for="atab-map"] {
+            color:#e5e5e7; border-bottom-color:#fde68a;
+        }
     </style>
     @include('partials.aegis-public-bg')
 </head>
@@ -158,6 +192,26 @@
                 </form>
             </div>
 
+            {{-- Tabbed view — pure CSS via radio+labels (CSP allows
+                 it; no JS needed). Sections are siblings of the
+                 radios so :checked ~ selectors work. --}}
+            <div class="aegis-tabs">
+                <input type="radio" name="atab" id="atab-overview" checked>
+                <input type="radio" name="atab" id="atab-combat">
+                <input type="radio" name="atab" id="atab-killboard">
+                <input type="radio" name="atab" id="atab-social">
+                <input type="radio" name="atab" id="atab-map">
+                <nav class="aegis-tab-nav">
+                    <label for="atab-overview">Overview</label>
+                    <label for="atab-combat">Combat profile</label>
+                    <label for="atab-killboard">Killboard</label>
+                    <label for="atab-social">Social</label>
+                    <label for="atab-map">Map</label>
+                </nav>
+
+                {{-- ───────────── OVERVIEW ───────────── --}}
+                <section data-tab="atab-overview">
+
             {{-- Top stats --}}
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem; margin-bottom:1.25rem;">
                 <div class="stat-card">
@@ -189,6 +243,10 @@
             </div>
 
             {{-- Daily activity vs alliance — two-line SVG. Y-axis
+                 Stays inside Overview pane so personal-trend
+                 insights live with the stats. --}}
+            @php /* still inside Overview pane */ @endphp
+            {{-- DAILY-AVG SECTION START --}}
                  auto-scaled to the larger of the two series. --}}
             @if (! empty($stats['daily_activity']['days']))
                 @php
@@ -238,6 +296,10 @@
                 </div>
             @endif
 
+                </section>
+                {{-- ───────────── MAP ───────────── --}}
+                <section data-tab="atab-map">
+
             {{-- Activity map — same SVG region map the portal uses,
                  scoped to this conflict's window. Ansiblex overlays
                  are operational intel; strip them before rendering on
@@ -255,6 +317,10 @@
                     @include('filament.portal.partials.activity-map', ['c' => $publicMap, 'mapLayout' => 'two-up'])
                 </div>
             @endif
+
+                </section>
+                {{-- ───────────── SOCIAL ───────────── --}}
+                <section data-tab="atab-social">
 
             {{-- Best buddies + arch enemies --}}
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:0.7rem; margin-bottom:1.5rem;">
@@ -303,6 +369,10 @@
                 @endif
             </div>
 
+                </section>
+                {{-- ───────── MAP (continuation: top systems) ───── --}}
+                <section data-tab="atab-map">
+
             {{-- Top systems where you fought --}}
             @if (! empty($stats['top_systems']))
                 <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Where you fought</h2>
@@ -327,6 +397,10 @@
                     @endforeach
                 </div>
             @endif
+
+                </section>
+                {{-- ───────────── KILLBOARD ───────────── --}}
+                <section data-tab="atab-killboard">
 
             {{-- Killboard slices: top + latest, kills + losses --}}
             @php
@@ -388,6 +462,101 @@
                    style="display:inline-block; padding:0.5rem 1rem; border:1px solid rgba(125,211,252,0.30); border-radius:5px; background:rgba(125,211,252,0.05); color:#7dd3fc; text-decoration:none; font-size:0.7rem; letter-spacing:0.04em;">View full killboard →</a>
             </div>
 
+                </section>
+                {{-- ───────────── COMBAT PROFILE ───────────── --}}
+                <section data-tab="atab-combat">
+
+            {{-- Tactical personality + ship mastery + role + battles
+                 cluster here, ahead of the badges proper. --}}
+            @if (! empty($stats['tactical_traits']))
+                <h3 style="margin:0.4rem 0 0.5rem 0; font-size:0.85rem; color:#e5e5e7;">⚔ Tactical personality</h3>
+                <p style="font-size:0.6rem; color:#7a7a82; margin:0 0 0.6rem 0;">Heuristic — derived from killmail patterns, not calibrated.</p>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem; margin-bottom:1.5rem;">
+                    @foreach ($stats['tactical_traits'] as $trait => $t)
+                        @php
+                            $color = $t['value'] >= 80 ? '#fde68a' : ($t['value'] >= 60 ? '#fdba74' : ($t['value'] >= 40 ? '#cbd5e1' : '#9ca3af'));
+                        @endphp
+                        <div style="padding:0.55rem 0.75rem; border:1px solid rgba(255,255,255,0.08); border-radius:6px; background:rgba(0,0,0,0.30);">
+                            <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.06em;">{{ str_replace('_', ' ', $trait) }}</div>
+                            <div style="display:flex; align-items:baseline; gap:0.4rem; margin-top:0.15rem;">
+                                <span style="font-size:1.05rem; font-weight:700; color:{{ $color }};">{{ $t['label'] }}</span>
+                                <span style="font-size:0.6rem; color:#7a7a82;">{{ $t['value'] }}/100</span>
+                            </div>
+                            <div style="height:6px; background:rgba(255,255,255,0.06); border-radius:3px; overflow:hidden; margin-top:0.3rem;">
+                                <div style="height:100%; width:{{ $t['value'] }}%; background:{{ $color }}; opacity:0.65;"></div>
+                            </div>
+                            <div style="font-size:0.55rem; color:#7a7a82; margin-top:0.3rem; font-style:italic;">{{ $t['why'] }}</div>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+
+            @if (! empty($stats['role_breakdown']))
+                <h3 style="margin:0.4rem 0 0.5rem 0; font-size:0.85rem; color:#e5e5e7;">🎯 Combat role detection</h3>
+                <p style="font-size:0.6rem; color:#7a7a82; margin:0 0 0.6rem 0;">Bucket of victim ship classes you killed — what role you most often played on the field.</p>
+                <div style="margin-bottom:1.5rem; padding:0.7rem 0.85rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
+                    @foreach ($stats['role_breakdown'] as $bucket => $data)
+                        @php $w = max(2, (int) round($data['pct'])); @endphp
+                        <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.65rem; padding:0.2rem 0;">
+                            <div style="flex:0 0 160px; color:#cbd5e1; font-weight:600;">{{ $bucket }}</div>
+                            <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
+                                <div style="height:100%; width:{{ $w }}%; background:#86efac; opacity:0.6;"></div>
+                            </div>
+                            <div style="flex:0 0 60px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $data['pct'] }}%</div>
+                            <div style="flex:0 0 56px; text-align:right; color:#7a7a82;">{{ $fmtNum($data['count']) }} km</div>
+                            <div style="flex:0 0 220px; color:#7a7a82; font-size:0.55rem; font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ implode(', ', $data['top_examples']) }}</div>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+
+            @if (! empty($stats['ship_mastery']))
+                <h3 style="margin:0.4rem 0 0.5rem 0; font-size:0.85rem; color:#e5e5e7;">🚀 Ship mastery</h3>
+                <p style="font-size:0.6rem; color:#7a7a82; margin:0 0 0.6rem 0;">Hulls you actually flew during this conflict — kills + losses per ship type.</p>
+                <div style="margin-bottom:1.5rem; padding:0.7rem 0.85rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
+                    <div style="display:grid; grid-template-columns:1.2fr 0.6fr 0.7fr 0.6fr 0.7fr; gap:0.4rem; font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.06em; padding-bottom:0.3rem; border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <div>Hull</div><div style="text-align:right;">Kills</div><div style="text-align:right;">Kill ISK</div><div style="text-align:right;">Losses</div><div style="text-align:right;">Loss ISK</div>
+                    </div>
+                    @foreach ($stats['ship_mastery'] as $sm)
+                        <div style="display:grid; grid-template-columns:1.2fr 0.6fr 0.7fr 0.6fr 0.7fr; gap:0.4rem; font-size:0.7rem; padding:0.25rem 0; border-bottom:1px solid rgba(255,255,255,0.04); align-items:center;">
+                            <div style="display:flex; align-items:center; gap:0.4rem;">
+                                @if ($sm->type_id)
+                                    <img src="/img/type/{{ $sm->type_id }}?size=32" loading="lazy" alt="" style="width:18px; height:18px;">
+                                @endif
+                                <div>
+                                    <div style="color:#e5e5e7; font-weight:600;">{{ $sm->type_name }}</div>
+                                    <div style="font-size:0.5rem; color:#7a7a82;">{{ $sm->group_name }}</div>
+                                </div>
+                            </div>
+                            <div style="text-align:right; color:#86efac; font-weight:700;">{{ $fmtNum((int) $sm->kills) }}</div>
+                            <div style="text-align:right; color:#fde68a;">{{ $fmtIsk((float) $sm->kill_isk) }}</div>
+                            <div style="text-align:right; color:#fca5a5; font-weight:700;">{{ $fmtNum((int) $sm->losses) }}</div>
+                            <div style="text-align:right; color:#fde68a;">{{ $fmtIsk((float) $sm->loss_isk) }}</div>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+
+            @if (! empty($stats['big_battles']))
+                <h3 style="margin:0.4rem 0 0.5rem 0; font-size:0.85rem; color:#e5e5e7;">🏟 You were there for...</h3>
+                <p style="font-size:0.6rem; color:#7a7a82; margin:0 0 0.6rem 0;">Top 5 biggest battles you appeared in (by total killmail count).</p>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:0.5rem; margin-bottom:1.5rem;">
+                    @foreach ($stats['big_battles'] as $b)
+                        <a href="/battles/{{ $b->public_slug ?: $b->id }}" style="display:block; padding:0.6rem 0.8rem; border:1px solid rgba(253,224,71,0.20); border-radius:6px; background:rgba(0,0,0,0.30); text-decoration:none; color:inherit;">
+                            <div style="display:flex; gap:0.4rem; align-items:baseline;">
+                                <span style="font-size:0.85rem; font-weight:700; color:#fde68a;">{{ $b->system_name }}</span>
+                                <span style="font-size:0.6rem; color:#cbd5e1;">{{ $fmtNum((int) ($b->total_kills ?: 0)) }} kms</span>
+                                <span style="font-size:0.6rem; color:#fca5a5;">{{ $fmtIsk((float) ($b->total_isk_lost ?: 0)) }}</span>
+                            </div>
+                            <div style="font-size:0.6rem; color:#9ca3af; margin-top:0.2rem;">
+                                You were on <strong style="color:#86efac;">{{ $fmtNum((int) $b->my_kms) }}</strong> killmails ·
+                                {{ \Carbon\Carbon::parse($b->start_time)->format('M d') }}
+                            </div>
+                        </a>
+                    @endforeach
+                </div>
+            @endif
+
             {{-- Badges --}}
             <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Your badges</h2>
             <p style="margin:0 0 0.8rem 0; font-size:0.65rem; color:#9ca3af;">Each tier reflects your percentile rank vs every pilot in this conflict. Top stays EVE-flavored, lower tiers go full reddit-meme — wear them with pride. Each card shows what you'd need to reach the next tier.</p>
@@ -428,6 +597,8 @@
                     </div>
                 @endforeach
             </div>
+                </section>{{-- close combat tab --}}
+            </div>{{-- close .aegis-tabs --}}
         @endif
     </div>
 </body>

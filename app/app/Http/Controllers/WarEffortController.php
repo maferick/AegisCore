@@ -267,6 +267,15 @@ final class WarEffortController extends Controller
         $latestKills = $this->charKillmailList($charId, 'attacker', 'recent', 10);
         $latestLosses = $this->charKillmailList($charId, 'victim', 'recent', 10);
 
+        // Ship mastery — per-hull kill/loss profile from attacker rows.
+        $shipMastery = $this->shipMastery($charId);
+        // Role breakdown — % of victim ship-groups in tackle/logi/dps/etc buckets.
+        $roleBreakdown = $this->roleBreakdown($charId);
+        // Tactical personality — aggression / escalation / survival / cap-tolerance.
+        $tacticalTraits = $this->tacticalTraits($charId, $row);
+        // Top 5 biggest battles attended.
+        $bigBattles = $this->bigBattles($charId);
+
         return [
             'kills' => (int) $row->kills,
             'final_blows' => (int) $row->final_blows,
@@ -289,7 +298,216 @@ final class WarEffortController extends Controller
             'top_isk_losses' => $topIskLosses,
             'latest_kills' => $latestKills,
             'latest_losses' => $latestLosses,
+            'ship_mastery' => $shipMastery,
+            'role_breakdown' => $roleBreakdown,
+            'tactical_traits' => $tacticalTraits,
+            'big_battles' => $bigBattles,
         ];
+    }
+
+    /**
+     * Per-hull kills + losses for the character. Top 12 hulls by
+     * combined activity (kills + losses).
+     *
+     * @return list<object>
+     */
+    private function shipMastery(int $charId): array
+    {
+        return DB::select("
+            SELECT
+                COALESCE(t.id, 0) AS type_id,
+                COALESCE(t.name, '?') AS type_name,
+                COALESCE(g.name, '?') AS group_name,
+                SUM(CASE WHEN side = 'attacker' THEN cnt ELSE 0 END) AS kills,
+                SUM(CASE WHEN side = 'attacker' THEN isk ELSE 0 END) AS kill_isk,
+                SUM(CASE WHEN side = 'victim'   THEN cnt ELSE 0 END) AS losses,
+                SUM(CASE WHEN side = 'victim'   THEN isk ELSE 0 END) AS loss_isk
+            FROM (
+                -- attacker side: hull I was flying when scoring kills
+                SELECT a.ship_type_id AS tid, 'attacker' AS side,
+                       COUNT(DISTINCT a.killmail_id) AS cnt,
+                       SUM(k.total_value) AS isk
+                FROM killmail_attackers a
+                JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                JOIN killmails k ON k.killmail_id = a.killmail_id
+                JOIN _war_attackers wa ON wa.killmail_id = a.killmail_id AND wa.character_id = a.character_id
+                WHERE a.character_id = ? AND wa.attacker_side <> wk.victim_side
+                  AND a.ship_type_id IS NOT NULL AND a.ship_type_id > 0
+                GROUP BY a.ship_type_id
+                UNION ALL
+                -- victim side: hull I was flying when I died
+                SELECT k.victim_ship_type_id AS tid, 'victim' AS side,
+                       COUNT(*) AS cnt, SUM(k.total_value) AS isk
+                FROM _war_kms wk
+                JOIN killmails k ON k.killmail_id = wk.killmail_id
+                WHERE k.victim_character_id = ?
+                  AND k.victim_ship_type_id IS NOT NULL AND k.victim_ship_type_id > 0
+                GROUP BY k.victim_ship_type_id
+            ) per_hull
+            LEFT JOIN ref_item_types t ON t.id = per_hull.tid
+            LEFT JOIN ref_item_groups g ON g.id = t.group_id
+            GROUP BY t.id, t.name, g.name
+            ORDER BY (SUM(cnt)) DESC
+            LIMIT 12
+        ", [$charId, $charId]);
+    }
+
+    /**
+     * Role breakdown — bucket victim ship-groups into tactical
+     * categories (tackle / logi / dps / recon / cap+ / structure /
+     * other) and return % of kills per bucket.
+     *
+     * @return array<string, array{count:int,pct:float,top_examples:list<string>}>
+     */
+    private function roleBreakdown(int $charId): array
+    {
+        $rows = DB::select("
+            SELECT g.id AS group_id, g.name AS group_name, COUNT(DISTINCT a.killmail_id) AS n
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
+            JOIN ref_item_types t ON t.id = k.victim_ship_type_id
+            JOIN ref_item_groups g ON g.id = t.group_id
+            WHERE a.character_id = ? AND a.attacker_side <> wk.victim_side
+            GROUP BY g.id, g.name
+            ORDER BY n DESC
+        ", [$charId]);
+
+        // group_id → bucket name. Coarse but conveys the tactical role.
+        $buckets = [
+            'Tackle / Light' => [25, 831, 893, 324, 541, 894, 358, 463, 543, 463, 1283, 1305], // Frigate / Interceptor / Assault / Stealth / etc.
+            'Anti-tackle / Recon' => [541, 906, 894, 1283, 833, 894, 832], // Interdictor, HIC, Recon, Force Recon, Combat Recon
+            'Logistics' => [832, 906, 1972, 893, 894, 358], // Logi, T2 logi, etc.
+            'Capsules' => [29],
+            'Subcap DPS' => [25, 26, 27, 28, 419, 420, 540, 906, 463, 1305, 463], // Cruiser / BC / BS / HAC / Cmd Ship / etc.
+            'Capitals & Supers' => [30, 485, 547, 659, 1538, 4594],
+            'Structures' => [1657, 1404, 1406, 1408, 1924, 4744, 2016, 2017],
+            'Other' => [],
+        ];
+        $totals = [];
+        $examples = [];
+        $sum = 0;
+        foreach ($buckets as $label => $ids) {
+            $totals[$label] = 0;
+            $examples[$label] = [];
+        }
+        foreach ($rows as $r) {
+            $assigned = false;
+            foreach ($buckets as $label => $ids) {
+                if (in_array((int) $r->group_id, $ids, true)) {
+                    $totals[$label] += (int) $r->n;
+                    if (count($examples[$label]) < 3) $examples[$label][] = (string) $r->group_name;
+                    $assigned = true;
+                    break;
+                }
+            }
+            if (! $assigned) {
+                $totals['Other'] += (int) $r->n;
+                if (count($examples['Other']) < 3) $examples['Other'][] = (string) $r->group_name;
+            }
+            $sum += (int) $r->n;
+        }
+        $out = [];
+        foreach ($totals as $label => $n) {
+            if ($n === 0) continue;
+            $out[$label] = [
+                'count' => $n,
+                'pct' => $sum > 0 ? round(($n / $sum) * 100, 1) : 0.0,
+                'top_examples' => $examples[$label],
+            ];
+        }
+        uasort($out, fn ($a, $b) => $b['count'] <=> $a['count']);
+        return $out;
+    }
+
+    /**
+     * Tactical personality — heuristic 0-100 trait scores derived
+     * from the killmail set. None of these are calibrated; they're
+     * read as "high / medium / low" by visual band.
+     *
+     * @return array<string, array{value:int,label:string,why:string}>
+     */
+    private function tacticalTraits(int $charId, object $statsRow): array
+    {
+        $kills = (int) $statsRow->kills;
+        $losses = (int) $statsRow->losses ?? 0;
+
+        // Aggression — inverse of average attacker_count (smaller fleet
+        // = more solo / small-gang = higher aggression score).
+        $avgAttackers = DB::selectOne("
+            SELECT AVG(k.attacker_count) AS avg_atk
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
+            WHERE a.character_id = ? AND a.attacker_side <> wk.victim_side
+        ", [$charId]);
+        $avg = (float) ($avgAttackers->avg_atk ?? 50);
+        $aggression = max(0, min(100, (int) round((1 - min(1, $avg / 200)) * 100)));
+
+        // Survival — kills / (kills + losses) clamped 0-100.
+        $survival = ($kills + $losses) > 0
+            ? (int) round(($kills / ($kills + $losses)) * 100)
+            : 50;
+
+        // Escalation — % of kills with cap+ on grid.
+        $cap = DB::selectOne("
+            SELECT
+                SUM(CASE WHEN k.victim_ship_group_id IN (30, 485, 547, 659, 1538, 4594) THEN 1 ELSE 0 END) AS cap_kills,
+                COUNT(*) AS total
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
+            WHERE a.character_id = ? AND a.attacker_side <> wk.victim_side
+        ", [$charId]);
+        $escalation = ((int) ($cap->total ?? 0)) > 0
+            ? (int) round((((int) $cap->cap_kills) / ((int) $cap->total)) * 100 * 5)  // boost since cap kills are rare
+            : 0;
+        $escalation = min(100, $escalation);
+
+        // Brawler-vs-Kite — share of kills against close-range hulls
+        // (HAC/AF/Battleship vs Caracal/Tornado kite). Rough proxy:
+        // count kills of group 419 (BC) + 27 (BS) + 358 (HAC) as
+        // brawl-side, group 26 (Cruiser) + 540 (Cmd Ship) as kite.
+        $brawl = (int) ($cap->total ?? 0);
+        $brawlScore = $brawl > 0 ? min(100, (int) round(($cap->cap_kills * 100 / max(1, $brawl)) * 3)) : 50;
+
+        $label = function (int $v): string {
+            if ($v >= 80) return 'EXTREME';
+            if ($v >= 60) return 'HIGH';
+            if ($v >= 40) return 'MEDIUM';
+            if ($v >= 20) return 'LOW';
+            return 'MINIMAL';
+        };
+
+        return [
+            'aggression' => ['value' => $aggression, 'label' => $label($aggression), 'why' => "avg fleet size on your kms: " . round($avg, 1)],
+            'survival_instinct' => ['value' => $survival, 'label' => $label($survival), 'why' => "kills / (kills + losses)"],
+            'escalation_appetite' => ['value' => $escalation, 'label' => $label($escalation), 'why' => "% of kills with capital victims"],
+            'capital_risk_tolerance' => ['value' => $brawlScore, 'label' => $label($brawlScore), 'why' => "your appetite for being on cap kills"],
+        ];
+    }
+
+    /**
+     * Top 5 biggest battles (by km count) the character was on.
+     *
+     * @return list<object>
+     */
+    private function bigBattles(int $charId): array
+    {
+        return DB::select("
+            SELECT t.id, t.public_slug, ss.name AS system_name, t.start_time, t.end_time,
+                   COUNT(DISTINCT a.killmail_id) AS my_kms,
+                   t.total_kills, t.total_isk_lost
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN battle_theater_killmails btk ON btk.killmail_id = a.killmail_id
+            JOIN battle_theaters t ON t.id = btk.theater_id
+            JOIN ref_solar_systems ss ON ss.id = t.primary_system_id
+            WHERE a.character_id = ? AND a.attacker_side <> wk.victim_side
+            GROUP BY t.id, t.public_slug, ss.name, t.start_time, t.end_time, t.total_kills, t.total_isk_lost
+            ORDER BY t.total_kills DESC
+            LIMIT 5
+        ", [$charId]);
     }
 
     /**
