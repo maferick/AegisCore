@@ -264,6 +264,16 @@ services:
       # Comma-separated EVE character IDs that get Filament /admin access.
       # IDs (not names) — names are mutable, IDs are not. See ADR-0002.
       EVE_SSO_ADMIN_CHARACTER_IDS: "${EVE_SSO_ADMIN_CHARACTER_IDS:-}"
+      # Separate CCP application for the public killsineve.online
+      # war-stats SSO flow. Hard-isolated from the internal app above
+      # — never falls back to the winterco creds.
+      EVE_SSO_PUBLIC_CLIENT_ID: "${EVE_SSO_PUBLIC_CLIENT_ID:-}"
+      EVE_SSO_PUBLIC_CLIENT_SECRET: "${EVE_SSO_PUBLIC_CLIENT_SECRET:-}"
+      EVE_SSO_PUBLIC_CALLBACK_URL: "${EVE_SSO_PUBLIC_CALLBACK_URL:-https://killsineve.online/auth/eve/callback}"
+      # Cookie scope: leading-dot lets the SSO callback set a cookie
+      # readable on both winterco and killsineve subdomains, so the
+      # war-stats flow can land on either host without losing state.
+      SESSION_DOMAIN: "${SESSION_DOMAIN:-}"
       # Donations character (third SSO flow) — single in-game character
       # that receives ISK donations. The poller hits its wallet journal
       # on EVE_DONATIONS_POLL_CRON cadence and records player_donation
