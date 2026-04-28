@@ -9,6 +9,14 @@
 #   BATTLE_MIN_MEMBERS=<n>    min participants; default = small_tier_max+1
 #                             (battle_graph skips pilot_count <= small_tier_max,
 #                             so smaller pairs would loop forever as 'pending')
+#   BATTLE_MAX_MEMBERS=1500   max participants. Pairs above this cap are
+#                             deferred to manual / v2. Empirically the
+#                             centrality + role-inference step on Neo4j hangs
+#                             indefinitely on graphs > ~1M edges (≥1500 pilots),
+#                             starving threads and wedging the pipeline.
+#   BATTLE_STAGE_TIMEOUT=600  per-stage hard timeout (seconds). Any stage
+#                             exceeding this is SIGTERM'd so the script can
+#                             move on to the next pair instead of wedging.
 #   BATTLE_WEIGHT_LABEL=v1_calibrated_seed
 #   BATTLE_ORPHAN_TTL_MIN=30  reap battle_graph containers older than N min
 #
@@ -76,6 +84,8 @@ SMALL_TIER_MAX=$(
 )
 SMALL_TIER_MAX="${SMALL_TIER_MAX:-10}"
 MIN_MEMBERS="${BATTLE_MIN_MEMBERS:-$((SMALL_TIER_MAX + 1))}"
+MAX_MEMBERS="${BATTLE_MAX_MEMBERS:-1500}"
+STAGE_TIMEOUT="${BATTLE_STAGE_TIMEOUT:-600}"
 
 # Pull candidate list: locked battles that need either the full pipeline
 # or just role scoring. We skip unlocked theaters because theater_clustering
@@ -102,6 +112,7 @@ CANDIDATES=$(
        AND i.battle_id IS NULL
      GROUP BY bt.id, p.alliance_id, bt.end_time, f.battle_id
     HAVING COUNT(DISTINCT p.character_id) >= ${MIN_MEMBERS}
+       AND COUNT(DISTINCT p.character_id) <= ${MAX_MEMBERS}
      ORDER BY bt.end_time DESC
      LIMIT ${LIMIT};
   " 2>/dev/null
@@ -123,10 +134,18 @@ while IFS=, read -r bid aid stage_needed <&3; do
 
     if [[ "${stage_needed}" == "full" ]]; then
         for stage in battle_graph battle_partition battle_features; do
-            docker compose --env-file .env -f infra/docker-compose.yml --profile tools \
+            timeout --kill-after=30 "${STAGE_TIMEOUT}" \
+              docker compose --env-file .env -f infra/docker-compose.yml --profile tools \
                 run --rm -T "${stage}" run \
                   --battle-id "${bid}" --alliance-id "${aid}" </dev/null > /tmp/bp-stage.log 2>&1
-            if [[ $? -ne 0 ]]; then
+            rc=$?
+            if [[ $rc -eq 124 ]]; then
+                echo "[$(date -u +%FT%TZ)]     ${stage} TIMEOUT (${STAGE_TIMEOUT}s) for battle=${bid} alliance=${aid} — reaping container"
+                docker ps --filter "name=${stage}-run" -q | xargs -r docker rm -f >/dev/null 2>&1 || true
+                FAIL=1
+                continue 2
+            fi
+            if [[ $rc -ne 0 ]]; then
                 echo "[$(date -u +%FT%TZ)]     ${stage} FAILED for battle=${bid} alliance=${aid}"
                 tail -3 /tmp/bp-stage.log | sed 's/^/        /'
                 FAIL=1
@@ -135,11 +154,17 @@ while IFS=, read -r bid aid stage_needed <&3; do
         done
     fi
 
-    docker compose --env-file .env -f infra/docker-compose.yml --profile tools \
+    timeout --kill-after=30 "${STAGE_TIMEOUT}" \
+      docker compose --env-file .env -f infra/docker-compose.yml --profile tools \
         run --rm -T battle_role_scoring run \
           --battle-id "${bid}" --alliance-id "${aid}" \
           --weight-label "${WEIGHT_LABEL}" </dev/null > /tmp/bp-stage.log 2>&1
-    if [[ $? -ne 0 ]]; then
+    rc=$?
+    if [[ $rc -eq 124 ]]; then
+        echo "[$(date -u +%FT%TZ)]     battle_role_scoring TIMEOUT (${STAGE_TIMEOUT}s) for battle=${bid} alliance=${aid} — reaping"
+        docker ps --filter "name=battle_role_scoring-run" -q | xargs -r docker rm -f >/dev/null 2>&1 || true
+        FAIL=1
+    elif [[ $rc -ne 0 ]]; then
         echo "[$(date -u +%FT%TZ)]     battle_role_scoring FAILED for battle=${bid} alliance=${aid}"
         tail -3 /tmp/bp-stage.log | sed 's/^/        /'
         FAIL=1
