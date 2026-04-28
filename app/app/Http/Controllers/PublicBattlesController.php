@@ -22,9 +22,9 @@ use Illuminate\View\View;
  */
 class PublicBattlesController
 {
-    public function index(): View
+    public function index(?string $conflict = null): View
     {
-        $battles = BattleTheater::query()
+        $query = BattleTheater::query()
             ->with(['primarySystem:id,name,security_status', 'region:id,name'])
             // Listing threshold: require ≥ 2 alliances with ≥ 20 pilots
             // each — filters out solo / small roams that don't read as
@@ -39,12 +39,27 @@ class PublicBattlesController
                                      ) sides'))
                     ->groupBy('theater_id')
                     ->havingRaw('COUNT(*) >= 2');
-            })
-            ->orderByDesc('end_time')
-            ->limit(50)
-            ->get();
+            });
 
-        return view('public.battles.index', ['battles' => $battles]);
+        // Conflict scope — restrict to theaters that had ≥ 1 war-
+        // attributable killmail for the chosen conflict. Theater id
+        // set is cached per-conflict by WarReport::warTheaterIds().
+        $scopedConflict = null;
+        $scopedLabel = null;
+        if ($conflict !== null && isset(\App\Filament\Portal\Pages\WarReport::CONFLICTS[$conflict])) {
+            $theaterIds = \App\Filament\Portal\Pages\WarReport::warTheaterIds($conflict);
+            $query->whereIn('battle_theaters.id', $theaterIds === [] ? [-1] : $theaterIds);
+            $scopedConflict = $conflict;
+            $scopedLabel = \App\Filament\Portal\Pages\WarReport::CONFLICTS[$conflict]['opposing_label'];
+        }
+
+        $battles = $query->orderByDesc('end_time')->limit(100)->get();
+
+        return view('public.battles.index', [
+            'battles' => $battles,
+            'scoped_conflict' => $scopedConflict,
+            'scoped_label' => $scopedLabel,
+        ]);
     }
 
     public function show(string $record, BattleTheaterViewData $builder): View

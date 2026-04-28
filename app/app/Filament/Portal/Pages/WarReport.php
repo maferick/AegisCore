@@ -115,6 +115,7 @@ class WarReport extends Page
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
     public const string VIEW_CACHE_KEY = 'war_report.view_data.v11';
+    public const string THEATER_IDS_CACHE_KEY = 'war_report.theater_ids.v1';
 
     /**
      * @return array<string, mixed>
@@ -225,10 +226,15 @@ class WarReport extends Page
         if ($wcAlly === [] || $opposingAlly === []) {
             return [];
         }
-        // Inner aggregate finds candidate theaters with a war-attributable
-        // km in the last 90 min; outer join pulls full theater + system
-        // metadata. Split-and-join avoids ONLY_FULL_GROUP_BY conflicts
-        // and keeps the aggregate cheap.
+        $wcStr = implode(',', $wcAlly);
+        $opStr = implode(',', $opposingAlly);
+        // Live filter:
+        //   - newest war-attributable km in the last 90 min
+        //   - end_time NULL or also <90 min stale
+        //   - ≥ 5 distinct pilots on EACH conflict bloc in the
+        //     theater participants table — keeps unrelated highsec
+        //     skirmishes (e.g. one Goons pilot in an Osmon Safety. fight)
+        //     from leaking onto the live banner.
         return DB::select("
             SELECT
                 t.id,
@@ -251,6 +257,14 @@ class WarReport extends Page
             ) AS live
             JOIN battle_theaters t ON t.id = live.id
             JOIN ref_solar_systems ss ON ss.id = t.primary_system_id
+            JOIN (
+                SELECT theater_id,
+                       COUNT(DISTINCT CASE WHEN alliance_id IN ($wcStr) THEN character_id END) AS wc_pilots,
+                       COUNT(DISTINCT CASE WHEN alliance_id IN ($opStr) THEN character_id END) AS op_pilots
+                FROM battle_theater_participants
+                GROUP BY theater_id
+                HAVING wc_pilots >= 5 AND op_pilots >= 5
+            ) sides ON sides.theater_id = t.id
             WHERE t.end_time IS NULL OR t.end_time > DATE_SUB(NOW(), INTERVAL 90 MINUTE)
             ORDER BY live.newest_km DESC
             LIMIT 6
@@ -378,6 +392,56 @@ class WarReport extends Page
         $rollups['wc']['ship_groups'] = $wcAligned;
         $rollups['op']['ship_groups'] = $opAligned;
         return $rollups;
+    }
+
+    /**
+     * Cached list of battle_theater ids that have ≥1 war-attributable
+     * killmail for the given conflict. Used by the public /battles
+     * filter so the Battles list scopes to whichever conflict the
+     * visitor came from.
+     *
+     * Computed directly from killmails + killmail_attackers — does NOT
+     * trigger a full buildViewData(), which is too slow (~50s for the
+     * 200-day vs-initiative window) for a list-page request. The query
+     * here is a single grouped scan, much cheaper.
+     *
+     * @return list<int>
+     */
+    public static function warTheaterIds(string $conflict): array
+    {
+        if (! isset(self::CONFLICTS[$conflict])) {
+            return [];
+        }
+        $key = self::THEATER_IDS_CACHE_KEY . '.' . $conflict;
+        return Cache::remember($key, self::VIEW_CACHE_TTL_SECONDS, function () use ($conflict): array {
+            $page = new self();
+            $start = self::CONFLICTS[$conflict]['start'] ?? self::WAR_START;
+            $wcAlly = $page->blocAlliances(self::WINTERCO_BLOC_ID);
+            $opposingAlly = $conflict === self::CONFLICT_INITIATIVE
+                ? $page->inferInitiativeAlly()
+                : $page->blocAlliances(self::IMPERIUM_BLOC_ID);
+            if ($wcAlly === [] || $opposingAlly === []) {
+                return [];
+            }
+            $wcStr = implode(',', $wcAlly);
+            $opStr = implode(',', $opposingAlly);
+            $rows = DB::select("
+                SELECT DISTINCT btk.theater_id
+                FROM battle_theater_killmails btk
+                JOIN killmails k ON k.killmail_id = btk.killmail_id
+                WHERE k.killed_at >= ?
+                  AND (
+                      (k.victim_alliance_id IN ($wcStr) AND EXISTS(
+                          SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($opStr)
+                      ))
+                      OR
+                      (k.victim_alliance_id IN ($opStr) AND EXISTS(
+                          SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)
+                      ))
+                  )
+            ", [$start]);
+            return array_values(array_map(fn ($r) => (int) $r->theater_id, $rows));
+        });
     }
 
     /**

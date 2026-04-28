@@ -1,6 +1,15 @@
-@extends('public.layout')
+@extends('public.layout', [
+    'battles_link' => isset($scoped_conflict) && $scoped_conflict
+        ? '/battles/' . $scoped_conflict
+        : '/battles',
+    'battles_link_label' => isset($scoped_label) && $scoped_label
+        ? 'Battles · ' . $scoped_label
+        : 'Battles',
+])
 
-@section('title', 'Battles')
+@section('title', isset($scoped_label) && $scoped_label
+    ? 'Battles — WinterCo vs ' . $scoped_label
+    : 'Battles')
 
 @section('content')
     @php
@@ -17,12 +26,27 @@
         };
     @endphp
 
-    <h1 style="font-size: 1.4rem; margin: 0 0 1rem; font-family: 'JetBrains Mono', monospace;">
-        Recent battles
+    <h1 style="font-size: 1.4rem; margin: 0 0 0.4rem; font-family: 'JetBrains Mono', monospace;">
+        @if (! empty($scoped_label))
+            Battles · WinterCo vs {{ $scoped_label }}
+        @else
+            Recent battles
+        @endif
         <span style="color: var(--muted); font-weight: 400; font-size: 0.8rem;">
             · {{ $battles->count() }} shown
         </span>
     </h1>
+    <div style="margin-bottom: 1rem; font-size: 0.75rem; color: var(--muted);">
+        @if (! empty($scoped_conflict))
+            Filtered to theaters with war-attributable kills for this conflict.
+            <a href="/war-report/{{ $scoped_conflict }}" style="color: var(--cyan);">← back to {{ $scoped_label }} report</a>
+            · <a href="/battles" style="color: var(--cyan);">show all battles</a>
+        @else
+            All battles. Pick a conflict to filter:
+            <a href="/battles/vs-imperium" style="color: var(--cyan);">vs Imperium</a>
+            · <a href="/battles/vs-initiative" style="color: var(--cyan);">vs Initiative</a>
+        @endif
+    </div>
 
     <table class="public-table">
         <thead>

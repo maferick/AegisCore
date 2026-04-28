@@ -65,12 +65,14 @@
          min OR end_time still NULL. Click to open the battle report
          (system map + side breakdown + live kill feed). --}}
     @php $live = $live_battles ?? []; @endphp
+    @php $olderBattlesUrl = isset($conflict_key) ? '/battles/' . $conflict_key : '/battles'; @endphp
     @if (count($live) > 0)
         <div style="margin-bottom:0.75rem; padding:0.55rem 0.85rem; border:1px solid rgba(134,239,172,0.35); border-radius:8px; background:linear-gradient(90deg, rgba(134,239,172,0.10) 0%, rgba(0,0,0,0.45) 100%);">
             <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.35rem;">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#86efac; box-shadow:0 0 8px #86efac; animation:aegis-live-pulse 1.4s ease-in-out infinite;"></span>
                 <strong style="font-size:0.7rem; color:#86efac; letter-spacing:0.08em; text-transform:uppercase;">Live now</strong>
                 <span style="font-size:0.6rem; color:#7a7a82;">· {{ count($live) }} battle{{ count($live) === 1 ? '' : 's' }} active · click to open report</span>
+                <a href="{{ $olderBattlesUrl }}" style="margin-left:auto; font-size:0.6rem; color:#cbd5e1; text-decoration:none; padding:0.15rem 0.5rem; border:1px solid rgba(255,255,255,0.10); border-radius:4px; background:rgba(255,255,255,0.04);">Older battles →</a>
             </div>
             <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
                 @foreach ($live as $b)
@@ -87,14 +89,19 @@
                 @endforeach
             </div>
         </div>
-        <style>
-            @keyframes aegis-live-pulse {
-                0%   { opacity: 1;   transform: scale(1); }
-                50%  { opacity: 0.4; transform: scale(0.85); }
-                100% { opacity: 1;   transform: scale(1); }
-            }
-        </style>
+    @else
+        <div style="margin-bottom:0.75rem; padding:0.45rem 0.85rem; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(0,0,0,0.20); display:flex; align-items:center; gap:0.6rem;">
+            <span style="font-size:0.6rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">No live battles right now</span>
+            <a href="{{ $olderBattlesUrl }}" style="margin-left:auto; font-size:0.6rem; color:#cbd5e1; text-decoration:none; padding:0.15rem 0.5rem; border:1px solid rgba(255,255,255,0.10); border-radius:4px; background:rgba(255,255,255,0.04);">Older battles →</a>
+        </div>
     @endif
+    <style>
+        @keyframes aegis-live-pulse {
+            0%   { opacity: 1;   transform: scale(1); }
+            50%  { opacity: 0.4; transform: scale(0.85); }
+            100% { opacity: 1;   transform: scale(1); }
+        }
+    </style>
 
     {{-- Hot-kills ticker is rendered at the bottom of the file as a
          viewport-fixed bar; see the .aegis-ticker-fixed block below.

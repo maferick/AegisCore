@@ -108,7 +108,9 @@
         <a class="brand" href="/war-report">⚔ killsineve.online</a>
         <nav>
             <a href="/war-report">War reports</a>
-            <a href="{{ route('public.battles.index') }}">Battles</a>
+            @if (! empty($battles_link))
+                <a href="{{ $battles_link }}">{{ $battles_link_label ?? 'Battles' }}</a>
+            @endif
         </nav>
     </header>
 
