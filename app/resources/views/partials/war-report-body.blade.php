@@ -395,11 +395,3 @@
         @endforeach
     </div>
 
-    <div style="margin-top:1rem; padding:0.6rem 0.8rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.15); font-size:0.6rem; color:#9ca3af; line-height:1.5;">
-        <strong style="color:#cbd5e1;">Reference notes.</strong>
-        War-attributable filter: a killmail counts when the victim's alliance is on one side AND ≥ 1 attacker is on the opposing side — pure killmail aggregation, no scoring.
-        <br>
-        <strong style="color:#cbd5e1;">ISK valuation.</strong> Hull + fitted + cargo + drone + implants are summed from <code style="color:#fde68a;">killmail_items</code> at Jita prices on the kill date; capsule values reflect destroyed implants only. A pod showing <em>clean clone</em> means ESI returned <code>items: []</code> (pilot pod-cloned beforehand) — that's a real zero, not missing data. Roughly 13% of pods in this conflict carried implants; the remaining 87% were clean clones.
-        <br>
-        <strong style="color:#cbd5e1;">Drift caveats.</strong> Recent kills (last few minutes) may show empty values until enrichment completes; structure kills have <code>victim_character_id=NULL</code> and are joined by corp/alliance instead.
-    </div>
