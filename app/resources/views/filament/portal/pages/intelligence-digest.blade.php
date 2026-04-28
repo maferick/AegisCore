@@ -79,20 +79,26 @@
             @endif
 
             {{-- Top metric strip --}}
+            <x-verdict-banner :verdict="$verdict ?? null" />
+
             <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-bottom:0.75rem;">
                 @php
                     $sd = $severity_summary ?: [];
                     $cards = [
-                        ['Incidents', array_sum($sd), '#86efac'],
-                        ['Strategic+', ($sd['strategic'] ?? 0) + ($sd['escalation'] ?? 0) + ($sd['coalition_level'] ?? 0), '#fdba74'],
-                        ['Doctrine events', $metric_summary['doctrine_event_count'] ?? 0, '#c4b5fd'],
-                        ['New corridors', $metric_summary['new_corridor_count'] ?? 0, '#7dd3fc'],
+                        ['Incidents',       array_sum($sd), '#86efac', '⬢'],
+                        ['Strategic+',      ($sd['strategic'] ?? 0) + ($sd['escalation'] ?? 0) + ($sd['coalition_level'] ?? 0), '#fdba74', '◆'],
+                        ['Doctrine events', $metric_summary['doctrine_event_count'] ?? 0, '#c4b5fd', '✦'],
+                        ['New corridors',   $metric_summary['new_corridor_count'] ?? 0, '#7dd3fc', '↻'],
                     ];
                 @endphp
-                @foreach ($cards as [$label, $val, $col])
-                    <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="text-align:center;">
-                        <div style="font-size:1.4rem; color:{{ $col }};">{{ number_format($val) }}</div>
-                        <div style="font-size:0.6rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">{{ $label }}</div>
+                @foreach ($cards as [$label, $val, $col, $icon])
+                    <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                         style="text-align:center; {{ $val > 0 ? 'border:1px solid '.$col.'33;' : '' }}">
+                        <div style="display:flex; gap:0.4rem; align-items:center; justify-content:center;">
+                            <span style="font-size:0.85rem; color:{{ $col }};">{{ $icon }}</span>
+                            <div style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $col }}; font-weight:600;">{{ $label }}</div>
+                        </div>
+                        <div style="font-size:1.7rem; font-weight:700; color:{{ $val > 0 ? '#e5e7eb' : '#7a7a82' }}; margin-top:0.3rem; line-height:1;">{{ number_format($val) }}</div>
                     </div>
                 @endforeach
             </div>

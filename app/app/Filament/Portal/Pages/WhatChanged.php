@@ -104,9 +104,30 @@ class WhatChanged extends Page
             ->where('window_type', $window)
             ->max('generated_at');
 
+        // Verdict — one-line scan-in-seconds answer for the top of
+        // the page. Reuses the shared <x-verdict-banner> component.
+        $bySev = ['critical' => 0, 'elevated' => 0, 'warning' => 0, 'info' => 0];
+        foreach ($cards as $c) {
+            $bySev[$c['severity']] = ($bySev[$c['severity']] ?? 0) + 1;
+        }
+        $details = [];
+        foreach ($bySev as $sev => $n) {
+            if ($n > 0) $details[] = "{$n} {$sev}";
+        }
+        if ($bySev['critical'] > 0) {
+            $verdict = ['severity' => 'critical', 'headline' => 'Critical operational shifts in window', 'details' => $details];
+        } elseif ($bySev['elevated'] > 0) {
+            $verdict = ['severity' => 'elevated', 'headline' => 'Notable shifts in window', 'details' => $details];
+        } elseif ($bySev['warning'] > 0) {
+            $verdict = ['severity' => 'warning', 'headline' => 'Minor shifts in window', 'details' => $details];
+        } else {
+            $verdict = ['severity' => 'info', 'headline' => 'Quiet window — no notable shifts', 'details' => []];
+        }
+
         return [
             'no_bloc' => false,
             'window' => $window,
+            'verdict' => $verdict,
             'cards' => $cards,
             'latest_generated_at' => $latestGen,
             'available_windows' => ['1h', '6h', '24h', '7d'],

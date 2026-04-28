@@ -38,14 +38,24 @@
             </div>
         </div>
 
-        {{-- Heat-tier strip --}}
+        {{-- Heat-tier strip — KPI tiles with category icons. --}}
         @if (count($heat_tiers) > 0)
+            @php
+                $tierIcons = [
+                    'safe' => '○', 'watch' => '◇', 'contested' => '◆',
+                    'hot' => '▲', 'strategic' => '⬤',
+                ];
+            @endphp
             <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:0.4rem; margin-bottom:0.75rem;">
                 @foreach (['safe', 'watch', 'contested', 'hot', 'strategic'] as $tier)
                     @php $col = $tierColors[$tier]; $n = $heat_tiers[$tier] ?? 0; @endphp
-                    <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10" style="text-align:center; border-top:3px solid {{ $col }};">
-                        <div style="font-size:1.3rem; color:{{ $col }};">{{ $n }}</div>
-                        <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">{{ $tier }}</div>
+                    <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                         style="text-align:center; border-top:3px solid {{ $col }}; {{ $n > 0 && in_array($tier, ['hot','strategic'], true) ? 'background:rgba('.($tier==='strategic'?'251,113,133':'251,146,60').',0.04);' : '' }}">
+                        <div style="display:flex; gap:0.35rem; align-items:center; justify-content:center;">
+                            <span style="font-size:0.8rem; color:{{ $col }};">{{ $tierIcons[$tier] ?? '·' }}</span>
+                            <div style="font-size:0.6rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $col }}; font-weight:600;">{{ $tier }}</div>
+                        </div>
+                        <div style="font-size:1.6rem; font-weight:700; color:{{ $n > 0 ? '#e5e7eb' : '#7a7a82' }}; margin-top:0.25rem; line-height:1;">{{ $n }}</div>
                     </div>
                 @endforeach
             </div>

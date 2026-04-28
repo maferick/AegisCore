@@ -13,6 +13,8 @@
                             'stale' => '#fdba74', 'expired' => '#fb7185'];
         @endphp
 
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
         {{-- Window selector --}}
         <div style="display:flex; gap:0.4rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap;">
             <span style="font-size:0.6rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.1em;">window</span>

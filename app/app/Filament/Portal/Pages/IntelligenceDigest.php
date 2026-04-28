@@ -93,6 +93,28 @@ class IntelligenceDigest extends Page
 
         $decode = static fn (?string $j): array => json_decode($j ?? '[]', true) ?: [];
 
+        $sd = $decode($digest->escalation_summary_json) ?: [];
+        $ms = $decode($digest->metric_summary_json) ?: [];
+        $criticalLike = (int) (($sd['strategic'] ?? 0) + ($sd['escalation'] ?? 0) + ($sd['coalition_level'] ?? 0));
+        $totalIncidents = (int) array_sum($sd);
+        $details = [];
+        if ($totalIncidents > 0) $details[] = "{$totalIncidents} incidents in window";
+        if ($criticalLike > 0)   $details[] = "{$criticalLike} at strategic+ severity";
+        $newCorr = (int) ($ms['new_corridor_count'] ?? 0);
+        if ($newCorr > 0) $details[] = "{$newCorr} new corridor" . ($newCorr === 1 ? '' : 's');
+        $docEv  = (int) ($ms['doctrine_event_count'] ?? 0);
+        if ($docEv > 0) $details[] = "{$docEv} doctrine event" . ($docEv === 1 ? '' : 's');
+
+        if ($criticalLike > 0) {
+            $verdict = ['severity' => 'critical', 'headline' => 'Strategic-severity activity in window', 'details' => $details];
+        } elseif ($totalIncidents > 0) {
+            $verdict = ['severity' => 'elevated', 'headline' => 'Operational incidents in window', 'details' => $details];
+        } elseif ($newCorr > 0 || $docEv > 0) {
+            $verdict = ['severity' => 'warning', 'headline' => 'Corridor / doctrine movement observed', 'details' => $details];
+        } else {
+            $verdict = ['severity' => 'info', 'headline' => 'Quiet window — no notable incidents', 'details' => []];
+        }
+
         return [
             'no_bloc' => false,
             'no_digest' => false,
@@ -100,10 +122,11 @@ class IntelligenceDigest extends Page
             'bloc_name' => $blocName,
             'window' => $this->window,
             'date' => $digest->digest_date,
+            'verdict' => $verdict,
             'narrative_md' => $digest->narrative_md,
-            'metric_summary' => $decode($digest->metric_summary_json),
+            'metric_summary' => $ms,
             'top_incident_ids' => $decode($digest->top_incident_ids_json),
-            'severity_summary' => $decode($digest->escalation_summary_json),
+            'severity_summary' => $sd,
             'doctrine_evolution' => $decode($digest->doctrine_evolution_json),
             'coalition_movement' => $decode($digest->coalition_movement_json),
             'new_corridors' => $decode($digest->new_corridors_json),
