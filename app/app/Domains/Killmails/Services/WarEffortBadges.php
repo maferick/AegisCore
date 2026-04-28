@@ -144,7 +144,7 @@ final class WarEffortBadges
             7  => ['name' => 'Warm Body Confirmed',    'sub' => 'top 25% — you do indeed undock'],
             8  => ['name' => 'Press F to Anchor',      'sub' => 'top 50% — the bare minimum, respected'],
             9  => ['name' => 'It Is Wednesday My Dudes', 'sub' => 'top 75% — you exist and that counts'],
-            10 => ['name' => 'I Shidded And Farded',   'sub' => "everyone gets a participation pin"],
+            10 => ['name' => 'Logged In And Counted', 'sub' => "everyone gets a participation pin"],
         ],
         'final_blows' => [
             1  => ['name' => 'The Killing Blow',        'sub' => 'top 0.1% — FB legend'],

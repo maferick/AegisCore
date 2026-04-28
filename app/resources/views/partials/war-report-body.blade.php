@@ -175,11 +175,16 @@
         $metricLabels = [
             'kills' => 'Kills you were on',
             'final_blows' => 'Final blows landed',
-            'isk_destroyed' => 'ISK destroyed (FB)',
+            'isk_destroyed' => 'ISK destroyed (final blow)',
             'battles_attended' => 'Battles attended',
             'small_gang_kills' => 'Small-gang kills',
         ];
         $rankColor = [1 => '#fde68a', 2 => '#cbd5e1', 3 => '#fdba74'];
+        $rankBg = [
+            1 => 'linear-gradient(135deg, rgba(253,224,71,0.18), rgba(0,0,0,0.40))',
+            2 => 'linear-gradient(135deg, rgba(203,213,225,0.14), rgba(0,0,0,0.40))',
+            3 => 'linear-gradient(135deg, rgba(253,186,116,0.16), rgba(0,0,0,0.40))',
+        ];
     @endphp
     @if (! empty($podiums ?? []))
         <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
@@ -195,8 +200,9 @@
                         @foreach ($rows as $i => $r)
                             @php
                                 $rank = $i + 1;
-                                $title = $podiumTitles[$rank] ?? '';
+                                $title = $podiumTitles[$metric][$rank] ?? '';
                                 $color = $rankColor[$rank] ?? '#9ca3af';
+                                $bg = $rankBg[$rank] ?? 'rgba(0,0,0,0.20)';
                                 $valFmt = $metric === 'isk_destroyed' ? $fmtIsk((float) $r->metric) : $fmtNum((int) $r->metric);
                             @endphp
                             <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
@@ -207,8 +213,8 @@
                                      class="aegis-icon aegis-icon-char-md" style="flex:0 0 28px;">
                                 <div style="flex:1; min-width:0;">
                                     <div style="font-size:0.7rem; color:#e5e5e7; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $r->name ?: '#'.$r->id }}</div>
-                                    <div style="font-size:0.55rem; color:{{ $color }}; font-style:italic;">{{ $title }}</div>
-                                    <div style="font-size:0.55rem; color:#7a7a82; display:flex; align-items:center; gap:0.2rem;">
+                                    <div style="display:inline-block; margin-top:0.15rem; font-size:0.55rem; font-weight:700; color:{{ $color }}; padding:1px 6px; border-radius:99px; background:{{ $bg }}; border:1px solid {{ $color }}55; letter-spacing:0.02em; white-space:nowrap;">{{ $title }}</div>
+                                    <div style="font-size:0.55rem; color:#7a7a82; display:flex; align-items:center; gap:0.2rem; margin-top:0.15rem;">
                                         @if ($r->alliance_id)
                                             <img src="/img/alliance/{{ $r->alliance_id }}?size=32" loading="lazy" referrerpolicy="no-referrer" alt="" style="width:10px; height:10px;">
                                         @endif

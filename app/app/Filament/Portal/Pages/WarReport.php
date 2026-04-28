@@ -116,11 +116,34 @@ class WarReport extends Page
      *  Bump → operator runs `php artisan cache:clear` once. */
     public const string VIEW_CACHE_KEY = 'war_report.view_data.v13';
 
-    /** Reddit-meme banners for the top-3 podium per badge metric. */
+    /** Per-metric rank-1/2/3 podium titles. Reddit-flavored,
+     *  curse-word-free, distinct per leaderboard. */
     public const array PODIUM_TITLES = [
-        1 => 'King Shit of Fuck Mountain',
-        2 => 'Almost Touched Greatness',
-        3 => 'Bronze Tier Bestie',
+        'kills' => [
+            1 => '🥇 Tip of the Spear',
+            2 => '🥈 On Every Mailing List',
+            3 => '🥉 Persistent Threat',
+        ],
+        'final_blows' => [
+            1 => '🥇 Last-Word Specialist',
+            2 => '🥈 Trigger Discipline +',
+            3 => '🥉 Cleanup Crew Captain',
+        ],
+        'isk_destroyed' => [
+            1 => '🥇 Wallet Apocalypse',
+            2 => '🥈 Inflation Fixer',
+            3 => '🥉 Mom\'s Wallet Was On Grid',
+        ],
+        'battles_attended' => [
+            1 => '🥇 Ping Always Answered',
+            2 => '🥈 Iron Lungs On Comms',
+            3 => '🥉 Will X-Up For Snacks',
+        ],
+        'small_gang_kills' => [
+            1 => '🥇 Tuskers-Tier',
+            2 => '🥈 Low-Volume, High-Yield',
+            3 => '🥉 Always Solo, Never Alone',
+        ],
     ];
     public const string THEATER_IDS_CACHE_KEY = 'war_report.theater_ids.v1';
 
