@@ -526,6 +526,13 @@ class WarReport extends Page
             return [];
         }
         unset($hostileAlliances);
+        // enriched_at IS NOT NULL filters out the last few minutes of
+        // in-flight ingest where ship name + ISK haven't resolved yet
+        // (otherwise the recent-feed rows render as "— · 0" placeholders
+        // and look broken). 4× the requested limit on the inner SELECT
+        // gives us headroom to skip unenriched rows; outer LIMIT clamps
+        // to the requested count.
+        $innerLimit = $limit * 4;
         return DB::select("
             SELECT
                 k.killmail_id, k.killed_at, k.total_value, k.victim_ship_type_id,
@@ -544,6 +551,9 @@ class WarReport extends Page
             LEFT JOIN esi_entity_names fb_n   ON fb_n.entity_id = fb.character_id AND fb_n.category = 'character'
             LEFT JOIN esi_entity_names fb_an  ON fb_an.entity_id = fb.alliance_id AND fb_an.category = 'alliance'
             WHERE k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
+              AND k.enriched_at IS NOT NULL
+              AND k.victim_ship_type_name IS NOT NULL
+              AND k.victim_ship_type_name <> ''
             ORDER BY k.killed_at DESC
             LIMIT $limit
         ");

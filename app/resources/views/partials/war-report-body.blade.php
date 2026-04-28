@@ -354,7 +354,7 @@
 
                 {{-- Recent feed (last 15) --}}
                 @if (count($recentRows) > 0)
-                    <details style="margin-top:0.4rem;">
+                    <details open style="margin-top:0.4rem;">
                         <summary style="cursor:pointer; padding:0.3rem 0.4rem; background:rgba(255,255,255,0.03); border-radius:4px; font-size:0.6rem; color:#cbd5e1; list-style:none; text-transform:uppercase; letter-spacing:0.06em;">Recent {{ count($recentRows) }} losses</summary>
                         <div style="padding-top:0.3rem;">
                             @foreach ($recentRows as $rr)
