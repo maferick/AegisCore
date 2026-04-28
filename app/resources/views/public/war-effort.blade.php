@@ -185,8 +185,8 @@
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:0.7rem; margin-bottom:1.5rem;">
                 @if (! empty($stats['top_buddies']))
                     <div style="padding:0.85rem 1rem; border:1px solid rgba(134,239,172,0.20); border-radius:8px; background:rgba(0,0,0,0.30);">
-                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#86efac;">Your best buddies</h3>
-                        <p style="margin:0 0 0.6rem 0; font-size:0.6rem; color:#7a7a82;">Top 10 pilots most often on the same killmail with you.</p>
+                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#86efac;">{{ $buddy_title }}</h3>
+                        <p style="margin:0 0 0.6rem 0; font-size:0.6rem; color:#7a7a82;">Top 10 pilots most often on the same killmail with you. Title rerolls every visit.</p>
                         @foreach ($stats['top_buddies'] as $i => $b)
                             <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.7rem;">
                                 <span style="flex:0 0 18px; color:#7a7a82; font-size:0.6rem;">#{{ $i + 1 }}</span>

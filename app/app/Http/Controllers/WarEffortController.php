@@ -61,6 +61,7 @@ final class WarEffortController extends Controller
             'scopes_granted' => $request->session()->get('war_stats.scopes_granted', []),
             'stats' => $stats,
             'badges' => $badges,
+            'buddy_title' => self::buddyTitle(),
             'enemy_title' => self::enemyTitle(),
             'page_class' => $conflict,
             'display_label' => WarReport::displayLabel($conflict),
@@ -264,6 +265,25 @@ final class WarEffortController extends Controller
      *
      * @return list<string>
      */
+    /** @var list<string> */
+    public const array BUDDY_TITLES = [
+        'Your Crusty Crew',
+        'Ride or Dies',
+        'The Bois',
+        'Discord Voice Chat Survivors',
+        'Fleet-Anchor Best Friends',
+        'My Wingmen',
+        'The Brain Trust',
+        'Frens Forever',
+        'On The Same Mailing List',
+        'They Lend You Ammo',
+    ];
+
+    public static function buddyTitle(): string
+    {
+        return self::BUDDY_TITLES[array_rand(self::BUDDY_TITLES)];
+    }
+
     public const array ENEMY_TITLES = [
         'Arch Nemeses Hall of Fame',
         'They Have Personally Wronged You',
