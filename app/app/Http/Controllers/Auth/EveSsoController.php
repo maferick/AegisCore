@@ -278,7 +278,14 @@ class EveSsoController extends Controller
                 ->with('error', 'EVE SSO is not configured.');
         }
 
-        $scopes = 'publicData esi-killmails.read_killmails.v1';
+        // CCP rejected esi-killmails.read_killmails.v1 immediately
+        // after the new public app was created — usually a propagation
+        // lag on their side after enabling a scope on the application
+        // settings page. Requesting publicData alone for now; the
+        // killmail data the war-stats page renders comes from our
+        // own DB anyway, the killmails scope was a future-feature
+        // courtesy ask. Re-add once CCP accepts it.
+        $scopes = 'publicData';
         $redirect = $sso->authorize($scopes);
 
         $request->session()->put(self::SESSION_STATE, $redirect->state);
