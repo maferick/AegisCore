@@ -37,19 +37,11 @@ class CounterIntelDashboard extends Page
 
     protected string $view = 'filament.portal.pages.counter-intel-dashboard';
 
-    /**
-     * Hidden from the sidebar — the Counter-Intel Command surface
-     * (/portal/counter-intel/command) is the single canonical
-     * page. This Overview survives at /portal/counter-intel for
-     * deep links + the "context summary" panels (friendly pilots
-     * · red-contact, recent escalations, signal distribution)
-     * that the Command page doesn't duplicate. Reachable via the
-     * link in the Command page's header copy.
-     */
-    public static function shouldRegisterNavigation(): bool
-    {
-        return false;
-    }
+    // Re-promoted to sidebar primary 2026-04-28 — operator
+    // prefers the Overview's compact KPI tiles + tabular review
+    // queue + side panels over the Command page's long expandable
+    // card stream. Command stays at /portal/counter-intel/command
+    // as the deep-dive surface; Overview links to it.
 
     /** @return array<string, mixed> */
     public function getViewData(): array

@@ -33,11 +33,11 @@
             </div>
             <p style="font-size:0.78rem; color:#9ca3af; margin-top:0.5rem; margin-bottom:0.5rem;">
                 Bloc-scoped review queue, recent escalations, and signal distribution.
-                All ranking now matches the
-                <a href="/portal/counter-intel/command" style="color:#a5b4fc; font-weight:600;">Counter-Intel Command Surface →</a>
-                (single source of truth, hypothesis fusion). Per-character evidence on the
-                <a href="/portal/characters/lookup" style="color:#c7d2fe;">character lookup</a>;
-                this page never proposes punitive action.
+                Same fusion ranking as the
+                <a href="/portal/counter-intel/command" style="color:#a5b4fc;">Command deep-dive →</a>
+                (per-card evidence + caveats + why-strengthened); per-character drill-in via
+                <a href="/portal/characters/lookup" style="color:#c7d2fe;">character lookup</a>.
+                This page never proposes punitive action.
             </p>
         </div>
 

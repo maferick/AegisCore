@@ -31,11 +31,14 @@ class CounterIntelCommand extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-shield-exclamation';
 
-    protected static ?string $navigationLabel = 'CI Command';
+    protected static ?string $navigationLabel = 'CI Command (deep-dive)';
 
     protected static string|UnitEnum|null $navigationGroup = 'Daily ops';
 
-    protected static ?int $navigationSort = 3;
+    // Sort 5 — sits below Counter-Intel Overview (sort 4) so the
+    // operator's first click in Daily-ops lands on the compact
+    // Overview, not the long expandable Command stream.
+    protected static ?int $navigationSort = 5;
 
     protected static ?string $title = 'Counter-Intel Command';
 
