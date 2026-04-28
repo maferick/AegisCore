@@ -66,6 +66,19 @@ final class WarEffortController extends Controller
         ]);
     }
 
+    public function loading(Request $request, string $conflict): View|RedirectResponse
+    {
+        if (! isset(WarReport::CONFLICTS[$conflict])) {
+            return redirect('/war-report');
+        }
+        return view('public.war-effort-loading', [
+            'conflict' => $conflict,
+            'opposing_label' => WarReport::CONFLICTS[$conflict]['opposing_label'],
+            'opposing_tint' => WarReport::CONFLICTS[$conflict]['opposing_tint'],
+            'page_class' => $conflict,
+        ]);
+    }
+
     public function logout(Request $request, string $conflict): RedirectResponse
     {
         $request->session()->forget([
@@ -91,19 +104,47 @@ final class WarEffortController extends Controller
         $page = new WarReport();
         $page->buildViewData($conflict);
 
+        // Per-character involvement set: the distinct killmails the
+        // character was an attacker on, with the total_value attached
+        // once. SUM/COUNT on this gives the involvement metrics
+        // without double-counting per killmail.
         $row = DB::selectOne("
             SELECT
-                COUNT(DISTINCT a.killmail_id) AS kills,
-                SUM(CASE WHEN a.is_final_blow = 1 THEN 1 ELSE 0 END) AS final_blows,
-                COALESCE(SUM(CASE WHEN a.is_final_blow = 1 THEN k.total_value ELSE 0 END), 0) AS isk_destroyed,
-                COUNT(DISTINCT btk.theater_id) AS battles_attended,
-                COUNT(DISTINCT CASE WHEN k.attacker_count <= 5 THEN a.killmail_id END) AS small_gang_kills
+                COUNT(*) AS kills,
+                SUM(any_fb) AS final_blows,
+                SUM(CASE WHEN any_fb = 1 THEN total_value ELSE 0 END) AS isk_destroyed,
+                SUM(total_value) AS isk_involved,
+                COUNT(DISTINCT theater_id) AS battles_attended,
+                SUM(CASE WHEN attacker_count <= 5 THEN 1 ELSE 0 END) AS small_gang_kills
+            FROM (
+                SELECT a.killmail_id,
+                       MAX(a.is_final_blow) AS any_fb,
+                       k.total_value,
+                       k.attacker_count,
+                       MAX(btk.theater_id) AS theater_id
+                FROM _war_attackers a
+                JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                JOIN killmails k ON k.killmail_id = a.killmail_id
+                LEFT JOIN battle_theater_killmails btk ON btk.killmail_id = a.killmail_id
+                WHERE a.character_id = ?
+                  AND a.attacker_side <> wk.victim_side
+                GROUP BY a.killmail_id, k.total_value, k.attacker_count
+            ) per_km
+        ", [$charId]);
+
+        // Top systems where the character fought (attacker side).
+        $topSystems = DB::select("
+            SELECT ss.id, ss.name, ss.security_status,
+                   COUNT(DISTINCT a.killmail_id) AS kills
             FROM _war_attackers a
             JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
             JOIN killmails k ON k.killmail_id = a.killmail_id
-            LEFT JOIN battle_theater_killmails btk ON btk.killmail_id = a.killmail_id
+            JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             WHERE a.character_id = ?
               AND a.attacker_side <> wk.victim_side
+            GROUP BY ss.id, ss.name, ss.security_status
+            ORDER BY kills DESC
+            LIMIT 10
         ", [$charId]);
 
         $loss = DB::selectOne("
@@ -125,6 +166,7 @@ final class WarEffortController extends Controller
             'kills' => (int) $row->kills,
             'final_blows' => (int) $row->final_blows,
             'isk_destroyed' => (float) $row->isk_destroyed,
+            'isk_involved' => (float) $row->isk_involved,
             'battles_attended' => (int) $row->battles_attended,
             'small_gang_kills' => (int) $row->small_gang_kills,
             'losses' => (int) $loss->losses,
@@ -133,6 +175,7 @@ final class WarEffortController extends Controller
             'battle_attendance_pct' => $totalBattles->n > 0
                 ? round(((int) $row->battles_attended / (int) $totalBattles->n) * 100, 1)
                 : 0.0,
+            'top_systems' => $topSystems,
         ];
     }
 
@@ -155,6 +198,29 @@ final class WarEffortController extends Controller
             $percentile = $this->percentileRankFromBetter($distribution, $value);
             $tier = WarEffortBadges::tierForPercentile($percentile);
             $ladder = WarEffortBadges::ladder($metric);
+
+            // Compute the value needed to reach the next (better) tier.
+            // Tier 1 has no next; tiers 2-10 → look up the cutoff at
+            // tier-1's percentile and find the value at that rank in
+            // the distribution.
+            $nextTier = max(1, $tier - 1);
+            $nextDelta = null;
+            $nextThreshold = null;
+            $nextName = null;
+            if ($tier > 1) {
+                $nextCutoff = WarEffortBadges::TIER_PERCENTILES[$nextTier - 1] ?? null;
+                if ($nextCutoff !== null && count($distribution) > 0) {
+                    // Distribution is ascending; "top X%" = highest
+                    // X% of values. Find the threshold value at
+                    // (1 - cutoff/100) * N.
+                    $n = count($distribution);
+                    $idx = max(0, min($n - 1, (int) floor($n * (1 - $nextCutoff / 100))));
+                    $nextThreshold = $distribution[$idx];
+                    $nextDelta = max(0.0, $nextThreshold - $value);
+                    $nextName = $ladder[$nextTier]['name'] ?? null;
+                }
+            }
+
             $out[$metric] = [
                 'metric' => $metric,
                 'value' => $value,
@@ -162,6 +228,10 @@ final class WarEffortController extends Controller
                 'tier' => $tier,
                 'name' => $ladder[$tier]['name'],
                 'sub' => $ladder[$tier]['sub'],
+                'next_tier' => $tier > 1 ? $nextTier : null,
+                'next_name' => $nextName,
+                'next_threshold' => $nextThreshold,
+                'next_delta' => $nextDelta,
             ];
         }
         return $out;

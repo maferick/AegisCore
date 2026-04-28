@@ -145,16 +145,14 @@
             {{-- Top stats --}}
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem; margin-bottom:1.25rem;">
                 <div class="stat-card">
-                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Kills (involved)</div>
+                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Kills you were on</div>
                     <div style="font-size:1.4rem; color:#86efac; font-weight:700;">{{ $fmtNum($totalKills) }}</div>
+                    <div style="font-size:0.6rem; color:#9ca3af;">total ISK on grid: <strong style="color:#fde68a;">{{ $fmtIsk((float) ($stats['isk_involved'] ?? 0)) }}</strong></div>
                 </div>
                 <div class="stat-card">
-                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Final blows</div>
+                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Final blows landed</div>
                     <div style="font-size:1.4rem; color:#fde68a; font-weight:700;">{{ $fmtNum((int) $stats['final_blows']) }}</div>
-                </div>
-                <div class="stat-card">
-                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">ISK destroyed (FB)</div>
-                    <div style="font-size:1.4rem; color:#fde68a; font-weight:700;">{{ $fmtIsk((float) $stats['isk_destroyed']) }}</div>
+                    <div style="font-size:0.6rem; color:#9ca3af;">credited ISK: <strong style="color:#fde68a;">{{ $fmtIsk((float) $stats['isk_destroyed']) }}</strong></div>
                 </div>
                 <div class="stat-card">
                     <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Losses</div>
@@ -174,11 +172,40 @@
                 </div>
             </div>
 
+            {{-- Top systems where you fought --}}
+            @if (! empty($stats['top_systems']))
+                <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Where you fought</h2>
+                <p style="margin:0 0 0.8rem 0; font-size:0.65rem; color:#9ca3af;">Top systems by killmails you were on, attacker-side.</p>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.4rem; margin-bottom:1.5rem;">
+                    @php
+                        $sysSevColor = function (?float $sec): string {
+                            if ($sec === null) return '#9ca3af';
+                            if ($sec >= 0.5) return '#86efac';
+                            if ($sec >= 0.0) return '#fdba74';
+                            return '#fca5a5';
+                        };
+                    @endphp
+                    @foreach ($stats['top_systems'] as $s)
+                        <div style="padding:0.55rem 0.75rem; border:1px solid rgba(255,255,255,0.06); border-radius:6px; background:rgba(0,0,0,0.20);">
+                            <div style="font-size:0.85rem; font-weight:700; color:{{ $sysSevColor($s->security_status) }};">{{ $s->name }}</div>
+                            <div style="font-size:0.6rem; color:#9ca3af; margin-top:0.15rem;">
+                                <strong style="color:#e5e5e7;">{{ $fmtNum((int) $s->kills) }}</strong> kills
+                                <span style="color:#7a7a82;">· sec {{ number_format((float) $s->security_status, 1) }}</span>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+
             {{-- Badges --}}
             <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Your badges</h2>
-            <p style="margin:0 0 0.8rem 0; font-size:0.65rem; color:#9ca3af;">Each tier reflects your percentile rank vs every pilot in this conflict. Top stays EVE-flavored, lower tiers go full reddit-meme — wear them with pride.</p>
+            <p style="margin:0 0 0.8rem 0; font-size:0.65rem; color:#9ca3af;">Each tier reflects your percentile rank vs every pilot in this conflict. Top stays EVE-flavored, lower tiers go full reddit-meme — wear them with pride. Each card shows what you'd need to reach the next tier.</p>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:0.6rem;">
                 @foreach ($badges as $b)
+                    @php
+                        $isIsk = $b['metric'] === 'isk_destroyed';
+                        $valueFmt = $isIsk ? $fmtIsk((float) $b['value']) : $fmtNum((int) $b['value']);
+                    @endphp
                     <div class="badge-card">
                         <div class="badge-tier-strip tier-{{ $b['tier'] }}"></div>
                         <div style="margin-left:0.4rem;">
@@ -188,9 +215,24 @@
                             <div style="font-size:1rem; color:#e5e5e7; font-weight:700; margin-top:0.15rem;">{{ $b['name'] }}</div>
                             <div style="font-size:0.65rem; color:#9ca3af; margin-top:0.2rem;">{{ $b['sub'] }}</div>
                             <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.35rem;">
-                                value <strong style="color:#e5e5e7;">{{ in_array($b['metric'], ['isk_destroyed'], true) ? $fmtIsk((float) $b['value']) : $fmtNum((int) $b['value']) }}</strong>
-                                · percentile <strong style="color:#e5e5e7;">{{ $b['percentile'] }}%</strong> (lower = better)
+                                value <strong style="color:#e5e5e7;">{{ $valueFmt }}</strong>
+                                · percentile <strong style="color:#e5e5e7;">{{ $b['percentile'] }}%</strong>
                             </div>
+                            @if (! empty($b['next_name']) && $b['next_delta'] !== null)
+                                @php
+                                    $deltaFmt = $isIsk
+                                        ? $fmtIsk((float) $b['next_delta'])
+                                        : $fmtNum((int) ceil((float) $b['next_delta']));
+                                    $thresholdFmt = $isIsk
+                                        ? $fmtIsk((float) $b['next_threshold'])
+                                        : $fmtNum((int) $b['next_threshold']);
+                                @endphp
+                                <div style="margin-top:0.5rem; padding:0.4rem 0.5rem; border-radius:5px; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.20); font-size:0.6rem; color:#cbd5e1;">
+                                    Next: <strong style="color:#c7d2fe;">{{ $b['next_name'] }}</strong>
+                                    · need <strong style="color:#fde68a;">+{{ $deltaFmt }}</strong>
+                                    (reach {{ $thresholdFmt }})
+                                </div>
+                            @endif
                         </div>
                     </div>
                 @endforeach

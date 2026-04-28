@@ -128,6 +128,11 @@ Route::get('/war-report/{conflict}', [\App\Http\Controllers\PublicWarReportContr
 Route::get('/war-report/{conflict}/me', [\App\Http\Controllers\WarEffortController::class, 'show'])
     ->where('conflict', 'vs-(imperium|initiative)')
     ->name('public.war-effort.show');
+// Spinner / loading page shown immediately after SSO callback while
+// the heavy stats query runs in the next request.
+Route::get('/war-report/{conflict}/me-loading', [\App\Http\Controllers\WarEffortController::class, 'loading'])
+    ->where('conflict', 'vs-(imperium|initiative)')
+    ->name('public.war-effort.loading');
 Route::post('/war-report/{conflict}/logout', [\App\Http\Controllers\WarEffortController::class, 'logout'])
     ->where('conflict', 'vs-(imperium|initiative)')
     ->name('public.war-effort.logout');

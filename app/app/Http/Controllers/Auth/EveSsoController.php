@@ -436,10 +436,10 @@ class EveSsoController extends Controller
         ]);
 
         // ALWAYS absolute killsineve.online URL — this flow must never
-        // land on the winterco subdomain, even when CCP redirected
-        // there because of a stale callback registration. Operator
-        // explicitly drew this boundary.
-        return redirect('https://killsineve.online/war-report/' . $conflict . '/me');
+        // land on the winterco subdomain. Bounce to the loading page
+        // first so the visitor sees a spinner immediately while the
+        // heavy stats compute happens on the /me request.
+        return redirect('https://killsineve.online/war-report/' . $conflict . '/me-loading');
     }
 
     // ---------------------------------------------------------------------
