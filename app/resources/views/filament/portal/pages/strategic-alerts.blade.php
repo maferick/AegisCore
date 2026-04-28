@@ -60,40 +60,73 @@
                         $statusCol = $statusColors[$a->analyst_status] ?? '#9ca3af';
                         $opacity = ($a->analyst_status === 'archived' || $a->analyst_status === 'suppressed') ? '0.55' : '1';
                     @endphp
-                    <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                    <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
                          style="border-left:4px solid {{ $col }}; opacity:{{ $opacity }};">
-                        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-                            <span style="font-size:0.55rem; color:{{ $col }}; text-transform:uppercase; letter-spacing:0.08em; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04);">{{ $a->severity }}</span>
-                            <span style="font-size:0.55rem; color:#a5b4fc; text-transform:uppercase; letter-spacing:0.08em;">{{ $kindLabels[$a->alert_kind] ?? $a->alert_kind }}</span>
-                            <span style="font-size:0.55rem; color:{{ $statusCol }}; padding:1px 6px; border-radius:3px; background:rgba(255,255,255,0.04); text-transform:uppercase;">{{ str_replace('_', ' ', $a->analyst_status) }}</span>
+                        {{-- Metadata chip row — passive descriptors only, no actions --}}
+                        <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; font-size:0.6rem;">
+                            <span style="color:{{ $col }}; text-transform:uppercase; letter-spacing:0.08em; padding:2px 8px; border-radius:3px; background:rgba(255,255,255,0.04); font-weight:600;">{{ $a->severity }}</span>
+                            <span style="color:#a5b4fc; text-transform:uppercase; letter-spacing:0.08em; padding:2px 8px; border-radius:3px; background:rgba(255,255,255,0.04);">{{ $kindLabels[$a->alert_kind] ?? $a->alert_kind }}</span>
+                            <span style="color:{{ $statusCol }}; padding:2px 8px; border-radius:3px; background:rgba(255,255,255,0.04); text-transform:uppercase;">{{ str_replace('_', ' ', $a->analyst_status) }}</span>
                             <x-intel-freshness surface="alert"
                                 :timestamp="$a->detected_at"
                                 :persisted="$a->freshness_state ?? null"
                                 :windowStart="$a->source_window_start ?? null"
                                 :windowEnd="$a->source_window_end ?? null" />
-                            <span style="font-size:0.85rem; color:#e5e5e7; flex:1;">{{ $a->title }}</span>
-                            <span style="font-size:0.6rem; color:#7a7a82;">{{ $a->detected_at }}</span>
+                            <span style="color:#9ca3af; margin-left:auto;"><x-relative-time :ts="$a->detected_at" /></span>
                         </div>
+
+                        {{-- Title row --}}
+                        <h3 style="font-size:0.95rem; color:#e2e8f0; margin:0.4rem 0 0.2rem; line-height:1.35;">
+                            {{ $a->title }}
+                        </h3>
                         @if ($a->summary)
-                            <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.3rem;">{{ $a->summary }}</div>
+                            <p style="font-size:0.78rem; color:#cbd5e1; margin:0; line-height:1.5;">{{ $a->summary }}</p>
                         @endif
 
-                        {{-- Lifecycle action row --}}
-                        <div style="display:flex; gap:0.25rem; margin-top:0.4rem; flex-wrap:wrap;">
+                        {{-- Action row — visually separated, bigger tap targets,
+                             clearly distinct from the metadata chips above. --}}
+                        <div style="display:flex; gap:0.4rem; margin-top:0.7rem; padding-top:0.5rem;
+                                    border-top:1px solid rgba(255,255,255,0.06); flex-wrap:wrap; align-items:center;">
+                            <span style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-right:0.3rem;">actions</span>
                             @if ($a->analyst_status !== 'validated')
-                                <button wire:click="setStatus({{ $a->id }}, 'validated')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(134,239,172,0.10); color:#86efac; border:none; cursor:pointer;">validate</button>
+                                <button wire:click="setStatus({{ $a->id }}, 'validated')"
+                                        style="font-size:0.7rem; font-weight:600; padding:5px 12px; border-radius:5px;
+                                               background:rgba(134,239,172,0.14); color:#86efac;
+                                               border:1px solid rgba(134,239,172,0.30); cursor:pointer;">
+                                    Validate
+                                </button>
                             @endif
                             @if (in_array($a->analyst_status, ['new', 'suppressed']))
-                                <button wire:click="setStatus({{ $a->id }}, 'acknowledged')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(125,211,252,0.10); color:#7dd3fc; border:none; cursor:pointer;">acknowledge</button>
+                                <button wire:click="setStatus({{ $a->id }}, 'acknowledged')"
+                                        style="font-size:0.7rem; font-weight:600; padding:5px 12px; border-radius:5px;
+                                               background:rgba(125,211,252,0.14); color:#7dd3fc;
+                                               border:1px solid rgba(125,211,252,0.30); cursor:pointer;">
+                                    Acknowledge
+                                </button>
                             @endif
                             @if ($a->analyst_status !== 'suppressed')
-                                <button wire:click="setStatus({{ $a->id }}, 'suppressed')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(253,230,138,0.10); color:#fde68a; border:none; cursor:pointer;">suppress 7d</button>
+                                <button wire:click="setStatus({{ $a->id }}, 'suppressed')"
+                                        style="font-size:0.7rem; font-weight:500; padding:5px 12px; border-radius:5px;
+                                               background:rgba(253,230,138,0.10); color:#fde68a;
+                                               border:1px solid rgba(253,230,138,0.25); cursor:pointer;">
+                                    Suppress 7d
+                                </button>
                             @endif
                             @if ($a->analyst_status !== 'false_positive')
-                                <button wire:click="setStatus({{ $a->id }}, 'false_positive')" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(252,165,165,0.10); color:#fca5a5; border:none; cursor:pointer;">false positive</button>
+                                <button wire:click="setStatus({{ $a->id }}, 'false_positive')"
+                                        style="font-size:0.7rem; font-weight:500; padding:5px 12px; border-radius:5px;
+                                               background:rgba(252,165,165,0.10); color:#fca5a5;
+                                               border:1px solid rgba(252,165,165,0.25); cursor:pointer;">
+                                    False positive
+                                </button>
                             @endif
                             @if (! $isDismissed)
-                                <button wire:click="dismiss({{ $a->id }})" style="font-size:0.55rem; padding:2px 6px; border-radius:3px; background:rgba(255,255,255,0.04); color:#9ca3af; border:none; cursor:pointer;">archive</button>
+                                <button wire:click="dismiss({{ $a->id }})"
+                                        style="font-size:0.7rem; font-weight:500; padding:5px 12px; border-radius:5px;
+                                               background:rgba(255,255,255,0.03); color:#9ca3af;
+                                               border:1px solid rgba(255,255,255,0.10); cursor:pointer;">
+                                    Archive
+                                </button>
                             @endif
                         </div>
 
