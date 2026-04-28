@@ -11,6 +11,7 @@ use App\Domains\UsersCharacters\Models\ViewerContext;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
@@ -97,7 +98,40 @@ class BattleTheaterDetail extends Page
      */
     public function getViewData(): array
     {
-        return app(BattleTheaterViewData::class)
-            ->build($this->loadRecord(), $this->loadViewer(), hideBlocNames: false);
+        $theater = $this->loadRecord();
+        $data = app(BattleTheaterViewData::class)
+            ->build($theater, $this->loadViewer(), hideBlocNames: false);
+
+        // Auto-refresh — only while the battle is "live": newest
+        // killmail within last 6 hours OR theater itself ended
+        // < 30 min ago. Older battles are historical → no point
+        // polling. Operator opt-out via ?autorefresh=off.
+        $newestKm = DB::table('battle_theater_killmails AS btk')
+            ->join('killmails AS k', 'k.killmail_id', '=', 'btk.killmail_id')
+            ->where('btk.theater_id', $theater->id)
+            ->max('k.killed_at');
+        $endedAt = $theater->end_time ?? null;
+        $optOut = (string) request()->query('autorefresh', '') === 'off';
+        $isLive = false;
+        $reason = null;
+        if (! $optOut) {
+            if ($newestKm !== null && \Carbon\Carbon::parse($newestKm)->gt(now()->subHours(6))) {
+                $isLive = true;
+                $reason = 'newest killmail < 6h ago';
+            } elseif ($endedAt !== null && \Carbon\Carbon::parse($endedAt)->gt(now()->subMinutes(30))) {
+                $isLive = true;
+                $reason = 'battle ended < 30m ago';
+            }
+        }
+        $data['auto_refresh'] = [
+            'enabled' => $isLive,
+            'interval_seconds' => 60,
+            'reason' => $reason,
+            'opt_out_url' => '?autorefresh=off',
+            'opt_in_url' => '?autorefresh=on',
+            'opt_out_active' => $optOut,
+            'newest_km_at' => $newestKm,
+        ];
+        return $data;
     }
 }
