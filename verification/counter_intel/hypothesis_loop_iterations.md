@@ -566,3 +566,83 @@ on the pilot's full intel surface.
   exists today) — limits operator's ability to calibrate "what
   does normal look like".
 
+---
+
+## Loop 25 — current-alliance gate / defector reframe
+
+**Problem reported by operator:** Counter-Intel Command Surface
+showed `Bakkanta one` (Sunset Red Activity Club / Insidious /
+WC) as a hostile suspicion, but the underlying signals
+("fought against Goonswarm 67×", `asymmetric_pair`,
+`community_hostile_pct`) were from his pre-defection Dracarys
+(Imperium) tenure inside the 90d rolling window.
+
+A naive read of the page makes it look like he's currently
+hostile — operationally misleading. Real interpretation: he's
+a fresh recruit / defector and the right framing is
+compromise-risk review.
+
+**Fix:**
+
+1. New hypothesis_type `suspicious_reactivation` added to the
+   ENUM (migration 2026-04-28 010000). Spec types from §18
+   added at the same time so the catalogue matches the doc.
+2. `run_hypothesis_fusion` bulk-resolves current alliance per
+   candidate (single query joining
+   `character_corporation_history` + `corporation_alliance_history`).
+3. `_compute_one` checks: pilot's current alliance ∈ bloc's
+   alliance set AND bundle contains a hostile-overlap signal
+   (`community_hostile_pct`, `asymmetric_pair`,
+   `hostile_triangle`, `longitudinal_exposure`).
+4. When that fires, hypothesis_type flips to
+   `suspicious_reactivation`, summary reframes
+   ("now-blue subject; signals reflect prior affiliation"),
+   and a top-priority caveat lands on the card.
+5. NO score multiplier — phase1 only writes rolling rows for
+   bloc-internal pilots in the first place; multiplying would
+   suppress everyone.
+
+**Window-staleness caveat (Loop 26):** if the rolling table's
+`window_end` is more than 7 days old, every hypothesis carries
+"signals window ends YYYY-MM-DD (Nd ago) — alliance changes
+since may not be reflected" so the operator knows to discount
+recent-defection narratives until the rolling pipeline reruns.
+
+**Operator helper:**
+
+```
+php artisan counter-intel:refresh-affiliations \
+    --bloc-id=1 --min-band=high
+```
+
+Forces a fresh ESI affiliation-history sweep so the
+current-alliance lookup phase18 does at compute time reflects
+today's data instead of the rolling-table snapshot.
+
+**Result:** all 333 active hypotheses now type
+`suspicious_reactivation` (every internal candidate with a
+hostile-overlap signal), correctly framed as defector /
+recruit review rather than external suspicion. The page now
+reads: "Bakkanta one — now-blue subject; signals reflect
+prior Dracarys tenure. Review as compromise risk."
+
+### Remaining freshness gap (operator action needed)
+
+The rolling tables (`ci_character_anomalies_rolling` window
+2026-04-20 as of session) advance only when the upstream
+compute pipeline runs. Daily host cron candidate:
+
+```
+40 4 * * *  cd /opt/AegisCore && VIEWER_BLOC=1 \
+    CI_ARGS="--window-end $(date -u +%Y-%m-%d)" \
+    make ci-phase1-relative >> /opt/AegisCore/scripts/log/ci-phase1-relative.log 2>&1
+50 4 * * *  cd /opt/AegisCore && VIEWER_BLOC=1 \
+    CI_ARGS="--window-end $(date -u +%Y-%m-%d)" \
+    make ci-phase2-triangulation >> /opt/AegisCore/scripts/log/ci-phase2-triangulation.log 2>&1
+```
+
+The deeper compute (`ci-anomalies`, which writes the rolling
+table from raw killmails + features) is a daily 30+ minute
+job; needs an operator decision on cadence + a maintenance
+window.
+

@@ -362,6 +362,9 @@ def _compute_one(
     cid: int,
     bundle: dict[str, Any],
     name_map: dict[int, str],
+    bloc_alliance_ids: set[int] | None = None,
+    current_alliance: dict[int, int] | None = None,
+    window_end: Any = None,
 ) -> dict[str, Any] | None:
     """Score one pilot. Returns hypothesis dict or None when below
     the minimum signal threshold."""
@@ -378,6 +381,26 @@ def _compute_one(
         and score >= 3.0
     )
 
+    # Loop 25 — pilot's current alliance gate. Phase 1 only
+    # writes rolling rows for bloc-internal pilots (the "subjects"
+    # of counter-intel); the entire candidate set IS bloc-internal
+    # by design. So 'is_internal_subject' isn't useful as a
+    # downweight — it would suppress everyone. What we actually
+    # want to flag is the SUBSET who have hostile-overlap signals
+    # in their bundle: those signals reflect either their tenure
+    # before joining the bloc (defector) or genuine compromise
+    # behaviour. Either way the operator wants to know.
+    is_internal_subject = False
+    cur_aid = (current_alliance or {}).get(cid)
+    has_hostile_signals = any(
+        s.get("kind") in {"community_hostile_pct", "asymmetric_pair", "hostile_triangle", "longitudinal_exposure"}
+        for s in signals
+    )
+    if cur_aid and bloc_alliance_ids and cur_aid in bloc_alliance_ids and has_hostile_signals:
+        is_internal_subject = True
+        # No score multiplier — every candidate here is internal
+        # by design. The caveat does the operator-framing work.
+
     confidence, severity = _band_from_score(score, corroboration, longitudinal)
 
     # Loop 2 — drop the entire 'low' band. The Command page filters
@@ -390,6 +413,35 @@ def _compute_one(
     name = name_map.get(cid)
     summary = _hypothesis_summary(name, score, signals)
     caveats: list[str] = []
+    # Loop 25 — top-priority caveat for now-blue subjects so the
+    # operator never reads "fought against Goonswarm 67×" as
+    # current-day hostile activity.
+    if is_internal_subject:
+        summary = (
+            f"{name or 'this pilot'}: now-blue subject; signals reflect "
+            f"prior affiliation. Review as compromise/leak risk, "
+            f"not as external hostile. Score {score:.2f}."
+        )
+        caveats.append(
+            "currently in your bloc — signals span 90d window that "
+            "predates the bloc move; investigate as defector / recruit "
+            "review rather than hostile suspicion"
+        )
+    # Loop 26 — surface signals-window staleness caveat. The rolling
+    # anomaly compute runs against window_end; if the window is more
+    # than 7 days old, every signal here is at least that stale.
+    try:
+        from datetime import datetime as _dt, date as _d
+        if isinstance(window_end, (_dt, _d)):
+            we = window_end if isinstance(window_end, _d) else window_end.date()
+            age = (_dt.utcnow().date() - we).days
+            if age >= 7:
+                caveats.append(
+                    f"signals window ends {we.isoformat()} ({age}d ago) — "
+                    f"alliance changes since may not be reflected"
+                )
+    except Exception:
+        pass
     # Loop 8 — longitudinal caveat now informative, not always-on.
     # Only surface when prior data exists; phrase based on whether
     # the signal is rising, persistent, or fading.
@@ -433,6 +485,8 @@ def _compute_one(
         "summary": summary,
         "caveats": caveats,
         "source_refs": refs,
+        "is_internal_subject": is_internal_subject,
+        "hypothesis_type": "suspicious_reactivation" if is_internal_subject else "single_pilot_high_priority",
     }
 
 
@@ -467,6 +521,40 @@ def run_hypothesis_fusion(
     log.info("phase18 candidates gathered",
              {"candidates": len(bundles), "window_end": str(window_end)})
 
+    # Loop 25 — bulk-resolve current alliance per candidate so the
+    # synthesizer can reframe now-blue defectors as compromise /
+    # leak review rather than hostile suspicion. Done in
+    # run_hypothesis_fusion (not _gather_signals) so the resolved
+    # maps are visible to the upsert loop.
+    bloc_alliance_ids: set[int] = set()
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            "SELECT entity_id FROM coalition_entity_labels "
+            "WHERE entity_type='alliance' AND bloc_id = %s AND is_active = 1",
+            (viewer_bloc_id,),
+        )
+        bloc_alliance_ids = {int(r["entity_id"]) for r in cur.fetchall() or []}
+
+    current_alliance: dict[int, int] = {}
+    with conn.cursor(pymysql.cursors.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT cch.character_id, cah.alliance_id
+              FROM character_corporation_history cch
+              JOIN corporation_alliance_history cah
+                ON cah.corporation_id = cch.corporation_id
+               AND cah.start_date <= NOW()
+               AND (cah.end_date IS NULL OR cah.end_date > NOW())
+             WHERE cch.is_deleted = 0
+               AND cch.end_date IS NULL
+            """
+        )
+        for r in cur.fetchall() or []:
+            cid = int(r["character_id"])
+            aid = int(r.get("alliance_id") or 0)
+            if aid:
+                current_alliance[cid] = aid
+
     # Resolve names in one shot.
     cids = list(bundles.keys())
     name_map: dict[int, str] = {}
@@ -483,16 +571,24 @@ def run_hypothesis_fusion(
 
     written = 0
     skipped = 0
+    internal_count = 0
     # Truncate microseconds — MariaDB DATETIME stores seconds only, so
     # comparing a Python datetime with microseconds against the stored
     # value lets every just-written row look "older" by < 1s and the
     # archive sweep eats everything.
     run_started = datetime.now(timezone.utc).replace(microsecond=0)
     for cid, bundle in bundles.items():
-        h = _compute_one(cid, bundle, name_map)
+        h = _compute_one(
+            cid, bundle, name_map,
+            bloc_alliance_ids=bloc_alliance_ids,
+            current_alliance=current_alliance,
+            window_end=window_end,
+        )
         if h is None:
             skipped += 1
             continue
+        if h.get("is_internal_subject"):
+            internal_count += 1
         _upsert_hypothesis(conn, viewer_bloc_id, h, run_started)
         written += 1
     conn.commit()
@@ -572,6 +668,7 @@ def _upsert_hypothesis(
     now: datetime,
 ) -> None:
     cid = int(h["primary_character_id"])
+    htype = h.get("hypothesis_type", "single_pilot_high_priority")
     score = float(h["score"])
     summary = h["summary"][:500]
 
@@ -583,10 +680,10 @@ def _upsert_hypothesis(
             SELECT id, suspicion_score, first_seen_at, last_strengthened_at,
                    confidence, evidence_summary_json
               FROM counter_intel_hypotheses
-             WHERE viewer_bloc_id = %s AND hypothesis_type = 'single_pilot_high_priority'
+             WHERE viewer_bloc_id = %s AND hypothesis_type = %s
                AND primary_character_id = %s
             """,
-            (bloc_id, cid),
+            (bloc_id, htype, cid),
         )
         prior_row = cur.fetchone()
 
@@ -633,7 +730,7 @@ def _upsert_hypothesis(
                evidence_summary_json, source_signal_refs_json,
                caveats_json, why_strengthened_json,
                ai_model, ai_prompt_hash, created_at, updated_at)
-            VALUES (%s, 'single_pilot_high_priority', %s, %s,
+            VALUES (%s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, 'fresh', 'new', %s,
                     %s, %s, %s, %s,
@@ -657,7 +754,7 @@ def _upsert_hypothesis(
               updated_at = VALUES(updated_at)
             """,
             (
-                bloc_id, cid,
+                bloc_id, htype, cid,
                 json.dumps([], default=str),
                 h["confidence"], h["severity"], score,
                 len(h["signals"]), h["corroboration"],
@@ -674,9 +771,9 @@ def _upsert_hypothesis(
         )
         # Audit row — actor_kind='ai', surface='ai_hypothesis'.
         cur.execute("SELECT id FROM counter_intel_hypotheses "
-                    "WHERE viewer_bloc_id = %s AND hypothesis_type = 'single_pilot_high_priority' "
+                    "WHERE viewer_bloc_id = %s AND hypothesis_type = %s "
                     "AND primary_character_id = %s",
-                    (bloc_id, cid))
+                    (bloc_id, htype, cid))
         idrow = cur.fetchone()
         hid = (idrow["id"] if isinstance(idrow, dict) else (idrow[0] if idrow else 0)) if idrow else 0
         if hid:
