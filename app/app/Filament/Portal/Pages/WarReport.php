@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v13';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v14';
 
     /** Per-metric rank-1/2/3 podium titles. Reddit-flavored,
      *  curse-word-free, distinct per leaderboard. */
@@ -143,6 +143,21 @@ class WarReport extends Page
             1 => '🥇 Tuskers-Tier',
             2 => '🥈 Low-Volume, High-Yield',
             3 => '🥉 Always Solo, Never Alone',
+        ],
+        'most_feared' => [
+            1 => '🥇 Primary Target Caller\'s Nightmare',
+            2 => '🥈 Remove Him From Grid',
+            3 => '🥉 Broadcasted For Armor',
+        ],
+        'hardest_to_kill' => [
+            1 => '🥇 Slipperier Than A Cyno Venture',
+            2 => '🥈 Warp Core Enjoyer',
+            3 => '🥉 Docking Request Approved',
+        ],
+        'biggest_menace' => [
+            1 => '🥇 Can Somebody Deal With Him',
+            2 => '🥈 Permanent Red In Local',
+            3 => '🥉 Somehow Already Here',
         ],
     ];
     public const string THEATER_IDS_CACHE_KEY = 'war_report.theater_ids.v1';
@@ -272,6 +287,41 @@ class WarReport extends Page
         $iskDestroyed = DB::select("$select, SUM(CASE WHEN a.is_final_blow = 1 THEN k.total_value ELSE 0 END) AS metric $base ORDER BY metric DESC LIMIT 3");
         $battles = DB::select("$select, COUNT(DISTINCT btk.theater_id) AS metric $base ORDER BY metric DESC LIMIT 3");
         $smallGang = DB::select("$select, COUNT(DISTINCT CASE WHEN k.attacker_count <= 5 THEN a.killmail_id END) AS metric $base ORDER BY metric DESC LIMIT 3");
+        $mostFeared = DB::select("$select, SUM(CASE WHEN k.total_value >= 1000000000 THEN k.total_value ELSE 0 END) AS metric $base HAVING metric > 0 ORDER BY metric DESC LIMIT 3");
+        $biggestMenace = DB::select("$select, COUNT(DISTINCT k.victim_character_id) AS metric $base ORDER BY metric DESC LIMIT 3");
+        // Hardest-to-kill: kills/(kills+losses) with a min activity
+        // gate so a one-mail wonder doesn't take the podium.
+        $hardestToKill = DB::select("
+            SELECT cid AS id,
+                   MAX(name) AS name, MAX(alliance_id) AS alliance_id, MAX(alliance_name) AS alliance_name,
+                   ROUND(SUM(kills) * 100.0 / NULLIF(SUM(kills) + SUM(losses), 0), 2) AS metric
+            FROM (
+                SELECT a.character_id AS cid,
+                       en.name AS name, a.alliance_id AS alliance_id, an.name AS alliance_name,
+                       COUNT(DISTINCT a.killmail_id) AS kills,
+                       0 AS losses
+                FROM _war_attackers a
+                JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                LEFT JOIN esi_entity_names en ON en.entity_id = a.character_id AND en.category = 'character'
+                LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
+                WHERE a.character_id IS NOT NULL AND a.character_id > 0
+                  AND a.attacker_side <> wk.victim_side
+                GROUP BY a.character_id, en.name, a.alliance_id, an.name
+                UNION ALL
+                SELECT k.victim_character_id AS cid,
+                       en.name AS name, k.victim_alliance_id AS alliance_id, an.name AS alliance_name,
+                       0, COUNT(*) AS losses
+                FROM _war_kms wk
+                JOIN killmails k ON k.killmail_id = wk.killmail_id
+                LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+                LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+                WHERE k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
+                GROUP BY k.victim_character_id, en.name, k.victim_alliance_id, an.name
+            ) AS combined
+            GROUP BY cid
+            HAVING SUM(kills) + SUM(losses) >= 30
+            ORDER BY metric DESC LIMIT 3
+        ");
 
         return [
             'kills' => $kills,
@@ -279,6 +329,9 @@ class WarReport extends Page
             'isk_destroyed' => $iskDestroyed,
             'battles_attended' => $battles,
             'small_gang_kills' => $smallGang,
+            'most_feared' => $mostFeared,
+            'hardest_to_kill' => $hardestToKill,
+            'biggest_menace' => $biggestMenace,
         ];
     }
 

@@ -231,6 +231,23 @@ final class WarEffortController extends Controller
         $activityMap = (new \App\Http\Controllers\Portal\CharacterActivityMapController())
             ->build($charId, $sinceUtc);
 
+        // Reputation/survival/menace metrics — feed the new badge tiers.
+        $rep = DB::selectOne("
+            SELECT
+                COALESCE(SUM(CASE WHEN k.total_value >= 1000000000 THEN k.total_value ELSE 0 END), 0) AS most_feared,
+                COUNT(DISTINCT k.victim_character_id) AS biggest_menace
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
+            WHERE a.character_id = ? AND a.attacker_side <> wk.victim_side
+              AND k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
+        ", [$charId]);
+        $kRow = (int) $row->kills;
+        $lRow = (int) $loss->losses;
+        $hardestToKill = ($kRow + $lRow) >= 10
+            ? round(($kRow / max(1, $kRow + $lRow)) * 100, 2)
+            : 0.0;
+
         // Top systems where the character fought (attacker side).
         $topSystems = DB::select("
             SELECT ss.id, ss.name, ss.security_status,
@@ -272,7 +289,7 @@ final class WarEffortController extends Controller
         // Role breakdown — % of victim ship-groups in tackle/logi/dps/etc buckets.
         $roleBreakdown = $this->roleBreakdown($charId);
         // Tactical personality — aggression / escalation / survival / cap-tolerance.
-        $tacticalTraits = $this->tacticalTraits($charId, $row);
+        $tacticalTraits = $this->tacticalTraits($charId, $row, (int) $loss->losses);
         // Top 5 biggest battles attended.
         $bigBattles = $this->bigBattles($charId);
 
@@ -283,6 +300,9 @@ final class WarEffortController extends Controller
             'isk_involved' => (float) $row->isk_involved,
             'battles_attended' => (int) $row->battles_attended,
             'small_gang_kills' => (int) $row->small_gang_kills,
+            'most_feared' => (float) $rep->most_feared,
+            'hardest_to_kill' => (float) $hardestToKill,
+            'biggest_menace' => (int) $rep->biggest_menace,
             'losses' => (int) $loss->losses,
             'isk_lost' => (float) $loss->isk_lost,
             'total_battles_in_conflict' => (int) $totalBattles->n,
@@ -427,10 +447,9 @@ final class WarEffortController extends Controller
      *
      * @return array<string, array{value:int,label:string,why:string}>
      */
-    private function tacticalTraits(int $charId, object $statsRow): array
+    private function tacticalTraits(int $charId, object $statsRow, int $losses): array
     {
         $kills = (int) $statsRow->kills;
-        $losses = (int) $statsRow->losses ?? 0;
 
         // Aggression — inverse of average attacker_count (smaller fleet
         // = more solo / small-gang = higher aggression score).
@@ -843,6 +862,54 @@ final class WarEffortController extends Controller
                     JOIN killmails k ON k.killmail_id = a.killmail_id
                     WHERE a.character_id IS NOT NULL AND a.character_id > 0
                       AND a.attacker_side <> wk.victim_side
+                    GROUP BY a.character_id
+                ",
+                'most_feared' => "
+                    SELECT SUM(CASE WHEN k.total_value >= 1000000000 THEN k.total_value ELSE 0 END) AS v
+                    FROM _war_attackers a
+                    JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                    JOIN killmails k ON k.killmail_id = a.killmail_id
+                    WHERE a.character_id IS NOT NULL AND a.character_id > 0
+                      AND a.attacker_side <> wk.victim_side
+                    GROUP BY a.character_id
+                ",
+                'hardest_to_kill' => "
+                    SELECT
+                        CASE WHEN (kills + losses) >= 10
+                             THEN ROUND(kills * 100.0 / (kills + losses), 2)
+                             ELSE 0 END AS v
+                    FROM (
+                        SELECT
+                            x.cid,
+                            SUM(x.kills) AS kills,
+                            SUM(x.losses) AS losses
+                        FROM (
+                            SELECT a.character_id AS cid,
+                                   COUNT(DISTINCT a.killmail_id) AS kills,
+                                   0 AS losses
+                            FROM _war_attackers a
+                            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                            WHERE a.character_id IS NOT NULL AND a.character_id > 0
+                              AND a.attacker_side <> wk.victim_side
+                            GROUP BY a.character_id
+                            UNION ALL
+                            SELECT k.victim_character_id AS cid, 0, COUNT(*) AS losses
+                            FROM _war_kms wk
+                            JOIN killmails k ON k.killmail_id = wk.killmail_id
+                            WHERE k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
+                            GROUP BY k.victim_character_id
+                        ) x
+                        GROUP BY x.cid
+                    ) y
+                ",
+                'biggest_menace' => "
+                    SELECT COUNT(DISTINCT k.victim_character_id) AS v
+                    FROM _war_attackers a
+                    JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                    JOIN killmails k ON k.killmail_id = a.killmail_id
+                    WHERE a.character_id IS NOT NULL AND a.character_id > 0
+                      AND a.attacker_side <> wk.victim_side
+                      AND k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
                     GROUP BY a.character_id
                 ",
                 default => null,

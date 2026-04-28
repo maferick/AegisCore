@@ -27,6 +27,9 @@ final class WarEffortBadges
         'isk_destroyed',
         'battles_attended',
         'small_gang_kills',
+        'most_feared',
+        'hardest_to_kill',
+        'biggest_menace',
     ];
 
     /**
@@ -193,6 +196,46 @@ final class WarEffortBadges
             8  => ['name' => 'Lucky Tackle',           'sub' => 'top 50%'],
             9  => ['name' => 'Red on Local',           'sub' => 'top 75%'],
             10 => ['name' => 'I Touched Grass',        'sub' => "all kills are blob kills, but you're proud"],
+        ],
+        // Reputation — sum of high-value (>1B) victim ISK across kms
+        // you were on as attacker. Big-game hunting concentration.
+        'most_feared' => [
+            1  => ['name' => 'Primary Target Caller\'s Nightmare', 'sub' => 'top 0.1% — fleets warp away from you'],
+            2  => ['name' => 'Remove Him From Grid',   'sub' => 'top 0.5%'],
+            3  => ['name' => 'Broadcasted For Armor',  'sub' => 'top 1%'],
+            4  => ['name' => 'Shoot Him First',        'sub' => 'top 2.5%'],
+            5  => ['name' => 'Top of the Watchlist',   'sub' => 'top 5%'],
+            6  => ['name' => 'Grudge Tier',            'sub' => 'top 10%'],
+            7  => ['name' => 'Mid-Threat Reputation',  'sub' => 'top 25%'],
+            8  => ['name' => 'Sometimes Shows Up Scary', 'sub' => 'top 50%'],
+            9  => ['name' => 'Vaguely Familiar',       'sub' => 'top 75%'],
+            10 => ['name' => 'Nobody Calls Primary On You', 'sub' => "you have plausible deniability"],
+        ],
+        // Survival rate — kills / (kills + losses), gated by min activity.
+        'hardest_to_kill' => [
+            1  => ['name' => 'Slipperier Than A Cyno Venture', 'sub' => 'top 0.1% — local clears, you remain'],
+            2  => ['name' => 'Warp Core Enjoyer',     'sub' => 'top 0.5%'],
+            3  => ['name' => 'Docking Request Approved', 'sub' => 'top 1%'],
+            4  => ['name' => 'Better Than The Logi',  'sub' => 'top 2.5%'],
+            5  => ['name' => 'Survives The Wipes',    'sub' => 'top 5%'],
+            6  => ['name' => 'Returned With Pod Goo', 'sub' => 'top 10%'],
+            7  => ['name' => 'Mostly Alive',          'sub' => 'top 25%'],
+            8  => ['name' => 'Pod Goes Brrrr',        'sub' => 'top 50%'],
+            9  => ['name' => 'Crash and Re-spawn',    'sub' => 'top 75%'],
+            10 => ['name' => 'Insurance Best Friend', 'sub' => "you keep CONCORD employed"],
+        ],
+        // Persistence — distinct enemy pilots you've been on grid with.
+        'biggest_menace' => [
+            1  => ['name' => 'Can Somebody Deal With Him', 'sub' => 'top 0.1% — your name in their channel'],
+            2  => ['name' => 'Permanent Red In Local',  'sub' => 'top 0.5%'],
+            3  => ['name' => 'Somehow Already Here',    'sub' => 'top 1%'],
+            4  => ['name' => 'Ubiquitous',              'sub' => 'top 2.5%'],
+            5  => ['name' => 'Always In Frame',         'sub' => 'top 5%'],
+            6  => ['name' => 'Reliable Hostile',        'sub' => 'top 10%'],
+            7  => ['name' => 'Familiar Outline',        'sub' => 'top 25%'],
+            8  => ['name' => 'Occasional Sighting',     'sub' => 'top 50%'],
+            9  => ['name' => 'Heard About You Maybe',   'sub' => 'top 75%'],
+            10 => ['name' => 'New Local',               'sub' => "you've crossed paths a couple of times"],
         ],
     ];
 }

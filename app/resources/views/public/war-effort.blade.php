@@ -563,8 +563,11 @@
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:0.6rem;">
                 @foreach ($badges as $b)
                     @php
-                        $isIsk = $b['metric'] === 'isk_destroyed';
-                        $valueFmt = $isIsk ? $fmtIsk((float) $b['value']) : $fmtNum((int) $b['value']);
+                        $isIsk = in_array($b['metric'], ['isk_destroyed', 'most_feared'], true);
+                        $isPct = $b['metric'] === 'hardest_to_kill';
+                        $valueFmt = $isIsk
+                            ? $fmtIsk((float) $b['value'])
+                            : ($isPct ? number_format((float) $b['value'], 1) . '%' : $fmtNum((int) $b['value']));
                     @endphp
                     <div class="badge-card">
                         <div class="badge-tier-strip tier-{{ $b['tier'] }}"></div>
@@ -582,10 +585,10 @@
                                 @php
                                     $deltaFmt = $isIsk
                                         ? $fmtIsk((float) $b['next_delta'])
-                                        : $fmtNum((int) ceil((float) $b['next_delta']));
+                                        : ($isPct ? '+' . number_format((float) $b['next_delta'], 1) . ' pp' : $fmtNum((int) ceil((float) $b['next_delta'])));
                                     $thresholdFmt = $isIsk
                                         ? $fmtIsk((float) $b['next_threshold'])
-                                        : $fmtNum((int) $b['next_threshold']);
+                                        : ($isPct ? number_format((float) $b['next_threshold'], 1) . '%' : $fmtNum((int) $b['next_threshold']));
                                 @endphp
                                 <div style="margin-top:0.5rem; padding:0.4rem 0.5rem; border-radius:5px; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.20); font-size:0.6rem; color:#cbd5e1;">
                                     Next: <strong style="color:#c7d2fe;">{{ $b['next_name'] }}</strong>

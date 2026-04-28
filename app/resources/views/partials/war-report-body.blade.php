@@ -178,6 +178,9 @@
             'isk_destroyed' => 'ISK destroyed (final blow)',
             'battles_attended' => 'Battles attended',
             'small_gang_kills' => 'Small-gang kills',
+            'most_feared' => 'Most feared (high-value hunting)',
+            'hardest_to_kill' => 'Hardest to kill (% survival)',
+            'biggest_menace' => 'Biggest menace (unique enemies)',
         ];
         $rankColor = [1 => '#fde68a', 2 => '#cbd5e1', 3 => '#fdba74'];
         $rankBg = [
@@ -203,7 +206,11 @@
                                 $title = $podiumTitles[$metric][$rank] ?? '';
                                 $color = $rankColor[$rank] ?? '#9ca3af';
                                 $bg = $rankBg[$rank] ?? 'rgba(0,0,0,0.20)';
-                                $valFmt = $metric === 'isk_destroyed' ? $fmtIsk((float) $r->metric) : $fmtNum((int) $r->metric);
+                                $valFmt = match ($metric) {
+                                    'isk_destroyed', 'most_feared' => $fmtIsk((float) $r->metric),
+                                    'hardest_to_kill' => number_format((float) $r->metric, 1) . '%',
+                                    default => $fmtNum((int) $r->metric),
+                                };
                             @endphp
                             <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
                                 <div style="flex:0 0 28px; text-align:center;">
