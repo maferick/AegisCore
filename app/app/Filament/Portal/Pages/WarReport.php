@@ -167,14 +167,22 @@ class WarReport extends Page
         if ($victimAlliances === [] || $hostileAlliances === []) {
             return ['kms' => 0, 'isk' => 0.0];
         }
+        // EXISTS rather than JOIN: a killmail has many attackers, so a
+        // JOIN multiplies SUM(total_value) by the per-side attacker
+        // count. With supers + titans now priced at ~150B by the zkill
+        // backfill, that bug ballooned a 28k-row Goonswarm side from a
+        // realistic 800T to a nonsense 2.3 quadrillion.
         $row = DB::selectOne("
-            SELECT COUNT(DISTINCT k.killmail_id) AS n,
+            SELECT COUNT(*) AS n,
                    COALESCE(SUM(k.total_value), 0) AS isk
             FROM killmails k
-            JOIN killmail_attackers a ON a.killmail_id = k.killmail_id
             WHERE k.killed_at >= ?
               AND k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
-              AND a.alliance_id IN (" . implode(',', $hostileAlliances) . ")
+              AND EXISTS (
+                  SELECT 1 FROM killmail_attackers a
+                  WHERE a.killmail_id = k.killmail_id
+                    AND a.alliance_id IN (" . implode(',', $hostileAlliances) . ")
+              )
         ", [$start]);
         return ['kms' => (int) $row->n, 'isk' => (float) $row->isk];
     }
