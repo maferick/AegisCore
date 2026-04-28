@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex, nofollow">
-    <title>@yield('title', 'Battles') — AegisCore</title>
+    <title>@yield('title', 'killsineve.online')</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
         :root {
@@ -105,15 +105,10 @@
 </head>
 <body>
     <header class="public-topbar">
-        <a class="brand" href="/">AegisCore</a>
+        <a class="brand" href="/war-report">⚔ killsineve.online</a>
         <nav>
-            <a href="/">Home</a>
+            <a href="/war-report">War reports</a>
             <a href="{{ route('public.battles.index') }}">Battles</a>
-            @auth
-                <a href="/portal">Portal</a>
-            @else
-                <a href="/auth/eve">Sign in</a>
-            @endauth
         </nav>
     </header>
 
