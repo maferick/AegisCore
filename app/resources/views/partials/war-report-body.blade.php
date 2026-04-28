@@ -315,10 +315,11 @@
                         @foreach ($r['ship_groups'] as $g)
                             @php
                                 $w = max(2, (int) round(((int) $g->kms / $maxShip) * 100));
-                                $isCap = (int) ($g->priority ?? 2) === 1;
+                                $prio = (int) ($g->priority ?? 4);
+                                $isPinned = $prio <= 3;
                             @endphp
-                            <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;{{ $isCap ? ' background:rgba(253,224,71,0.05); border-left:2px solid #fde68a; padding:1px 0 1px 4px;' : '' }}">
-                                <div style="flex:0 0 92px; color:{{ $isCap ? '#fde68a' : '#cbd5e1' }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ $g->label }}">{{ $g->label }}</div>
+                            <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;{{ $isPinned ? ' background:rgba(253,224,71,0.05); border-left:2px solid #fde68a; padding:1px 0 1px 4px;' : '' }}">
+                                <div style="flex:0 0 92px; color:{{ $isPinned ? '#fde68a' : '#cbd5e1' }}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ $g->label }}">{{ $g->label }}</div>
                                 <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
                                     <div style="height:100%; width:{{ $w }}%; background:{{ $col['tint'] }}; opacity:0.7;"></div>
                                 </div>

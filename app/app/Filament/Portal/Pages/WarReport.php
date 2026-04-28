@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v8';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v9';
 
     /**
      * @return array<string, mixed>
@@ -176,6 +176,12 @@ class WarReport extends Page
             'op' => $this->recentLosses($opposingAlly, $wcAlly, 15),
         ];
 
+        // Align ship_groups across both sides so the rendered rows
+        // match: if WC lost a Titan, the opposing column has a Titan
+        // row at the same position with kms=0/isk=0. Operator can
+        // visually compare side-by-side without scanning for labels.
+        $rollups = $this->alignShipGroups($rollups);
+
         $hotspots = $this->systemHotspots($start, $wcAlly, $opposingAlly);
         $structures = $this->upwellStructureTimeline($start, $wcAlly, $opposingAlly);
         $topImplantPods = $this->topImplantPods($start, $wcAlly, $opposingAlly);
@@ -198,6 +204,81 @@ class WarReport extends Page
             'top_implant_pods' => $topImplantPods,
             'leaderboards' => $leaderboards,
         ];
+    }
+
+    /**
+     * Make sure the wc + op ship_groups arrays render the same rows
+     * in the same order. Combined order: pinned classes by priority
+     * (Titan → Super → other caps), then everything else by combined
+     * count desc. Missing rows on either side are zero-filled so the
+     * blade renders one row per group on both sides.
+     *
+     * @param  array<string, array<string, mixed>>  $rollups
+     * @return array<string, array<string, mixed>>
+     */
+    private function alignShipGroups(array $rollups): array
+    {
+        $wc = $rollups['wc']['ship_groups'] ?? [];
+        $op = $rollups['op']['ship_groups'] ?? [];
+        if ($wc === [] && $op === []) {
+            return $rollups;
+        }
+
+        $byLabel = [];
+        $captureRow = function (string $side, array $rows) use (&$byLabel): void {
+            foreach ($rows as $row) {
+                $label = (string) $row->label;
+                if (! isset($byLabel[$label])) {
+                    $byLabel[$label] = [
+                        'priority' => (int) $row->priority,
+                        'wc' => null,
+                        'op' => null,
+                        'combined' => 0,
+                    ];
+                }
+                $byLabel[$label][$side] = $row;
+                $byLabel[$label]['combined'] += (int) $row->kms;
+                // Priority is shared across sides for the same label;
+                // keep the lower (more important) value if there's drift.
+                $byLabel[$label]['priority'] = min(
+                    $byLabel[$label]['priority'],
+                    (int) $row->priority,
+                );
+            }
+        };
+        $captureRow('wc', $wc);
+        $captureRow('op', $op);
+
+        // Sort: priority asc (pinned first), then combined kms desc.
+        uasort($byLabel, function ($a, $b) {
+            return $a['priority'] <=> $b['priority']
+                ?: $b['combined'] <=> $a['combined'];
+        });
+
+        $wcAligned = [];
+        $opAligned = [];
+        foreach ($byLabel as $label => $entry) {
+            foreach (['wc', 'op'] as $side) {
+                $row = $entry[$side];
+                if ($row === null) {
+                    $row = (object) [
+                        'label' => $label,
+                        'kms' => 0,
+                        'isk' => 0.0,
+                        'priority' => $entry['priority'],
+                    ];
+                }
+                if ($side === 'wc') {
+                    $wcAligned[] = $row;
+                } else {
+                    $opAligned[] = $row;
+                }
+            }
+        }
+
+        $rollups['wc']['ship_groups'] = $wcAligned;
+        $rollups['op']['ship_groups'] = $opAligned;
+        return $rollups;
     }
 
     /**
@@ -567,20 +648,30 @@ class WarReport extends Page
             ORDER BY day ASC
         ");
 
-        // group_ids 30 = Titan, 659 = Supercarrier, 547 = Carrier,
-        // 485 = Dreadnought, 1538 = Force Aux, 4594 = Lancer Dread.
-        // priority=1 surfaces those at the top regardless of count
-        // (caps trickle in but are the strategic ones to track);
-        // priority=2 is everything else, ranked by count desc.
+        // Pinned-order priority bands:
+        //   1 = Titan (group 30)
+        //   2 = Supercarrier (group 659)
+        //   3 = Other capitals — Carrier 547 / Dreadnought 485 /
+        //       Force Auxiliary 1538 / Lancer Dread 4594 — sorted by
+        //       count within
+        //   4 = Subcap ships + structures, sorted by count
+        // Filter scope: only category 6 (Ship) and 65 (Structure) so
+        // deployables (MTU/MWD) and shuttles-the-cargo etc. don't
+        // dilute the chart.
         $shipGroups = DB::select("
             SELECT COALESCE(NULLIF(k.victim_ship_group_name,''), 'Unknown') AS label,
                    COUNT(*) AS kms,
                    COALESCE(SUM(k.total_value),0) AS isk,
-                   CASE WHEN k.victim_ship_group_id IN (30, 659, 547, 485, 1538, 4594)
-                        THEN 1 ELSE 2 END AS priority
+                   CASE
+                       WHEN k.victim_ship_group_id = 30  THEN 1
+                       WHEN k.victim_ship_group_id = 659 THEN 2
+                       WHEN k.victim_ship_group_id IN (547, 485, 1538, 4594) THEN 3
+                       ELSE 4
+                   END AS priority
             FROM _war_kms wk
             JOIN killmails k ON k.killmail_id = wk.killmail_id
             $where
+              AND k.victim_ship_category_id IN (6, 65)
             GROUP BY label, priority
             ORDER BY priority ASC, kms DESC
         ");
