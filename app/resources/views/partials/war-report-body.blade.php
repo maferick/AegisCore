@@ -61,6 +61,89 @@
         </div>
     </div>
 
+    {{-- Live-battle banner — battles with a killmail in the last 90
+         min OR end_time still NULL. Click to open the battle report
+         (system map + side breakdown + live kill feed). --}}
+    @php $live = $live_battles ?? []; @endphp
+    @if (count($live) > 0)
+        <div style="margin-bottom:0.75rem; padding:0.55rem 0.85rem; border:1px solid rgba(134,239,172,0.35); border-radius:8px; background:linear-gradient(90deg, rgba(134,239,172,0.10) 0%, rgba(0,0,0,0.45) 100%);">
+            <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.35rem;">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#86efac; box-shadow:0 0 8px #86efac; animation:aegis-live-pulse 1.4s ease-in-out infinite;"></span>
+                <strong style="font-size:0.7rem; color:#86efac; letter-spacing:0.08em; text-transform:uppercase;">Live now</strong>
+                <span style="font-size:0.6rem; color:#7a7a82;">· {{ count($live) }} battle{{ count($live) === 1 ? '' : 's' }} active · click to open report</span>
+            </div>
+            <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                @foreach ($live as $b)
+                    @php
+                        $secColor = $sevColor((float) ($b->security_status ?? null));
+                        $slugOrId = $b->public_slug ?: (string) $b->id;
+                    @endphp
+                    <a href="/battles/{{ $slugOrId }}" style="display:inline-flex; align-items:center; gap:0.4rem; padding:0.3rem 0.6rem; border:1px solid rgba(134,239,172,0.30); border-radius:5px; background:rgba(0,0,0,0.30); text-decoration:none;">
+                        <span style="font-size:0.75rem; font-weight:700; color:{{ $secColor }};">{{ $b->system_name }}</span>
+                        <span style="font-size:0.6rem; color:#cbd5e1;">{{ $fmtNum($b->total_kills ?: 0) }} kms</span>
+                        <span style="font-size:0.6rem; color:#fde68a;">{{ $fmtIsk((float) ($b->total_isk_lost ?: 0)) }}</span>
+                        <span style="font-size:0.55rem; color:#7a7a82;">last {{ \Carbon\Carbon::parse($b->newest_km)->diffForHumans() }}</span>
+                    </a>
+                @endforeach
+            </div>
+        </div>
+        <style>
+            @keyframes aegis-live-pulse {
+                0%   { opacity: 1;   transform: scale(1); }
+                50%  { opacity: 0.4; transform: scale(0.85); }
+                100% { opacity: 1;   transform: scale(1); }
+            }
+        </style>
+    @endif
+
+    {{-- Top-kills ticker — last 24h of biggest war-attributable kills,
+         marquee-scrolling. Each item links to our internal kill page;
+         the small zKill badge is a secondary out-bound link. --}}
+    @php $ticker = $ticker_kills ?? []; @endphp
+    @if (count($ticker) > 0)
+        <div style="margin-bottom:1rem; padding:0.4rem 0; border:1px solid rgba(255,255,255,0.06); border-radius:6px; background:rgba(0,0,0,0.30); overflow:hidden;">
+            <div style="display:flex; align-items:center; gap:0.7rem; padding:0 0.7rem 0.4rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">
+                <span style="color:#fde68a;">⚡</span>
+                <span>Hot kills · last 24h · scrolling</span>
+            </div>
+            <div class="aegis-ticker">
+                <div class="aegis-ticker-track">
+                    @foreach (array_merge($ticker, $ticker) as $t)
+                        <a href="/kills/{{ $t->killmail_id }}" class="aegis-ticker-item">
+                            <span style="color:#fde68a; font-weight:700;">{{ $fmtIsk((float) $t->total_value) }}</span>
+                            <span style="color:#cbd5e1;">{{ $t->victim_ship_type_name ?: '?' }}</span>
+                            <span style="color:#7dd3fc;">{{ $t->system_name }}</span>
+                            <span style="color:#9ca3af; font-size:0.55rem;">{{ $t->victim_name ?: '—' }}</span>
+                            <span style="color:#7a7a82; font-size:0.55rem;">· {{ $t->victim_alliance_name ?: '—' }}</span>
+                            <span style="color:#7a7a82; font-size:0.5rem;">{{ \Carbon\Carbon::parse($t->killed_at)->format('H:i') }}</span>
+                        </a>
+                    @endforeach
+                </div>
+            </div>
+        </div>
+        <style>
+            .aegis-ticker { width:100%; overflow:hidden; padding-top:0.4rem; }
+            .aegis-ticker-track {
+                display:flex; gap:1.6rem;
+                animation: aegis-ticker-scroll 90s linear infinite;
+                will-change: transform;
+            }
+            .aegis-ticker:hover .aegis-ticker-track { animation-play-state: paused; }
+            .aegis-ticker-item {
+                display:inline-flex; align-items:baseline; gap:0.4rem;
+                padding:0.2rem 0.5rem;
+                font-size:0.65rem; white-space:nowrap;
+                text-decoration:none; color:inherit;
+                border-left:2px solid rgba(253,224,71,0.20);
+            }
+            .aegis-ticker-item:hover { background:rgba(253,224,71,0.05); }
+            @keyframes aegis-ticker-scroll {
+                from { transform: translateX(0); }
+                to   { transform: translateX(-50%); }
+            }
+        </style>
+    @endif
+
 
     {{-- System hotspots --}}
     @if (count($hotspots) > 0)
@@ -98,18 +181,22 @@
                         $sideTint = $m->side === 'wc' ? '#86efac' : ($m->side === 'hostile' ? $opposing_tint : '#9ca3af');
                         $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? $opposing_label : '—');
                     @endphp
-                    <a href="https://zkillboard.com/kill/{{ $m->killmail_id }}/" target="_blank" rel="noopener"
-                       style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
-                        <div style="display:flex; align-items:baseline; gap:0.4rem; flex-wrap:wrap;">
-                            <span style="font-size:0.55rem; color:#7a7a82; min-width:14px;">#{{ $i + 1 }}</span>
-                            <span style="font-size:1rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $m->total_value) }}</span>
-                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $sideLbl }}</span>
-                        </div>
-                        <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.15rem;">{{ $m->victim_ship_type_name ?: 'Unknown' }} <span style="color:#7a7a82;">· {{ $m->victim_name ?: '—' }}</span></div>
-                        <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">
-                            {{ $m->victim_alliance_name ?: '—' }} · {{ $m->system_name }} · {{ \Carbon\Carbon::parse($m->killed_at)->format('M d H:i') }}
-                        </div>
-                    </a>
+                    <div style="position:relative; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20);">
+                        <a href="/kills/{{ $m->killmail_id }}" style="display:block; text-decoration:none; color:inherit;">
+                            <div style="display:flex; align-items:baseline; gap:0.4rem; flex-wrap:wrap;">
+                                <span style="font-size:0.55rem; color:#7a7a82; min-width:14px;">#{{ $i + 1 }}</span>
+                                <span style="font-size:1rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $m->total_value) }}</span>
+                                <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $sideLbl }}</span>
+                            </div>
+                            <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.15rem;">{{ $m->victim_ship_type_name ?: 'Unknown' }} <span style="color:#7a7a82;">· {{ $m->victim_name ?: '—' }}</span></div>
+                            <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">
+                                {{ $m->victim_alliance_name ?: '—' }} · {{ $m->system_name }} · {{ \Carbon\Carbon::parse($m->killed_at)->format('M d H:i') }}
+                            </div>
+                        </a>
+                        <a href="https://zkillboard.com/kill/{{ $m->killmail_id }}/" target="_blank" rel="noopener"
+                           title="Open on zKillboard"
+                           style="position:absolute; top:0.4rem; right:0.5rem; font-size:0.55rem; color:#7a7a82; text-decoration:none;">zkill ↗</a>
+                    </div>
                 @endforeach
             </div>
         </div>
@@ -172,15 +259,19 @@
                     @php
                         $sideTint = $p->side === 'wc' ? '#86efac' : ($p->side === 'hostile' ? $opposing_tint : '#9ca3af');
                     @endphp
-                    <a href="https://zkillboard.com/kill/{{ $p->killmail_id }}/" target="_blank" rel="noopener"
-                       style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
-                        <div style="display:flex; align-items:baseline; gap:0.5rem;">
-                            <span style="font-size:0.95rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $p->total_value) }}</span>
-                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? $opposing_label : '—') }}</span>
-                        </div>
-                        <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.15rem;">{{ $p->victim_name ?: 'unknown pilot' }} <span style="color:#7a7a82;">· {{ $p->victim_alliance_name ?: '—' }}</span></div>
-                        <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">{{ $p->system_name }} · {{ \Carbon\Carbon::parse($p->killed_at)->format('M d H:i') }}</div>
-                    </a>
+                    <div style="position:relative; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20);">
+                        <a href="/kills/{{ $p->killmail_id }}" style="display:block; text-decoration:none; color:inherit;">
+                            <div style="display:flex; align-items:baseline; gap:0.5rem;">
+                                <span style="font-size:0.95rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $p->total_value) }}</span>
+                                <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? $opposing_label : '—') }}</span>
+                            </div>
+                            <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.15rem;">{{ $p->victim_name ?: 'unknown pilot' }} <span style="color:#7a7a82;">· {{ $p->victim_alliance_name ?: '—' }}</span></div>
+                            <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">{{ $p->system_name }} · {{ \Carbon\Carbon::parse($p->killed_at)->format('M d H:i') }}</div>
+                        </a>
+                        <a href="https://zkillboard.com/kill/{{ $p->killmail_id }}/" target="_blank" rel="noopener"
+                           title="Open on zKillboard"
+                           style="position:absolute; top:0.4rem; right:0.5rem; font-size:0.55rem; color:#7a7a82; text-decoration:none;">zkill ↗</a>
+                    </div>
                 @endforeach
             </div>
         </div>
@@ -217,7 +308,10 @@
                                 <td style="padding:0.35rem 0.6rem; color:{{ $sideColor }}; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.06em;">{{ $sideLbl }}</td>
                                 <td style="padding:0.35rem 0.6rem; color:#fde68a;">{{ $s->victim_ship_type_name ?: $s->victim_ship_group_name ?: 'Structure' }}</td>
                                 <td style="padding:0.35rem 0.6rem; color:#cbd5e1;">{{ $s->victim_alliance_name ?: $s->victim_corp_name ?: '—' }}</td>
-                                <td style="padding:0.35rem 0.6rem; text-align:right; color:#fde68a;"><a href="https://zkillboard.com/kill/{{ $s->killmail_id }}/" target="_blank" rel="noopener" style="color:inherit; text-decoration:none;">{{ $fmtIsk((float) $s->total_value) }}</a></td>
+                                <td style="padding:0.35rem 0.6rem; text-align:right; color:#fde68a; white-space:nowrap;">
+                                    <a href="/kills/{{ $s->killmail_id }}" style="color:inherit; text-decoration:none; font-weight:600;">{{ $fmtIsk((float) $s->total_value) }}</a>
+                                    <a href="https://zkillboard.com/kill/{{ $s->killmail_id }}/" target="_blank" rel="noopener" title="Open on zKillboard" style="margin-left:0.35rem; font-size:0.5rem; color:#7a7a82; text-decoration:none;">↗</a>
+                                </td>
                             </tr>
                         @endforeach
                     </tbody>
@@ -361,13 +455,14 @@
                                     <div style="display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap;">
                                         <span style="color:#7a7a82;">{{ \Carbon\Carbon::parse($rr->killed_at)->format('M d H:i') }}</span>
                                         @if ($isCleanPod)
-                                            <a href="https://zkillboard.com/kill/{{ $rr->killmail_id }}/" target="_blank" rel="noopener"
+                                            <a href="/kills/{{ $rr->killmail_id }}"
                                                title="Clean clone — no implants destroyed."
                                                style="color:#7a7a82; text-decoration:none; font-style:italic;">clean clone</a>
                                         @else
-                                            <a href="https://zkillboard.com/kill/{{ $rr->killmail_id }}/" target="_blank" rel="noopener"
+                                            <a href="/kills/{{ $rr->killmail_id }}"
                                                style="color:#fde68a; text-decoration:none; font-weight:600;">{{ $fmtIsk((float) $rr->total_value) }}</a>
                                         @endif
+                                        <a href="https://zkillboard.com/kill/{{ $rr->killmail_id }}/" target="_blank" rel="noopener" title="Open on zKillboard" style="font-size:0.5rem; color:#7a7a82; text-decoration:none;">↗</a>
                                         <span style="color:#7dd3fc;">{{ $rr->system_name }}</span>
                                         <span style="color:#cbd5e1; flex:1;">{{ $rr->victim_ship_type_name ?: ($isPod ? 'Capsule' : '—') }}</span>
                                     </div>

@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v9';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v10';
 
     /**
      * @return array<string, mixed>
@@ -186,6 +186,8 @@ class WarReport extends Page
         $structures = $this->upwellStructureTimeline($start, $wcAlly, $opposingAlly);
         $topImplantPods = $this->topImplantPods($start, $wcAlly, $opposingAlly);
         $leaderboards = $this->leaderboards($start, $wcAlly, $opposingAlly);
+        $liveBattles = $this->liveBattles($wcAlly, $opposingAlly);
+        $tickerKills = $this->tickerKills(12);
 
         $opposingLabel = self::CONFLICTS[$conflict]['opposing_label'];
         $opposingTint = self::CONFLICTS[$conflict]['opposing_tint'];
@@ -203,7 +205,83 @@ class WarReport extends Page
             'structures' => $structures,
             'top_implant_pods' => $topImplantPods,
             'leaderboards' => $leaderboards,
+            'live_battles' => $liveBattles,
+            'ticker_kills' => $tickerKills,
         ];
+    }
+
+    /**
+     * Battle theaters that are still live for the current conflict —
+     * either explicitly open (end_time IS NULL) or with a killmail in
+     * the last 90 minutes. Ordered newest-first; the blade ticker
+     * pulls the top few for the running banner.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $opposingAlly
+     * @return list<object>
+     */
+    private function liveBattles(array $wcAlly, array $opposingAlly): array
+    {
+        if ($wcAlly === [] || $opposingAlly === []) {
+            return [];
+        }
+        // Inner aggregate finds candidate theaters with a war-attributable
+        // km in the last 90 min; outer join pulls full theater + system
+        // metadata. Split-and-join avoids ONLY_FULL_GROUP_BY conflicts
+        // and keeps the aggregate cheap.
+        return DB::select("
+            SELECT
+                t.id,
+                t.public_slug,
+                t.primary_system_id,
+                ss.name AS system_name,
+                ss.security_status,
+                t.start_time,
+                t.end_time,
+                t.total_kills,
+                t.total_isk_lost,
+                live.newest_km
+            FROM (
+                SELECT btk.theater_id AS id, MAX(k.killed_at) AS newest_km
+                FROM _war_kms wk
+                JOIN battle_theater_killmails btk ON btk.killmail_id = wk.killmail_id
+                JOIN killmails k ON k.killmail_id = btk.killmail_id
+                GROUP BY btk.theater_id
+                HAVING newest_km > DATE_SUB(NOW(), INTERVAL 90 MINUTE)
+            ) AS live
+            JOIN battle_theaters t ON t.id = live.id
+            JOIN ref_solar_systems ss ON ss.id = t.primary_system_id
+            WHERE t.end_time IS NULL OR t.end_time > DATE_SUB(NOW(), INTERVAL 90 MINUTE)
+            ORDER BY live.newest_km DESC
+            LIMIT 6
+        ");
+    }
+
+    /**
+     * Last 24h of war-attributable kills, top by ISK, for the running
+     * banner. Trimmed payload — only what the ticker needs to render.
+     *
+     * @return list<object>
+     */
+    private function tickerKills(int $limit): array
+    {
+        return DB::select("
+            SELECT k.killmail_id, k.killed_at, k.total_value,
+                   k.victim_ship_type_name,
+                   ss.name AS system_name,
+                   en.name AS victim_name,
+                   an.name AS victim_alliance_name
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+              AND k.total_value > 0
+              AND k.enriched_at IS NOT NULL
+            ORDER BY k.total_value DESC
+            LIMIT ?
+        ", [$limit]);
     }
 
     /**
