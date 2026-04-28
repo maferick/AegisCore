@@ -519,3 +519,73 @@ All commands recorded in compute_run_log under pipeline
 
 This document is operational, not a final state. Re-read
 after backfill finishes for the actual reclaim numbers.
+
+---
+
+## Final reclaim (2026-04-28)
+
+Operator-led DROP TABLE collapsed the 7-day rollback window
+to ~12 hours after observing pollers + aggregate + portal
+pages all stable on the new daily-partitioned schema.
+
+### Timeline
+
+| When (UTC)        | Event                                                                        |
+|-------------------|------------------------------------------------------------------------------|
+| 2026-04-27 ~17:35 | Stage E.3 cutover. RENAME TABLE swap; pollers redirected to daily-partitioned market_orders. Old data parked as market_orders_old (~510 GiB).                                                          |
+| 2026-04-27–28     | Soak window. Pollers writing fresh daily partitions p20260424–28 cleanly. Aggregate cron landing yesterday's data each tick. Portal pages (predict notepad, market views) rendering against new table. |
+| 2026-04-28 06:14  | `DROP TABLE market_orders_old;` — 1 s wallclock (InnoDB .ibd unlink).        |
+
+### Reclaim measured
+
+```
+                       before drop    after drop    delta
+disk used (root /)        1.9 TiB       1.4 TiB     -500 GiB
+disk free                 1.4 TiB       2.0 TiB     +600 GiB rounded
+disk use %                  58 %         42 %        -16 pp
+mariadb data dir           884 GiB      362 GiB     -522 GiB
+```
+
+The delta on `/var/lib/mysql` matches the pre-drop
+information_schema estimate for market_orders_old (510 GiB
+data + idx). Filesystem reclaim is immediate because InnoDB
+runs with `innodb_file_per_table=ON` (each table backed by
+its own .ibd, so DROP unlinks the file directly — no
+copy-out, no fragmentation pass).
+
+### Steady-state forward
+
+market_orders now exists only in the daily-partitioned form
+swapped in at Stage E.3. Daily rotation cron (`30 3 * * *`,
+`scripts/market-orders-rotate.sh`) drops partitions older
+than the 72 h hot window and pre-creates 90 days forward.
+
+Net daily delta:
+- ~9 GiB/day inbound (poll cadence × shard count × row
+  width — see Stage A audit for the per-day measurement).
+- ~9 GiB/day outbound at the 03:30 UTC drop.
+- Net ≈ 0. Disk no longer monotonically growing.
+
+The aggregate table (`market_order_daily_aggregates`) holds
+one row per `(date, region, location, type, is_buy)` —
+~75 k rows/day inbound, no rotation (cheap to keep
+indefinitely; ~30 MiB/day estimated growth).
+
+### Aggregator scope correction
+
+Initial rolling cron scoped yesterday + today. Today's
+window collided with poller writes on the active partition
+and InnoDB raised `error 1020 ("Record has changed since
+last read")` mid-loop. Scoped to D-1 only in commit
+`1f9490d`. Today's aggregate now lands at the next
+00:17 UTC tick after midnight rollover. Acceptable lag for
+a daily aggregate (24 h max).
+
+### Status
+
+- Stage A → E.3 complete and verified
+- market_orders_old DROP'd, 522 GiB reclaimed
+- Daily partition rotation cron live
+- Aggregator rolling cron scoped to D-1, error 1020 gone
+
+No further work in scope. Document closed.
