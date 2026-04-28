@@ -45,6 +45,8 @@ Route::get('/auth/eve/donations-redirect', [EveSsoController::class, 'redirectAs
 // authenticated user can initiate it, but the controller's donor
 // gate + character-linkage check enforces who the token can belong
 // to. See EveSsoController::redirectAsMarket() + finishMarketFlow().
+Route::get('/auth/eve/war-stats', [EveSsoController::class, 'redirectAsWarStats'])
+    ->name('auth.eve.war-stats');
 Route::get('/auth/eve/market-redirect', [EveSsoController::class, 'redirectAsMarket'])
     ->middleware('auth')
     ->name('auth.eve.market.redirect');
@@ -122,6 +124,13 @@ Route::get('/war-report', [\App\Http\Controllers\PublicWarReportController::clas
 Route::get('/war-report/{conflict}', [\App\Http\Controllers\PublicWarReportController::class, 'show'])
     ->where('conflict', 'vs-(imperium|initiative)')
     ->name('public.war-report.show');
+// Per-character effort page — separate session from /portal login.
+Route::get('/war-report/{conflict}/me', [\App\Http\Controllers\WarEffortController::class, 'show'])
+    ->where('conflict', 'vs-(imperium|initiative)')
+    ->name('public.war-effort.show');
+Route::post('/war-report/{conflict}/logout', [\App\Http\Controllers\WarEffortController::class, 'logout'])
+    ->where('conflict', 'vs-(imperium|initiative)')
+    ->name('public.war-effort.logout');
 
 Route::get('/battles', [PublicBattlesController::class, 'index'])
     ->name('public.battles.index');

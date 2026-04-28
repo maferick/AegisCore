@@ -80,6 +80,10 @@ class EveSsoController extends Controller
     private const FLOW_SERVICE = 'service';
     private const FLOW_DONATIONS = 'donations';
     private const FLOW_MARKET = 'market';
+    /** Public-mirror war-effort flow — separate from the winterco
+     *  login. Stashes character_id only in session, no user record
+     *  is created. publicData + (optional) esi-killmails.read v1. */
+    private const FLOW_WAR_STATS = 'war_stats';
 
     // ---------------------------------------------------------------------
     // Login flow — anyone, publicData scope
@@ -250,6 +254,39 @@ class EveSsoController extends Controller
     }
 
     // ---------------------------------------------------------------------
+    // War-stats flow (killsineve.online public mirror) — anyone,
+    // publicData + esi-killmails.read_killmails.v1, NO user record,
+    // character id stored only in the visitor's session.
+    // ---------------------------------------------------------------------
+
+    public function redirectAsWarStats(Request $request): RedirectResponse
+    {
+        $conflict = (string) $request->query('conflict', 'vs-imperium');
+        $allowed = array_keys(\App\Filament\Portal\Pages\WarReport::CONFLICTS);
+        if (! in_array($conflict, $allowed, true)) {
+            $conflict = 'vs-imperium';
+        }
+
+        try {
+            $sso = EveSsoClient::fromConfig();
+        } catch (EveSsoException $e) {
+            Log::warning('EVE SSO misconfigured (war_stats flow)', ['error' => $e->getMessage()]);
+            return redirect('/war-report/' . $conflict)
+                ->with('error', 'EVE SSO is not configured.');
+        }
+
+        $scopes = 'publicData esi-killmails.read_killmails.v1';
+        $redirect = $sso->authorize($scopes);
+
+        $request->session()->put(self::SESSION_STATE, $redirect->state);
+        $request->session()->put(self::SESSION_VERIFIER, $redirect->codeVerifier);
+        $request->session()->put(self::SESSION_FLOW, self::FLOW_WAR_STATS);
+        $request->session()->put('war_stats.return_conflict', $conflict);
+
+        return redirect()->away($redirect->url);
+    }
+
+    // ---------------------------------------------------------------------
     // Shared callback — dispatches by session-stashed flow marker
     // ---------------------------------------------------------------------
 
@@ -305,8 +342,35 @@ class EveSsoController extends Controller
             self::FLOW_SERVICE => $this->finishServiceFlow($request, $token),
             self::FLOW_DONATIONS => $this->finishDonationsFlow($request, $token),
             self::FLOW_MARKET => $this->finishMarketFlow($request, $token),
+            self::FLOW_WAR_STATS => $this->finishWarStatsFlow($request, $token),
             default => $this->finishLoginFlow($request, $token),
         };
+    }
+
+    /**
+     * War-stats finisher — stash character identity in the visitor's
+     * session under a separate namespace and bounce them to
+     * /war-report/{conflict}/me. No User record, no Auth::login(),
+     * no token persistence (we don't need ESI calls for the stats —
+     * the killmail data already lives in our DB).
+     */
+    private function finishWarStatsFlow(Request $request, EveSsoToken $token): RedirectResponse
+    {
+        $conflict = (string) $request->session()->pull('war_stats.return_conflict', 'vs-imperium');
+
+        $request->session()->put('war_stats.character_id', (int) $token->characterId);
+        $request->session()->put('war_stats.character_name', (string) $token->characterName);
+        $request->session()->put('war_stats.scopes_granted', $token->scopes);
+        $request->session()->put('war_stats.signed_in_at', now()->toAtomString());
+
+        Log::info('EVE SSO war-stats sign-in', [
+            'character_id' => $token->characterId,
+            'character_name' => $token->characterName,
+            'scopes' => $token->scopes,
+            'conflict' => $conflict,
+        ]);
+
+        return redirect('/war-report/' . $conflict . '/me');
     }
 
     // ---------------------------------------------------------------------
@@ -720,6 +784,8 @@ class EveSsoController extends Controller
                 ->with('error', $message),
             self::FLOW_MARKET => redirect()
                 ->route('filament.portal.pages.account-settings')
+                ->with('error', $message),
+            self::FLOW_WAR_STATS => redirect('/war-report')
                 ->with('error', $message),
             default => redirect()
                 ->route('filament.admin.auth.login')

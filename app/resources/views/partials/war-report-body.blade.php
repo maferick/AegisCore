@@ -79,6 +79,18 @@
                     <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">ISK destroyed</div>
                     <div style="font-size:1.4rem; color:#fde68a; font-weight:600;">{{ $fmtIsk($totalIsk) }}</div>
                 </div>
+                @if (! empty($conflict_key))
+                    <a href="/auth/eve/war-stats?conflict={{ $conflict_key }}"
+                       style="grid-column:span 2; display:flex; align-items:center; justify-content:center; gap:0.5rem;
+                              padding:0.5rem 0.7rem;
+                              border:1px solid rgba(79,208,208,0.40);
+                              border-radius:6px;
+                              background:linear-gradient(135deg, rgba(79,208,208,0.15) 0%, rgba(0,0,0,0.5) 100%);
+                              color:#e5e5e7; text-decoration:none;
+                              font-size:0.7rem; font-weight:600; letter-spacing:0.04em;">
+                        <span>🔓</span><span>See your effort — sign in via EVE</span>
+                    </a>
+                @endif
             </div>
         </div>
     </div>
