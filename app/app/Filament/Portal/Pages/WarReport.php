@@ -58,7 +58,13 @@ class WarReport extends Page
      *  so a single missed warm cycle still serves last-known-good.
      *  Visitors never wait on a cold cache. */
     public const int VIEW_CACHE_TTL_SECONDS = 600;
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v3';
+    /** Cache key — bump the v-suffix whenever the view-data shape
+     *  changes (new top-level keys, removed keys, changed sub-array
+     *  structure). Otherwise stale cached payloads from before the
+     *  edit will trip "incomplete object" 500s in the blade once
+     *  the new compiled view tries to read keys that don't exist.
+     *  Bump → operator runs `php artisan cache:clear` once. */
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v4';
 
     /**
      * @return array<string, mixed>
