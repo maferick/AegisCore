@@ -101,6 +101,7 @@ class WarReport extends Page
 
         $hotspots = $this->systemHotspots($start, $wcAlly, $hostile);
         $structures = $this->upwellStructureTimeline($start, $wcAlly, $hostile);
+        $topImplantPods = $this->topImplantPods($start, $wcAlly, $hostile);
 
         return [
             'war_start' => $start,
@@ -111,8 +112,54 @@ class WarReport extends Page
             'columns' => $columns,
             'hotspots' => $hotspots,
             'structures' => $structures,
+            'top_implant_pods' => $topImplantPods,
             'wc_alliance_count' => count($wcAlly),
         ];
+    }
+
+    /**
+     * Top-N pod kills in the conflict by total_value. The valuation
+     * pipeline rolls implant ISK into killmails.total_value, so the
+     * highest pod values directly read out as implant losses. Pods
+     * with total_value=0 are clean clones (ESI returns items: []
+     * for those) and are intentionally excluded.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $hostile
+     * @return list<object>
+     */
+    private function topImplantPods(string $start, array $wcAlly, array $hostile): array
+    {
+        if ($wcAlly === [] || $hostile === []) {
+            return [];
+        }
+        $wcStr = implode(',', $wcAlly);
+        $hStr = implode(',', $hostile);
+        return DB::select("
+            SELECT k.killmail_id, k.killed_at, k.total_value,
+                   k.solar_system_id, ss.name AS system_name,
+                   k.victim_character_id, k.victim_alliance_id,
+                   en.name AS victim_name, an.name AS victim_alliance_name,
+                   CASE
+                       WHEN k.victim_alliance_id IN ($wcStr) THEN 'wc'
+                       WHEN k.victim_alliance_id IN ($hStr) THEN 'hostile'
+                       ELSE 'other'
+                   END AS side
+            FROM killmails k
+            JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+            WHERE k.killed_at >= ?
+              AND k.victim_ship_type_id IN (670, 33328)
+              AND k.total_value > 0
+              AND (
+                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
+                  OR
+                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
+              )
+            ORDER BY k.total_value DESC
+            LIMIT 10
+        ", [$start]);
     }
 
     /**

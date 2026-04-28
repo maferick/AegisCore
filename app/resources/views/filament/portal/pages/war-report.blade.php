@@ -94,6 +94,32 @@
         </div>
     @endif
 
+    {{-- Top implant losses (capsule kills with non-zero value) --}}
+    @if (count($top_implant_pods ?? []) > 0)
+        <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
+            <div style="display:flex; align-items:baseline; gap:0.6rem; margin-bottom:0.6rem; flex-wrap:wrap;">
+                <h2 style="margin:0; font-size:0.85rem; color:#e5e5e7;">Top implant losses</h2>
+                <span style="font-size:0.6rem; color:#7a7a82;">biggest pods by destroyed-implant value · pods with total_value=0 are clean clones (excluded)</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:0.4rem;">
+                @foreach ($top_implant_pods as $p)
+                    @php
+                        $sideTint = $p->side === 'wc' ? '#86efac' : ($p->side === 'hostile' ? '#fca5a5' : '#9ca3af');
+                    @endphp
+                    <a href="https://zkillboard.com/kill/{{ $p->killmail_id }}/" target="_blank" rel="noopener"
+                       style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
+                        <div style="display:flex; align-items:baseline; gap:0.5rem;">
+                            <span style="font-size:0.95rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $p->total_value) }}</span>
+                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? 'Goons/Init' : '—') }}</span>
+                        </div>
+                        <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.15rem;">{{ $p->victim_name ?: 'unknown pilot' }} <span style="color:#7a7a82;">· {{ $p->victim_alliance_name ?: '—' }}</span></div>
+                        <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">{{ $p->system_name }} · {{ \Carbon\Carbon::parse($p->killed_at)->format('M d H:i') }}</div>
+                    </a>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     {{-- Upwell structure timeline --}}
     @if (count($structures) > 0)
         <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
@@ -164,12 +190,29 @@
                             </summary>
                             <div style="padding:0.25rem 0; max-height:480px; overflow-y:auto;">
                                 @foreach ($rows as $r)
+                                    @php
+                                        // Pod (Capsule = 670, Capsule - Genolution 'Auroral' = 33328).
+                                        // Total = 0 on a pod means the pilot was in a clean clone:
+                                        // ESI returned items: [] for these mails (verified vs the ESI
+                                        // endpoint directly). Implants on populated pods are valued
+                                        // and rolled into total_value already, so a non-zero pod
+                                        // value here is the implant set's worth.
+                                        $isPod = in_array((int) $r->victim_ship_type_id, [670, 33328], true);
+                                        $isCleanPod = $isPod && (float) $r->total_value <= 0.0;
+                                    @endphp
                                     <div style="padding:0.3rem 0.45rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.65rem; line-height:1.35;">
                                         <div style="display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap;">
                                             <span style="color:#7a7a82; font-size:0.6rem;">{{ \Carbon\Carbon::parse($r->killed_at)->format('H:i') }}</span>
-                                            <a href="https://zkillboard.com/kill/{{ $r->killmail_id }}/" target="_blank" rel="noopener" style="color:#fde68a; text-decoration:none; font-weight:600;">{{ $fmtIsk((float) $r->total_value) }}</a>
+                                            @if ($isCleanPod)
+                                                <a href="https://zkillboard.com/kill/{{ $r->killmail_id }}/" target="_blank" rel="noopener"
+                                                   title="Empty implant set — pilot pod-cloned to a clean clone before the fight."
+                                                   style="color:#7a7a82; text-decoration:none; font-style:italic;">clean clone</a>
+                                            @else
+                                                <a href="https://zkillboard.com/kill/{{ $r->killmail_id }}/" target="_blank" rel="noopener"
+                                                   style="color:#fde68a; text-decoration:none; font-weight:600;">{{ $fmtIsk((float) $r->total_value) }}</a>
+                                            @endif
                                             <span style="color:#7dd3fc;">{{ $r->system_name }}</span>
-                                            <span style="color:#cbd5e1; flex:1;">{{ $r->victim_ship_type_name ?: '—' }}</span>
+                                            <span style="color:#cbd5e1; flex:1;">{{ $r->victim_ship_type_name ?: ($isPod ? 'Capsule' : '—') }}</span>
                                         </div>
                                         <div style="color:#9ca3af; font-size:0.6rem; margin-top:0.1rem;">
                                             <span>{{ $r->victim_name ?: 'unknown pilot' }}</span>
@@ -195,7 +238,12 @@
         @endforeach
     </div>
 
-    <p style="margin-top:1rem; font-size:0.6rem; color:#7a7a82; font-style:italic;">
-        War-attributable filter: a killmail counts when the victim's alliance is on one side AND ≥ 1 attacker is on the opposing side. Pure killmail aggregation, no scoring or judgment applied.
-    </p>
+    <div style="margin-top:1rem; padding:0.6rem 0.8rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.15); font-size:0.6rem; color:#9ca3af; line-height:1.5;">
+        <strong style="color:#cbd5e1;">Reference notes.</strong>
+        War-attributable filter: a killmail counts when the victim's alliance is on one side AND ≥ 1 attacker is on the opposing side — pure killmail aggregation, no scoring.
+        <br>
+        <strong style="color:#cbd5e1;">ISK valuation.</strong> Hull + fitted + cargo + drone + implants are summed from <code style="color:#fde68a;">killmail_items</code> at Jita prices on the kill date; capsule values reflect destroyed implants only. A pod showing <em>clean clone</em> means ESI returned <code>items: []</code> (pilot pod-cloned beforehand) — that's a real zero, not missing data. Roughly 13% of pods in this conflict carried implants; the remaining 87% were clean clones.
+        <br>
+        <strong style="color:#cbd5e1;">Drift caveats.</strong> Recent kills (last few minutes) may show empty values until enrichment completes; structure kills have <code>victim_character_id=NULL</code> and are joined by corp/alliance instead.
+    </div>
 </x-filament-panels::page>
