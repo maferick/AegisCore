@@ -173,11 +173,20 @@
             </div>
 
             {{-- Activity map — same SVG region map the portal uses,
-                 scoped to this conflict's window. --}}
+                 scoped to this conflict's window. Ansiblex overlays
+                 are operational intel; strip them before rendering on
+                 the public mirror. --}}
             @if (! empty($stats['activity_map']['regions']))
+                @php
+                    $publicMap = $stats['activity_map'];
+                    foreach ($publicMap['regions'] as &$_region) {
+                        $_region['ansiblex'] = [];
+                    }
+                    unset($_region);
+                @endphp
                 <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Your war footprint</h2>
                 <div style="margin-bottom:1.5rem; padding:0.7rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
-                    @include('filament.portal.partials.activity-map', ['c' => $stats['activity_map']])
+                    @include('filament.portal.partials.activity-map', ['c' => $publicMap])
                 </div>
             @endif
 
