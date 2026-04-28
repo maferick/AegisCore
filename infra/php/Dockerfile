@@ -53,6 +53,12 @@ RUN set -eux; \
 # fpm-pool.conf for rationale.
 COPY fpm-pool.conf /usr/local/etc/php-fpm.d/zz-aegiscore.conf
 
+# OPcache + realpath-cache + JIT tuning. Defaults assume a small VPS;
+# AegisCore runs on 32c/125GB so Filament+Livewire benefit from 4×
+# opcache memory, 5× max_accelerated_files, larger realpath cache, and
+# tracing JIT. See zz-aegiscore-opcache.ini for rationale per setting.
+COPY zz-aegiscore-opcache.ini /usr/local/etc/php/conf.d/zz-aegiscore-opcache.ini
+
 # Composer for Laravel / Filament install.
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
