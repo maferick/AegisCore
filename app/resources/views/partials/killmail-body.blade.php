@@ -357,12 +357,7 @@
             @php
                 $victimEtCorp = $km->victim_character_id ? ($eventTimeCorps[$km->victim_character_id] ?? null) : null;
             @endphp
-            @if($victimEtCorp && $victimEtCorp['corporation_id'] != $km->victim_corporation_id && $victimEtCorp['corporation_name'])
-                <img src="https://images.evetech.net/corporations/{{ $victimEtCorp['corporation_id'] }}/logo?size=32"
-                     alt="" referrerpolicy="no-referrer">
-                <span style="color: #e5a900;">{{ $victimEtCorp['corporation_name'] }}</span>
-                <span style="font-size: 0.6rem; color: #3a3a42;">(now: {{ $victim['corp'] }})</span>
-            @elseif($km->victim_corporation_id)
+            @if($km->victim_corporation_id)
                 <img src="https://images.evetech.net/corporations/{{ $km->victim_corporation_id }}/logo?size=32"
                      alt="" referrerpolicy="no-referrer">
                 {{ $victim['corp'] ?? 'Corp #'.$km->victim_corporation_id }}
@@ -371,15 +366,7 @@
                 $victimEtCorpId = $victimEtCorp['corporation_id'] ?? $km->victim_corporation_id;
                 $victimEtAlly = ($eventTimeAlliances[$victimEtCorpId] ?? null);
             @endphp
-            @if($victimEtAlly && $victimEtAlly['alliance_id'] != $km->victim_alliance_id && $victimEtAlly['alliance_name'])
-                <span style="margin: 0 0.2rem;">/</span>
-                <img src="https://images.evetech.net/alliances/{{ $victimEtAlly['alliance_id'] }}/logo?size=32"
-                     alt="" referrerpolicy="no-referrer">
-                <span style="color: #e5a900;">{{ $victimEtAlly['alliance_name'] }}</span>
-                @if($km->victim_alliance_id)
-                    <span style="font-size: 0.6rem; color: #3a3a42;">(now: {{ $victim['alliance'] ?? '#'.$km->victim_alliance_id }})</span>
-                @endif
-            @elseif($km->victim_alliance_id)
+            @if($km->victim_alliance_id)
                 <span style="margin: 0 0.2rem;">/</span>
                 <img src="https://images.evetech.net/alliances/{{ $km->victim_alliance_id }}/logo?size=32"
                      alt="" referrerpolicy="no-referrer">
@@ -482,22 +469,8 @@
                                 $etCorp = $eventTimeCorps[$att->character_id] ?? null;
                                 $currentCorp = $names[$att->corporation_id] ?? '';
                             @endphp
-                            @if($etCorp && $etCorp['corporation_id'] != $att->corporation_id && $etCorp['corporation_name'])
-                                <span style="color: #e5a900;" title="Corporation at time of kill">{{ $etCorp['corporation_name'] }}</span>
-                                <span style="font-size: 0.6rem; color: #3a3a42;"> (now: {{ $currentCorp }})</span>
-                            @else
-                                {{ $currentCorp }}
-                            @endif
-                            @php
-                                $etCorpId = $etCorp['corporation_id'] ?? $att->corporation_id;
-                                $etAlly = ($eventTimeAlliances[$etCorpId] ?? null);
-                            @endphp
-                            @if($etAlly && $etAlly['alliance_id'] != $att->alliance_id && $etAlly['alliance_name'])
-                                / <span style="color: #e5a900;" title="Alliance at time of kill">{{ $etAlly['alliance_name'] }}</span>
-                                @if($att->alliance_id && isset($names[$att->alliance_id]))
-                                    <span style="font-size: 0.6rem; color: #3a3a42;"> (now: {{ $names[$att->alliance_id] }})</span>
-                                @endif
-                            @elseif($att->alliance_id && isset($names[$att->alliance_id]))
+                            {{ $currentCorp }}
+                            @if($att->alliance_id && isset($names[$att->alliance_id]))
                                 / {{ $names[$att->alliance_id] }}
                             @endif
                         </div>

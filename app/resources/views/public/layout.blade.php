@@ -122,7 +122,7 @@
     </main>
 
     <footer class="public-footer">
-        AegisCore · read-only public view · sign in for viewer-relative intel
+        killsineve.online · public mirror
     </footer>
 </body>
 </html>

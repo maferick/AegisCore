@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v10';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v11';
 
     /**
      * @return array<string, mixed>
@@ -187,7 +187,7 @@ class WarReport extends Page
         $topImplantPods = $this->topImplantPods($start, $wcAlly, $opposingAlly);
         $leaderboards = $this->leaderboards($start, $wcAlly, $opposingAlly);
         $liveBattles = $this->liveBattles($wcAlly, $opposingAlly);
-        $tickerKills = $this->tickerKills(12);
+        $tickerKills = $this->tickerKills(12, $wcAlly, $opposingAlly);
 
         $opposingLabel = self::CONFLICTS[$conflict]['opposing_label'];
         $opposingTint = self::CONFLICTS[$conflict]['opposing_tint'];
@@ -261,10 +261,25 @@ class WarReport extends Page
      * Last 24h of war-attributable kills, top by ISK, for the running
      * banner. Trimmed payload — only what the ticker needs to render.
      *
+     * Stricter filter than _war_kms: requires the FINAL-BLOW attacker
+     * to be on the opposing bloc (vs WC victim) or on WC (vs opposing
+     * victim). The base _war_kms set marks any km where the opposing
+     * bloc had at least one attacker present, which leaks kms where
+     * the actual fight was vs a different bloc and an opposing-bloc
+     * pilot just tagged along. FB-strict tightens this to "kill was
+     * meaningfully made by this conflict's pair".
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $opposingAlly
      * @return list<object>
      */
-    private function tickerKills(int $limit): array
+    private function tickerKills(int $limit, array $wcAlly, array $opposingAlly): array
     {
+        if ($wcAlly === [] || $opposingAlly === []) {
+            return [];
+        }
+        $wcStr = implode(',', $wcAlly);
+        $opStr = implode(',', $opposingAlly);
         return DB::select("
             SELECT k.killmail_id, k.killed_at, k.total_value,
                    k.victim_ship_type_name,
@@ -274,11 +289,17 @@ class WarReport extends Page
             FROM _war_kms wk
             JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+            JOIN killmail_attackers fb ON fb.killmail_id = k.killmail_id AND fb.is_final_blow = 1
             LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
             LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
             WHERE k.killed_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
               AND k.total_value > 0
               AND k.enriched_at IS NOT NULL
+              AND (
+                  (k.victim_alliance_id IN ($wcStr) AND fb.alliance_id IN ($opStr))
+                  OR
+                  (k.victim_alliance_id IN ($opStr) AND fb.alliance_id IN ($wcStr))
+              )
             ORDER BY k.total_value DESC
             LIMIT ?
         ", [$limit]);
