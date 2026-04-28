@@ -40,7 +40,7 @@
                     Conflict floor <span style="color:#cbd5e1;">{{ \Carbon\Carbon::parse($war_start)->format('Y-m-d') }}</span> ·
                     <span style="color:#cbd5e1;">{{ $total_days }}</span> days running ·
                     <span style="color:#cbd5e1;">{{ $wc_alliance_count }}</span> WinterCo alliances ·
-                    rendered window <span style="color:#cbd5e1;">last {{ $days }} day(s)</span>
+                    all charts cover entire conflict
                 </p>
             </div>
             <div style="flex:1; min-width:240px; display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
@@ -56,21 +56,6 @@
         </div>
     </div>
 
-    {{-- Window selector --}}
-    <div style="display:flex; gap:0.4rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap; font-size:0.7rem; color:#9ca3af;">
-        <span style="text-transform:uppercase; letter-spacing:0.08em; font-size:0.6rem; color:#7a7a82;">render window</span>
-        @foreach ([1 => '24h', 3 => '3d', 7 => '7d', 14 => '14d', 30 => '30d', 60 => 'full conflict'] as $d => $lbl)
-            @php $isActive = (int) $days === $d; @endphp
-            <a href="?days={{ $d }}"
-               style="font-size:0.6rem; padding:3px 8px; border-radius:4px; text-decoration:none; text-transform:uppercase; letter-spacing:0.06em;
-                      background:{{ $isActive ? 'rgba(99,102,241,0.20)' : 'rgba(255,255,255,0.04)' }};
-                      color:{{ $isActive ? '#c7d2fe' : '#9ca3af' }};
-                      border:1px solid {{ $isActive ? 'rgba(99,102,241,0.40)' : 'rgba(255,255,255,0.10)' }};">
-                {{ $lbl }}
-            </a>
-        @endforeach
-        <span style="margin-left:0.6rem; font-style:italic; color:#7a7a82; font-size:0.6rem;">columns capped at 5,000 rows; pick a tighter window to see more recent only</span>
-    </div>
 
     {{-- System hotspots --}}
     @if (count($hotspots) > 0)
@@ -160,79 +145,176 @@
         </div>
     @endif
 
-    {{-- 3-column losses --}}
-    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:0.75rem;">
+    @php
+        // Helpers used by the per-side histogram blocks below.
+        $maxOf = function (array $rows, string $key): float {
+            $m = 0.0;
+            foreach ($rows as $r) {
+                $v = (float) ($r->{$key} ?? 0);
+                if ($v > $m) $m = $v;
+            }
+            return $m > 0 ? $m : 1.0;
+        };
+        $barCellW = '8px'; // daily-activity bar fixed cell width
+    @endphp
+
+    {{-- Per-side breakdown panels — histograms instead of raw lists --}}
+    <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.75rem;">
         @foreach (['wc', 'goon', 'init'] as $key)
             @php
                 $col = $tiles[$key];
+                $r = $rollups[$key] ?? ['daily' => [], 'ship_groups' => [], 'alliances' => [], 'systems' => [], 'hour_of_day' => []];
+                $maxDay = $maxOf($r['daily'], 'kms');
+                $maxShip = $maxOf($r['ship_groups'], 'kms');
+                $maxAlly = $maxOf($r['alliances'], 'kms');
+                $maxSys = $maxOf($r['systems'], 'kms');
+                $maxHour = $maxOf($r['hour_of_day'], 'kms');
+                $hourMap = [];
+                foreach ($r['hour_of_day'] as $h) $hourMap[(int) $h->hr] = (int) $h->kms;
+                $recentRows = $recent[$key] ?? [];
             @endphp
-            <div style="padding:0.6rem 0.7rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
+            <div style="padding:0.7rem 0.85rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.22);">
+                {{-- Header --}}
                 <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:0.5rem; padding-bottom:0.4rem; border-bottom:1px solid rgba(255,255,255,0.06);">
-                    <h3 style="margin:0; font-size:0.78rem; color:{{ $col['tint'] }}; letter-spacing:0.04em;">{{ $col['label'] }}</h3>
-                </div>
-                <div style="display:flex; gap:0.6rem; font-size:0.65rem; color:#9ca3af; margin-bottom:0.6rem;">
-                    <div><strong style="color:#e5e5e7;">{{ $fmtNum($col['count']) }}</strong> total</div>
-                    <div><strong style="color:#fde68a;">{{ $fmtIsk((float) $col['isk']) }}</strong> isk</div>
+                    <h3 style="margin:0; font-size:0.85rem; color:{{ $col['tint'] }}; letter-spacing:0.04em;">{{ $col['label'] }}</h3>
+                    <div style="font-size:0.6rem; color:#7a7a82;">
+                        <strong style="color:#e5e5e7;">{{ $fmtNum($col['count']) }}</strong> kms ·
+                        <strong style="color:#fde68a;">{{ $fmtIsk((float) $col['isk']) }}</strong>
+                    </div>
                 </div>
 
-                @php $colData = $columns[$key] ?? []; @endphp
-                @if (count($colData) === 0)
-                    <p style="font-size:0.7rem; color:#9ca3af; font-style:italic;">No losses in this window.</p>
-                @else
-                    @foreach ($colData as $day => $rows)
-                        @php
-                            $dayIsk = array_sum(array_map(fn ($r) => (float) $r->total_value, $rows));
-                        @endphp
-                        <details open style="margin-bottom:0.4rem;">
-                            <summary style="cursor:pointer; padding:0.3rem 0.5rem; background:rgba(255,255,255,0.03); border-radius:4px; font-size:0.65rem; color:#cbd5e1; list-style:none;">
-                                <strong>{{ $day }}</strong>
-                                <span style="color:#7a7a82; margin-left:0.4rem;">{{ count($rows) }} kms · {{ $fmtIsk($dayIsk) }}</span>
-                            </summary>
-                            <div style="padding:0.25rem 0; max-height:480px; overflow-y:auto;">
-                                @foreach ($rows as $r)
-                                    @php
-                                        // Pod (Capsule = 670, Capsule - Genolution 'Auroral' = 33328).
-                                        // Total = 0 on a pod means the pilot was in a clean clone:
-                                        // ESI returned items: [] for these mails (verified vs the ESI
-                                        // endpoint directly). Implants on populated pods are valued
-                                        // and rolled into total_value already, so a non-zero pod
-                                        // value here is the implant set's worth.
-                                        $isPod = in_array((int) $r->victim_ship_type_id, [670, 33328], true);
-                                        $isCleanPod = $isPod && (float) $r->total_value <= 0.0;
-                                    @endphp
-                                    <div style="padding:0.3rem 0.45rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.65rem; line-height:1.35;">
-                                        <div style="display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap;">
-                                            <span style="color:#7a7a82; font-size:0.6rem;">{{ \Carbon\Carbon::parse($r->killed_at)->format('H:i') }}</span>
-                                            @if ($isCleanPod)
-                                                <a href="https://zkillboard.com/kill/{{ $r->killmail_id }}/" target="_blank" rel="noopener"
-                                                   title="Empty implant set — pilot pod-cloned to a clean clone before the fight."
-                                                   style="color:#7a7a82; text-decoration:none; font-style:italic;">clean clone</a>
-                                            @else
-                                                <a href="https://zkillboard.com/kill/{{ $r->killmail_id }}/" target="_blank" rel="noopener"
-                                                   style="color:#fde68a; text-decoration:none; font-weight:600;">{{ $fmtIsk((float) $r->total_value) }}</a>
-                                            @endif
-                                            <span style="color:#7dd3fc;">{{ $r->system_name }}</span>
-                                            <span style="color:#cbd5e1; flex:1;">{{ $r->victim_ship_type_name ?: ($isPod ? 'Capsule' : '—') }}</span>
-                                        </div>
-                                        <div style="color:#9ca3af; font-size:0.6rem; margin-top:0.1rem;">
-                                            <span>{{ $r->victim_name ?: 'unknown pilot' }}</span>
-                                            <span style="color:#7a7a82;"> · {{ $r->victim_alliance_name ?: 'no alliance' }}</span>
-                                            @if ($r->fb_char_name)
-                                                <span style="color:#7a7a82;"> · fb </span>
-                                                <span>{{ $r->fb_char_name }}</span>
-                                                @if ($r->fb_alliance_name)
-                                                    <span style="color:#7a7a82;"> ({{ $r->fb_alliance_name }})</span>
-                                                @endif
-                                                @if ($r->fb_ship_type_name)
-                                                    <span style="color:#7a7a82;"> in {{ $r->fb_ship_type_name }}</span>
-                                                @endif
-                                            @endif
-                                        </div>
-                                    </div>
-                                @endforeach
+                {{-- Daily activity histogram --}}
+                <div style="margin-bottom:0.65rem;">
+                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.25rem;">Daily activity (kms)</div>
+                    <div style="display:flex; align-items:flex-end; height:54px; gap:1px; background:rgba(0,0,0,0.30); padding:2px; border-radius:3px;">
+                        @foreach ($r['daily'] as $d)
+                            @php
+                                $h = (int) round(((int) $d->kms / $maxDay) * 50);
+                                $h = max(1, $h);
+                                $iskFmt = $fmtIsk((float) $d->isk);
+                            @endphp
+                            <div title="{{ $d->day }} · {{ $fmtNum($d->kms) }} kms · {{ $iskFmt }}"
+                                 style="flex:1; min-width:3px; height:{{ $h }}px; background:{{ $col['tint'] }}; opacity:0.85; border-radius:1px 1px 0 0;"></div>
+                        @endforeach
+                    </div>
+                    @if (count($r['daily']) > 0)
+                        <div style="display:flex; justify-content:space-between; font-size:0.5rem; color:#7a7a82; margin-top:0.2rem;">
+                            <span>{{ $r['daily'][0]->day }}</span>
+                            <span>{{ end($r['daily'])->day }}</span>
+                        </div>
+                    @endif
+                </div>
+
+                {{-- Hour-of-day histogram --}}
+                <div style="margin-bottom:0.65rem;">
+                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.25rem;">Hour of day (UTC)</div>
+                    <div style="display:flex; align-items:flex-end; height:34px; gap:1px;">
+                        @for ($hr = 0; $hr < 24; $hr++)
+                            @php
+                                $v = $hourMap[$hr] ?? 0;
+                                $h = $v > 0 ? max(2, (int) round(($v / $maxHour) * 30)) : 1;
+                            @endphp
+                            <div title="{{ sprintf('%02d:00', $hr) }} · {{ $fmtNum($v) }} kms"
+                                 style="flex:1; height:{{ $h }}px; background:{{ $col['tint'] }}; opacity:{{ $v > 0 ? '0.85' : '0.18' }}; border-radius:1px 1px 0 0;"></div>
+                        @endfor
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.5rem; color:#7a7a82; margin-top:0.15rem;">
+                        <span>00</span><span>06</span><span>12</span><span>18</span><span>23</span>
+                    </div>
+                </div>
+
+                {{-- Ship-group breakdown --}}
+                <div style="margin-bottom:0.65rem;">
+                    <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.3rem;">Ship classes lost</div>
+                    @foreach ($r['ship_groups'] as $g)
+                        @php $w = max(2, (int) round(((int) $g->kms / $maxShip) * 100)); @endphp
+                        <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;">
+                            <div style="flex:0 0 92px; color:#cbd5e1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ $g->label }}">{{ $g->label }}</div>
+                            <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
+                                <div style="height:100%; width:{{ $w }}%; background:{{ $col['tint'] }}; opacity:0.7;"></div>
                             </div>
-                        </details>
+                            <div style="flex:0 0 38px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $fmtNum($g->kms) }}</div>
+                            <div style="flex:0 0 56px; text-align:right; color:#fde68a; font-size:0.58rem;">{{ $fmtIsk((float) $g->isk) }}</div>
+                        </div>
                     @endforeach
+                </div>
+
+                {{-- Top victim alliances --}}
+                @if (count($r['alliances']) > 0)
+                    <div style="margin-bottom:0.65rem;">
+                        <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.3rem;">Victim alliances</div>
+                        @foreach ($r['alliances'] as $a)
+                            @php $w = max(2, (int) round(((int) $a->kms / $maxAlly) * 100)); @endphp
+                            <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;">
+                                <div style="flex:0 0 110px; color:#cbd5e1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ $a->label }}">{{ $a->label }}</div>
+                                <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
+                                    <div style="height:100%; width:{{ $w }}%; background:{{ $col['tint'] }}; opacity:0.65;"></div>
+                                </div>
+                                <div style="flex:0 0 40px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $fmtNum($a->kms) }}</div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+
+                {{-- Top systems for this side --}}
+                @if (count($r['systems']) > 0)
+                    <div style="margin-bottom:0.65rem;">
+                        <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.3rem;">Top systems (where they died)</div>
+                        @foreach ($r['systems'] as $s)
+                            @php
+                                $w = max(2, (int) round(((int) $s->kms / $maxSys) * 100));
+                                $sysColor = $sevColor($s->security_status ?? null);
+                            @endphp
+                            <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;">
+                                <div style="flex:0 0 70px; color:{{ $sysColor }}; font-weight:600;">{{ $s->label }}</div>
+                                <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
+                                    <div style="height:100%; width:{{ $w }}%; background:{{ $col['tint'] }}; opacity:0.55;"></div>
+                                </div>
+                                <div style="flex:0 0 40px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $fmtNum($s->kms) }}</div>
+                                <div style="flex:0 0 56px; text-align:right; color:#fde68a; font-size:0.58rem;">{{ $fmtIsk((float) $s->isk) }}</div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+
+                {{-- Recent feed (last 15) --}}
+                @if (count($recentRows) > 0)
+                    <details style="margin-top:0.4rem;">
+                        <summary style="cursor:pointer; padding:0.3rem 0.4rem; background:rgba(255,255,255,0.03); border-radius:4px; font-size:0.6rem; color:#cbd5e1; list-style:none; text-transform:uppercase; letter-spacing:0.06em;">Recent {{ count($recentRows) }} losses</summary>
+                        <div style="padding-top:0.3rem;">
+                            @foreach ($recentRows as $rr)
+                                @php
+                                    $isPod = in_array((int) $rr->victim_ship_type_id, [670, 33328], true);
+                                    $isCleanPod = $isPod && (float) $rr->total_value <= 0.0;
+                                @endphp
+                                <div style="padding:0.25rem 0.35rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.6rem; line-height:1.3;">
+                                    <div style="display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap;">
+                                        <span style="color:#7a7a82;">{{ \Carbon\Carbon::parse($rr->killed_at)->format('M d H:i') }}</span>
+                                        @if ($isCleanPod)
+                                            <a href="https://zkillboard.com/kill/{{ $rr->killmail_id }}/" target="_blank" rel="noopener"
+                                               title="Clean clone — no implants destroyed."
+                                               style="color:#7a7a82; text-decoration:none; font-style:italic;">clean clone</a>
+                                        @else
+                                            <a href="https://zkillboard.com/kill/{{ $rr->killmail_id }}/" target="_blank" rel="noopener"
+                                               style="color:#fde68a; text-decoration:none; font-weight:600;">{{ $fmtIsk((float) $rr->total_value) }}</a>
+                                        @endif
+                                        <span style="color:#7dd3fc;">{{ $rr->system_name }}</span>
+                                        <span style="color:#cbd5e1; flex:1;">{{ $rr->victim_ship_type_name ?: ($isPod ? 'Capsule' : '—') }}</span>
+                                    </div>
+                                    <div style="color:#9ca3af; font-size:0.55rem; margin-top:0.05rem;">
+                                        {{ $rr->victim_name ?: 'unknown pilot' }}
+                                        <span style="color:#7a7a82;"> · {{ $rr->victim_alliance_name ?: 'no alliance' }}</span>
+                                        @if ($rr->fb_char_name)
+                                            <span style="color:#7a7a82;"> · fb {{ $rr->fb_char_name }}</span>
+                                            @if ($rr->fb_alliance_name)
+                                                <span style="color:#7a7a82;">({{ $rr->fb_alliance_name }})</span>
+                                            @endif
+                                        @endif
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    </details>
                 @endif
             </div>
         @endforeach

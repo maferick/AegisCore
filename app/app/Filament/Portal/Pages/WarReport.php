@@ -50,16 +50,6 @@ class WarReport extends Page
     /** The Initiative. alliance id. */
     private const int INITIATIVE_ALLIANCE_ID = 1900696668;
 
-    /** Default number of days to render expanded per column. */
-    private const int DEFAULT_DAYS = 7;
-
-    public string $sinceDays = '';
-
-    public function mount(): void
-    {
-        $this->sinceDays = (string) request()->query('days', (string) self::DEFAULT_DAYS);
-    }
-
     /**
      * @return array<string, mixed>
      */
@@ -68,10 +58,6 @@ class WarReport extends Page
         $start = self::WAR_START;
         $now = now();
         $totalDays = max(1, (int) Carbon::parse($start)->diffInDays($now));
-
-        $days = max(1, min(60, (int) ($this->sinceDays !== '' ? $this->sinceDays : self::DEFAULT_DAYS)));
-        $windowStart = $now->copy()->subDays($days - 1)->startOfDay();
-        $windowStartStr = $windowStart->format('Y-m-d H:i:s');
 
         $wcAlly = DB::table('coalition_entity_labels')
             ->where('bloc_id', self::WINTERCO_BLOC_ID)
@@ -90,13 +76,23 @@ class WarReport extends Page
             'init' => $this->sideLossTotals($start, [self::INITIATIVE_ALLIANCE_ID], $wcAlly),
         ];
 
-        // Per-column killmail rows within the rendered window. Each
-        // row carries enough metadata for the day-bucketed list to
-        // render without a second query.
-        $columns = [
-            'wc'   => $this->fetchLossesForVictims($windowStartStr, $wcAlly, $hostile),
-            'goon' => $this->fetchLossesForVictims($windowStartStr, [self::GOONS_ALLIANCE_ID], $wcAlly),
-            'init' => $this->fetchLossesForVictims($windowStartStr, [self::INITIATIVE_ALLIANCE_ID], $wcAlly),
+        // Aggregated rollups per side — daily activity, ship-group
+        // breakdown, top alliances, top systems. These power the
+        // histograms / horizontal bar charts on the page; raw
+        // killmail lists are limited to a small "recent" strip.
+        $rollups = [
+            'wc'   => $this->sideRollups($start, $wcAlly, $hostile),
+            'goon' => $this->sideRollups($start, [self::GOONS_ALLIANCE_ID], $wcAlly),
+            'init' => $this->sideRollups($start, [self::INITIATIVE_ALLIANCE_ID], $wcAlly),
+        ];
+
+        // Compact "recent" feed per side — last 15 mails so the
+        // operator can eyeball the latest activity without scrolling
+        // a 5k-row list.
+        $recent = [
+            'wc'   => $this->recentLosses($wcAlly, $hostile, 15),
+            'goon' => $this->recentLosses([self::GOONS_ALLIANCE_ID], $wcAlly, 15),
+            'init' => $this->recentLosses([self::INITIATIVE_ALLIANCE_ID], $wcAlly, 15),
         ];
 
         $hotspots = $this->systemHotspots($start, $wcAlly, $hostile);
@@ -105,11 +101,10 @@ class WarReport extends Page
 
         return [
             'war_start' => $start,
-            'window_start' => $windowStartStr,
-            'days' => $days,
             'total_days' => $totalDays,
             'totals' => $totals,
-            'columns' => $columns,
+            'rollups' => $rollups,
+            'recent' => $recent,
             'hotspots' => $hotspots,
             'structures' => $structures,
             'top_implant_pods' => $topImplantPods,
@@ -185,39 +180,121 @@ class WarReport extends Page
     }
 
     /**
-     * Every war-attributable loss for the given victim-alliance set
-     * since $windowStart, ordered newest-first, day-bucketed.
+     * Aggregated rollups for one side. Each rollup powers a chart on
+     * the war-report page. Conflict-wide window — caller passes the
+     * conflict floor.
+     *
+     * Returns:
+     *   - daily         list of { day, kms, isk } across the conflict
+     *   - ship_groups   top-12 ship groups lost (count + isk)
+     *   - alliances     top-10 victim alliances within the side bloc
+     *   - systems       top-10 systems where this side died
+     *   - hour_of_day   24-bucket histogram of killmail count
      *
      * @param  list<int>  $victimAlliances
      * @param  list<int>  $hostileAlliances
-     * @return array<string, list<object>>  bucketed by 'YYYY-MM-DD'
+     * @return array<string, mixed>
      */
-    private function fetchLossesForVictims(string $windowStart, array $victimAlliances, array $hostileAlliances): array
+    private function sideRollups(string $start, array $victimAlliances, array $hostileAlliances): array
+    {
+        if ($victimAlliances === [] || $hostileAlliances === []) {
+            return ['daily' => [], 'ship_groups' => [], 'alliances' => [], 'systems' => [], 'hour_of_day' => []];
+        }
+        $vStr = implode(',', $victimAlliances);
+        $hStr = implode(',', $hostileAlliances);
+        $where = "
+            WHERE k.killed_at >= ?
+              AND k.victim_alliance_id IN ($vStr)
+              AND EXISTS (
+                  SELECT 1 FROM killmail_attackers a
+                  WHERE a.killmail_id = k.killmail_id
+                    AND a.alliance_id IN ($hStr)
+              )
+        ";
+
+        $daily = DB::select("
+            SELECT DATE(k.killed_at) AS day, COUNT(*) AS kms, COALESCE(SUM(k.total_value),0) AS isk
+            FROM killmails k
+            $where
+            GROUP BY DATE(k.killed_at)
+            ORDER BY day ASC
+        ", [$start]);
+
+        $shipGroups = DB::select("
+            SELECT COALESCE(NULLIF(k.victim_ship_group_name,''), 'Unknown') AS label,
+                   COUNT(*) AS kms,
+                   COALESCE(SUM(k.total_value),0) AS isk
+            FROM killmails k
+            $where
+            GROUP BY label
+            ORDER BY kms DESC
+            LIMIT 12
+        ", [$start]);
+
+        $alliances = DB::select("
+            SELECT k.victim_alliance_id AS id,
+                   COALESCE(en.name, CONCAT('#', k.victim_alliance_id)) AS label,
+                   COUNT(*) AS kms,
+                   COALESCE(SUM(k.total_value),0) AS isk
+            FROM killmails k
+            LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_alliance_id AND en.category = 'alliance'
+            $where
+            GROUP BY k.victim_alliance_id, en.name
+            ORDER BY kms DESC
+            LIMIT 10
+        ", [$start]);
+
+        $systems = DB::select("
+            SELECT ss.id, ss.name AS label, ss.security_status,
+                   COUNT(*) AS kms,
+                   COALESCE(SUM(k.total_value),0) AS isk
+            FROM killmails k
+            JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
+            $where
+            GROUP BY ss.id, ss.name, ss.security_status
+            ORDER BY kms DESC
+            LIMIT 10
+        ", [$start]);
+
+        $hourOfDay = DB::select("
+            SELECT HOUR(k.killed_at) AS hr, COUNT(*) AS kms
+            FROM killmails k
+            $where
+            GROUP BY HOUR(k.killed_at)
+            ORDER BY hr ASC
+        ", [$start]);
+
+        return [
+            'daily' => $daily,
+            'ship_groups' => $shipGroups,
+            'alliances' => $alliances,
+            'systems' => $systems,
+            'hour_of_day' => $hourOfDay,
+        ];
+    }
+
+    /**
+     * Compact recent-losses strip — last $limit war-attributable kills
+     * for the side. Replaces the old 5,000-row daily list.
+     *
+     * @param  list<int>  $victimAlliances
+     * @param  list<int>  $hostileAlliances
+     * @return list<object>
+     */
+    private function recentLosses(array $victimAlliances, array $hostileAlliances, int $limit): array
     {
         if ($victimAlliances === [] || $hostileAlliances === []) {
             return [];
         }
-        $rows = DB::select("
+        return DB::select("
             SELECT
-                k.killmail_id,
-                k.killed_at,
-                k.solar_system_id,
-                ss.name AS system_name,
-                k.victim_character_id,
-                k.victim_corporation_id,
-                k.victim_alliance_id,
-                k.victim_ship_type_id,
+                k.killmail_id, k.killed_at, k.total_value, k.victim_ship_type_id,
                 k.victim_ship_type_name,
-                k.victim_ship_category_id,
-                k.total_value,
+                ss.name AS system_name,
                 vname.name AS victim_name,
                 aname.name AS victim_alliance_name,
-                fb.character_id AS fb_char_id,
                 fb_n.name AS fb_char_name,
-                fb.alliance_id AS fb_alliance_id,
-                fb_an.name AS fb_alliance_name,
-                fb.ship_type_id AS fb_ship_type_id,
-                fb_st.name AS fb_ship_type_name
+                fb_an.name AS fb_alliance_name
             FROM killmails k
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             LEFT JOIN esi_entity_names vname  ON vname.entity_id = k.victim_character_id AND vname.category = 'character'
@@ -225,25 +302,15 @@ class WarReport extends Page
             LEFT JOIN killmail_attackers fb   ON fb.killmail_id = k.killmail_id AND fb.is_final_blow = 1
             LEFT JOIN esi_entity_names fb_n   ON fb_n.entity_id = fb.character_id AND fb_n.category = 'character'
             LEFT JOIN esi_entity_names fb_an  ON fb_an.entity_id = fb.alliance_id AND fb_an.category = 'alliance'
-            LEFT JOIN ref_item_types fb_st    ON fb_st.id = fb.ship_type_id
-            WHERE k.killed_at >= ?
-              AND k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
+            WHERE k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
               AND EXISTS (
                   SELECT 1 FROM killmail_attackers a
                   WHERE a.killmail_id = k.killmail_id
                     AND a.alliance_id IN (" . implode(',', $hostileAlliances) . ")
               )
             ORDER BY k.killed_at DESC
-            LIMIT 5000
-        ", [$windowStart]);
-
-        $bucketed = [];
-        foreach ($rows as $r) {
-            $day = substr((string) $r->killed_at, 0, 10);
-            $bucketed[$day] ??= [];
-            $bucketed[$day][] = $r;
-        }
-        return $bucketed;
+            LIMIT $limit
+        ");
     }
 
     /**
