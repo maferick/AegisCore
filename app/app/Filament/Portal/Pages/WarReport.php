@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v7';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v8';
 
     /**
      * @return array<string, mixed>
@@ -535,7 +535,8 @@ class WarReport extends Page
      *
      * Returns:
      *   - daily         list of { day, kms, isk } across the conflict
-     *   - ship_groups   top-12 ship groups lost (count + isk)
+     *   - ship_groups   every ship group lost (caps/supers/titans
+     *                   pinned to top, then everything else by count)
      *   - alliances     top-10 victim alliances within the side bloc
      *   - systems       top-10 systems where this side died
      *   - hour_of_day   24-bucket histogram of killmail count
@@ -566,16 +567,22 @@ class WarReport extends Page
             ORDER BY day ASC
         ");
 
+        // group_ids 30 = Titan, 659 = Supercarrier, 547 = Carrier,
+        // 485 = Dreadnought, 1538 = Force Aux, 4594 = Lancer Dread.
+        // priority=1 surfaces those at the top regardless of count
+        // (caps trickle in but are the strategic ones to track);
+        // priority=2 is everything else, ranked by count desc.
         $shipGroups = DB::select("
             SELECT COALESCE(NULLIF(k.victim_ship_group_name,''), 'Unknown') AS label,
                    COUNT(*) AS kms,
-                   COALESCE(SUM(k.total_value),0) AS isk
+                   COALESCE(SUM(k.total_value),0) AS isk,
+                   CASE WHEN k.victim_ship_group_id IN (30, 659, 547, 485, 1538, 4594)
+                        THEN 1 ELSE 2 END AS priority
             FROM _war_kms wk
             JOIN killmails k ON k.killmail_id = wk.killmail_id
             $where
-            GROUP BY label
-            ORDER BY kms DESC
-            LIMIT 12
+            GROUP BY label, priority
+            ORDER BY priority ASC, kms DESC
         ");
 
         $alliances = DB::select("
