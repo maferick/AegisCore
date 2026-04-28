@@ -103,6 +103,16 @@ Route::get('/internal/map/{scope}', MapDataController::class)
 // renders, minus coalition bloc labels (internal intel) and the
 // portal nav chrome. Read-only; theater generation stays in the
 // admin + scheduler path. Not auth-gated by design.
+// Local proxy + cache for images.evetech.net assets. Serves the
+// standard EVE imagery via /img/{kind}/{id}?size=N — first hit fetches
+// from CCP, subsequent hits read from storage/app/eve-images. Browser
+// cache headers (max-age=7d, immutable) so most icons never re-hit
+// our app at all after the first load.
+Route::get('/img/{kind}/{id}', [\App\Http\Controllers\EveImageProxyController::class, 'show'])
+    ->where('kind', 'type|character|alliance|corporation')
+    ->whereNumber('id')
+    ->name('eve.image');
+
 // Public war-report — landing index lists active conflicts as cards;
 // /war-report/{conflict} opens the scoped 2-up report. Same chart/
 // leaderboard rollup the authed Filament page renders, plain dark

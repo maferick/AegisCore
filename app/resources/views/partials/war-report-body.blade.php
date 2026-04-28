@@ -12,6 +12,28 @@
             if ($sec >= 0.0) return '#fdba74';
             return '#fca5a5';
         };
+        // EVE imagery via local proxy (storage/app/eve-images cache).
+        // Each helper returns null for missing/zero ids so the blade
+        // can `@if ($icon)` to skip rendering. size=64 covers 16-32px
+        // display sizes at 2× DPR cleanly; bump per call when needed.
+        $shipIcon = fn (?int $id, int $size = 64) => $id ? "/img/type/{$id}?size={$size}" : null;
+        $charIcon = fn (?int $id, int $size = 64) => ($id !== null && $id > 0) ? "/img/character/{$id}?size={$size}" : null;
+        $allianceIcon = fn (?int $id, int $size = 64) => ($id !== null && $id > 0) ? "/img/alliance/{$id}?size={$size}" : null;
+    @endphp
+    <style>
+        .aegis-icon {
+            display:inline-block; vertical-align:middle;
+            border-radius:2px;
+            background: rgba(255,255,255,0.04);
+        }
+        .aegis-icon-ship    { width:16px; height:16px; }
+        .aegis-icon-ship-md { width:24px; height:24px; }
+        .aegis-icon-char    { width:16px; height:16px; border-radius:50%; }
+        .aegis-icon-char-md { width:28px; height:28px; border-radius:50%; }
+        .aegis-icon-ally    { width:14px; height:14px; }
+        .aegis-icon-ally-md { width:22px; height:22px; }
+    </style>
+    @php
         $tiles = [
             'wc' => ['label' => 'WinterCo losses', 'tint' => '#86efac', 'count' => $totals['wc']['kms'], 'isk' => $totals['wc']['isk']],
             'op' => ['label' => $opposing_label . ' losses', 'tint' => $opposing_tint, 'count' => $totals['op']['kms'], 'isk' => $totals['op']['isk']],
@@ -145,16 +167,30 @@
                         $sideTint = $m->side === 'wc' ? '#86efac' : ($m->side === 'hostile' ? $opposing_tint : '#9ca3af');
                         $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? $opposing_label : '—');
                     @endphp
+                    @php
+                        $shipUrl = $shipIcon((int) ($m->victim_ship_type_id ?? 0), 64);
+                        $allyUrl = $allianceIcon((int) ($m->victim_alliance_id ?? 0), 64);
+                    @endphp
                     <div style="position:relative; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20);">
-                        <a href="/kills/{{ $m->killmail_id }}" style="display:block; text-decoration:none; color:inherit;">
-                            <div style="display:flex; align-items:baseline; gap:0.4rem; flex-wrap:wrap;">
-                                <span style="font-size:0.55rem; color:#7a7a82; min-width:14px;">#{{ $i + 1 }}</span>
-                                <span style="font-size:1rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $m->total_value) }}</span>
-                                <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $sideLbl }}</span>
-                            </div>
-                            <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.15rem;">{{ $m->victim_ship_type_name ?: 'Unknown' }} <span style="color:#7a7a82;">· {{ $m->victim_name ?: '—' }}</span></div>
-                            <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">
-                                {{ $m->victim_alliance_name ?: '—' }} · {{ $m->system_name }} · {{ \Carbon\Carbon::parse($m->killed_at)->format('M d H:i') }}
+                        <a href="/kills/{{ $m->killmail_id }}" style="display:flex; gap:0.5rem; text-decoration:none; color:inherit;">
+                            @if ($shipUrl)
+                                <img src="{{ $shipUrl }}" loading="lazy" referrerpolicy="no-referrer" alt=""
+                                     class="aegis-icon aegis-icon-ship-md" style="width:32px; height:32px; flex:0 0 32px; align-self:center;">
+                            @endif
+                            <div style="flex:1; min-width:0;">
+                                <div style="display:flex; align-items:baseline; gap:0.4rem; flex-wrap:wrap;">
+                                    <span style="font-size:0.55rem; color:#7a7a82; min-width:14px;">#{{ $i + 1 }}</span>
+                                    <span style="font-size:1rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $m->total_value) }}</span>
+                                    <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $sideLbl }}</span>
+                                </div>
+                                <div style="font-size:0.7rem; color:#cbd5e1; margin-top:0.15rem;">{{ $m->victim_ship_type_name ?: 'Unknown' }} <span style="color:#7a7a82;">· {{ $m->victim_name ?: '—' }}</span></div>
+                                <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem; display:flex; align-items:center; gap:0.25rem;">
+                                    @if ($allyUrl)
+                                        <img src="{{ $allyUrl }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-ally">
+                                    @endif
+                                    <span>{{ $m->victim_alliance_name ?: '—' }}</span>
+                                    <span>· {{ $m->system_name }} · {{ \Carbon\Carbon::parse($m->killed_at)->format('M d H:i') }}</span>
+                                </div>
                             </div>
                         </a>
                         <a href="https://zkillboard.com/kill/{{ $m->killmail_id }}/" target="_blank" rel="noopener"
@@ -186,13 +222,30 @@
                 <div style="padding:0.65rem 0.8rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
                     <h3 style="margin:0 0 0.4rem 0; font-size:0.72rem; color:{{ $b['tint'] }}; letter-spacing:0.04em;">{{ $b['title'] }}</h3>
                     @foreach ($b['rows'] as $i => $row)
-                        @php $w = max(2, (int) round(((int) $row->{$b['metric']} / $maxMetric) * 100)); @endphp
+                        @php
+                            $w = max(2, (int) round(((int) $row->{$b['metric']} / $maxMetric) * 100));
+                            $isAlliance = str_contains((string) $b['title'], 'alliances');
+                            $iconUrl = $isAlliance
+                                ? $allianceIcon((int) ($row->id ?? 0), 64)
+                                : $charIcon((int) ($row->id ?? 0), 64);
+                            $allyIconUrl = $allianceIcon((int) ($row->alliance_id ?? 0), 64);
+                        @endphp
                         <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; padding:0.18rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
                             <span style="flex:0 0 14px; color:#7a7a82; font-size:0.55rem;">{{ $i + 1 }}</span>
+                            @if ($iconUrl)
+                                <img src="{{ $iconUrl }}" loading="lazy" referrerpolicy="no-referrer" alt=""
+                                     class="aegis-icon {{ $isAlliance ? 'aegis-icon-ally-md' : 'aegis-icon-char-md' }}">
+                            @endif
                             <div style="flex:1; min-width:0;">
                                 <div style="color:#e5e5e7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ $row->name }}">{{ $row->name }}</div>
                                 @if (isset($row->alliance_name))
-                                    <div style="color:#7a7a82; font-size:0.55rem;">{{ $row->alliance_name }}</div>
+                                    <div style="color:#7a7a82; font-size:0.55rem; display:flex; align-items:center; gap:0.25rem;">
+                                        @if (! $isAlliance && $allyIconUrl)
+                                            <img src="{{ $allyIconUrl }}" loading="lazy" referrerpolicy="no-referrer" alt=""
+                                                 class="aegis-icon aegis-icon-ally">
+                                        @endif
+                                        <span>{{ $row->alliance_name }}</span>
+                                    </div>
                                 @endif
                             </div>
                             <div style="flex:0 0 70px;">
@@ -414,10 +467,15 @@
                                 @php
                                     $isPod = in_array((int) $rr->victim_ship_type_id, [670, 33328], true);
                                     $isCleanPod = $isPod && (float) $rr->total_value <= 0.0;
+                                    $rrShip = $shipIcon((int) ($rr->victim_ship_type_id ?? 0), 64);
+                                    $rrChar = $charIcon((int) ($rr->victim_character_id ?? 0), 64);
+                                    $rrAlly = $allianceIcon((int) ($rr->victim_alliance_id ?? 0), 64);
+                                    $fbAlly = $allianceIcon((int) ($rr->fb_alliance_id ?? 0), 64);
                                 @endphp
                                 <div style="padding:0.25rem 0.35rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.6rem; line-height:1.3;">
                                     <div style="display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap;">
                                         <span style="color:#7a7a82;">{{ \Carbon\Carbon::parse($rr->killed_at)->format('M d H:i') }}</span>
+                                        @if ($rrShip)<img src="{{ $rrShip }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-ship">@endif
                                         @if ($isCleanPod)
                                             <a href="/kills/{{ $rr->killmail_id }}"
                                                title="Clean clone — no implants destroyed."
@@ -430,12 +488,16 @@
                                         <span style="color:#7dd3fc;">{{ $rr->system_name }}</span>
                                         <span style="color:#cbd5e1; flex:1;">{{ $rr->victim_ship_type_name ?: ($isPod ? 'Capsule' : '—') }}</span>
                                     </div>
-                                    <div style="color:#9ca3af; font-size:0.55rem; margin-top:0.05rem;">
-                                        {{ $rr->victim_name ?: 'unknown pilot' }}
-                                        <span style="color:#7a7a82;"> · {{ $rr->victim_alliance_name ?: 'no alliance' }}</span>
+                                    <div style="color:#9ca3af; font-size:0.55rem; margin-top:0.05rem; display:flex; align-items:center; gap:0.25rem; flex-wrap:wrap;">
+                                        @if ($rrChar)<img src="{{ $rrChar }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-char">@endif
+                                        <span>{{ $rr->victim_name ?: 'unknown pilot' }}</span>
+                                        <span style="color:#7a7a82;">·</span>
+                                        @if ($rrAlly)<img src="{{ $rrAlly }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-ally">@endif
+                                        <span style="color:#7a7a82;">{{ $rr->victim_alliance_name ?: 'no alliance' }}</span>
                                         @if ($rr->fb_char_name)
-                                            <span style="color:#7a7a82;"> · fb {{ $rr->fb_char_name }}</span>
+                                            <span style="color:#7a7a82;">· fb {{ $rr->fb_char_name }}</span>
                                             @if ($rr->fb_alliance_name)
+                                                @if ($fbAlly)<img src="{{ $fbAlly }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-ally">@endif
                                                 <span style="color:#7a7a82;">({{ $rr->fb_alliance_name }})</span>
                                             @endif
                                         @endif
@@ -504,12 +566,18 @@
             <div class="aegis-ticker">
                 <div class="aegis-ticker-track">
                     @foreach (array_merge($ticker, $ticker) as $t)
+                        @php
+                            $tShip = $shipIcon((int) ($t->victim_ship_type_id ?? 0), 64);
+                            $tAlly = $allianceIcon((int) ($t->victim_alliance_id ?? 0), 64);
+                        @endphp
                         <a href="/kills/{{ $t->killmail_id }}" class="aegis-ticker-item">
+                            @if ($tShip)<img src="{{ $tShip }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-ship">@endif
                             <span style="color:#fde68a; font-weight:700;">{{ $fmtIsk((float) $t->total_value) }}</span>
                             <span style="color:#cbd5e1;">{{ $t->victim_ship_type_name ?: '?' }}</span>
                             <span style="color:#7dd3fc;">{{ $t->system_name }}</span>
                             <span style="color:#9ca3af; font-size:0.55rem;">{{ $t->victim_name ?: '—' }}</span>
-                            <span style="color:#7a7a82; font-size:0.55rem;">· {{ $t->victim_alliance_name ?: '—' }}</span>
+                            @if ($tAlly)<img src="{{ $tAlly }}" loading="lazy" referrerpolicy="no-referrer" alt="" class="aegis-icon aegis-icon-ally">@endif
+                            <span style="color:#7a7a82; font-size:0.55rem;">{{ $t->victim_alliance_name ?: '—' }}</span>
                             <span style="color:#7a7a82; font-size:0.5rem;">{{ \Carbon\Carbon::parse($t->killed_at)->format('H:i') }}</span>
                         </a>
                     @endforeach

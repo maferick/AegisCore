@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v11';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v12';
     public const string THEATER_IDS_CACHE_KEY = 'war_report.theater_ids.v1';
 
     /**
@@ -296,7 +296,10 @@ class WarReport extends Page
         $opStr = implode(',', $opposingAlly);
         return DB::select("
             SELECT k.killmail_id, k.killed_at, k.total_value,
+                   k.victim_ship_type_id,
                    k.victim_ship_type_name,
+                   k.victim_character_id,
+                   k.victim_alliance_id,
                    ss.name AS system_name,
                    en.name AS victim_name,
                    an.name AS victim_alliance_name
@@ -535,6 +538,7 @@ class WarReport extends Page
         // Top 10 most valuable single kills — any war-attributable km.
         $mostValuable = DB::select("
             SELECT k.killmail_id, k.killed_at, k.total_value,
+                   k.victim_ship_type_id,
                    k.victim_ship_type_name, k.victim_character_id, k.victim_alliance_id,
                    ss.name AS system_name,
                    en.name AS victim_name, an.name AS victim_alliance_name,
@@ -558,6 +562,7 @@ class WarReport extends Page
         // avoid blue-on-blue inflation.
         $topPilotsKills = DB::select("
             SELECT a.character_id AS id,
+                   a.alliance_id AS alliance_id,
                    COALESCE(en.name, CONCAT('#', a.character_id)) AS name,
                    COALESCE(an.name, '?') AS alliance_name,
                    COUNT(DISTINCT a.killmail_id) AS kills,
@@ -569,7 +574,7 @@ class WarReport extends Page
             LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
             WHERE a.character_id IS NOT NULL AND a.character_id > 0
               AND a.attacker_side <> wk.victim_side
-            GROUP BY a.character_id, en.name, an.name
+            GROUP BY a.character_id, a.alliance_id, en.name, an.name
             ORDER BY kills DESC
             LIMIT 10
         ");
@@ -577,6 +582,7 @@ class WarReport extends Page
         // Top pilots by losses (count + isk).
         $topPilotsLosses = DB::select("
             SELECT k.victim_character_id AS id,
+                   k.victim_alliance_id AS alliance_id,
                    COALESCE(en.name, CONCAT('#', k.victim_character_id)) AS name,
                    COALESCE(an.name, '?') AS alliance_name,
                    COUNT(*) AS losses,
@@ -586,7 +592,7 @@ class WarReport extends Page
             LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
             LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
             WHERE k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
-            GROUP BY k.victim_character_id, en.name, an.name
+            GROUP BY k.victim_character_id, k.victim_alliance_id, en.name, an.name
             ORDER BY losses DESC
             LIMIT 10
         ");
@@ -909,9 +915,13 @@ class WarReport extends Page
             SELECT
                 k.killmail_id, k.killed_at, k.total_value, k.victim_ship_type_id,
                 k.victim_ship_type_name,
+                k.victim_character_id,
+                k.victim_alliance_id,
                 ss.name AS system_name,
                 vname.name AS victim_name,
                 aname.name AS victim_alliance_name,
+                fb.character_id AS fb_char_id,
+                fb.alliance_id AS fb_alliance_id,
                 fb_n.name AS fb_char_name,
                 fb_an.name AS fb_alliance_name
             FROM _war_kms wk
