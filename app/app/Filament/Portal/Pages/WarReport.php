@@ -7,6 +7,7 @@ namespace App\Filament\Portal\Pages;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
@@ -50,10 +51,40 @@ class WarReport extends Page
     /** The Initiative. alliance id. */
     private const int INITIATIVE_ALLIANCE_ID = 1900696668;
 
+    /** Cache TTL — buildViewData scans 26+ days of killmails +
+     *  killmail_attackers and takes ~90s uncached, which trips nginx's
+     *  60s timeout. We rely on a 4-minute scheduled warmer to keep the
+     *  cache populated; the 10-minute TTL is double the warm interval
+     *  so a single missed warm cycle still serves last-known-good.
+     *  Visitors never wait on a cold cache. */
+    public const int VIEW_CACHE_TTL_SECONDS = 600;
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v3';
+
     /**
      * @return array<string, mixed>
      */
     public function getViewData(): array
+    {
+        // TTL alone controls freshness; the 4-minute war-report-warm
+        // scheduled task (routes/console.php) refreshes via
+        // Cache::put + buildViewData() before the TTL expires. If the
+        // warmer ever misses a cycle and the cache is empty, we
+        // fall back to building inline — slow but correct.
+        return Cache::remember(
+            self::VIEW_CACHE_KEY,
+            self::VIEW_CACHE_TTL_SECONDS,
+            fn (): array => $this->buildViewData(),
+        );
+    }
+
+    /**
+     * Public so the war-report-warm scheduled task can drive the
+     * rebuild without going through Cache::remember (which would
+     * short-circuit on a still-warm value and skip the refresh).
+     *
+     * @return array<string, mixed>
+     */
+    public function buildViewData(): array
     {
         $start = self::WAR_START;
         $now = now();
@@ -67,6 +98,13 @@ class WarReport extends Page
         $wcAlly = array_map('intval', $wcAlly);
 
         $hostile = [self::GOONS_ALLIANCE_ID, self::INITIATIVE_ALLIANCE_ID];
+
+        // Materialise the war-attributable killmail set into a per-
+        // connection temp table once, then JOIN against it for every
+        // downstream query. Without this each query repeats the same
+        // ~12s EXISTS scan over 1.6M+ killmail_attackers rows; uncached
+        // build dropped from ~92s to single-digit seconds in profiling.
+        $this->materialiseWarKillSet($start, $wcAlly, $hostile);
 
         // Side-level totals + ISK across the entire conflict (not just
         // the rendered window) — used in the hero banner and tile row.
@@ -147,19 +185,14 @@ class WarReport extends Page
                        WHEN k.victim_alliance_id IN ($hStr) THEN 'hostile'
                        ELSE 'other'
                    END AS side
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
             LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND (
-                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
-                  OR
-                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
-              )
             ORDER BY k.total_value DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         // Top pilots by attacker involvements (war-attributable kills).
         // COUNT(DISTINCT killmail_id) so a pilot appearing on multiple
@@ -169,23 +202,19 @@ class WarReport extends Page
             SELECT a.character_id AS id,
                    COALESCE(en.name, CONCAT('#', a.character_id)) AS name,
                    COALESCE(an.name, '?') AS alliance_name,
-                   COUNT(DISTINCT k.killmail_id) AS kills,
+                   COUNT(DISTINCT a.killmail_id) AS kills,
                    SUM(CASE WHEN a.is_final_blow = 1 THEN k.total_value ELSE 0 END) AS isk_fb
-            FROM killmails k
-            JOIN killmail_attackers a ON a.killmail_id = k.killmail_id
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
             LEFT JOIN esi_entity_names en ON en.entity_id = a.character_id AND en.category = 'character'
             LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND a.character_id IS NOT NULL AND a.character_id > 0
-              AND (
-                  (a.alliance_id IN ($wcStr) AND k.victim_alliance_id IN ($hStr))
-                  OR
-                  (a.alliance_id IN ($hStr) AND k.victim_alliance_id IN ($wcStr))
-              )
+            WHERE a.character_id IS NOT NULL AND a.character_id > 0
+              AND a.attacker_side <> wk.victim_side
             GROUP BY a.character_id, en.name, an.name
             ORDER BY kills DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         // Top pilots by losses (count + isk).
         $topPilotsLosses = DB::select("
@@ -194,41 +223,31 @@ class WarReport extends Page
                    COALESCE(an.name, '?') AS alliance_name,
                    COUNT(*) AS losses,
                    SUM(k.total_value) AS isk_lost
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
             LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
-              AND (
-                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
-                  OR
-                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
-              )
+            WHERE k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
             GROUP BY k.victim_character_id, en.name, an.name
             ORDER BY losses DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         // Top alliances by total kills (any member on attacker list of
         // a war-attributable km).
         $topAllianceKills = DB::select("
             SELECT a.alliance_id AS id,
                    COALESCE(an.name, CONCAT('#', a.alliance_id)) AS name,
-                   COUNT(DISTINCT k.killmail_id) AS kills
-            FROM killmails k
-            JOIN killmail_attackers a ON a.killmail_id = k.killmail_id
+                   COUNT(DISTINCT a.killmail_id) AS kills
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
             LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND a.alliance_id IS NOT NULL AND a.alliance_id > 0
-              AND (
-                  (a.alliance_id IN ($wcStr) AND k.victim_alliance_id IN ($hStr))
-                  OR
-                  (a.alliance_id IN ($hStr) AND k.victim_alliance_id IN ($wcStr))
-              )
+            WHERE a.alliance_id IS NOT NULL AND a.alliance_id > 0
+              AND a.attacker_side <> wk.victim_side
             GROUP BY a.alliance_id, an.name
             ORDER BY kills DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         // Top alliances by total losses (already partially in
         // sideRollups, but here without the per-side filter so a
@@ -238,19 +257,14 @@ class WarReport extends Page
                    COALESCE(an.name, CONCAT('#', k.victim_alliance_id)) AS name,
                    COUNT(*) AS losses,
                    SUM(k.total_value) AS isk_lost
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND k.victim_alliance_id IS NOT NULL
-              AND (
-                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
-                  OR
-                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
-              )
+            WHERE k.victim_alliance_id IS NOT NULL
             GROUP BY k.victim_alliance_id, an.name
             ORDER BY isk_lost DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         return [
             'most_valuable' => $mostValuable,
@@ -289,21 +303,16 @@ class WarReport extends Page
                        WHEN k.victim_alliance_id IN ($hStr) THEN 'hostile'
                        ELSE 'other'
                    END AS side
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
             LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND k.victim_ship_type_id IN (670, 33328)
+            WHERE k.victim_ship_type_id IN (670, 33328)
               AND k.total_value > 0
-              AND (
-                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
-                  OR
-                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
-              )
             ORDER BY k.total_value DESC
             LIMIT 10
-        ", [$start]);
+        ");
     }
 
     /**
@@ -316,24 +325,90 @@ class WarReport extends Page
         if ($victimAlliances === [] || $hostileAlliances === []) {
             return ['kms' => 0, 'isk' => 0.0];
         }
-        // EXISTS rather than JOIN: a killmail has many attackers, so a
-        // JOIN multiplies SUM(total_value) by the per-side attacker
-        // count. With supers + titans now priced at ~150B by the zkill
-        // backfill, that bug ballooned a 28k-row Goonswarm side from a
-        // realistic 800T to a nonsense 2.3 quadrillion.
+        // Reads from the materialised _war_kms temp table built once
+        // per request — see materialiseWarKillSet(). Filters by victim
+        // side and the (separate) opposing-attacker set so we can
+        // reuse a single shared killmail set without rebuilding it
+        // for each (victim, hostile) pair.
         $row = DB::selectOne("
             SELECT COUNT(*) AS n,
                    COALESCE(SUM(k.total_value), 0) AS isk
-            FROM killmails k
-            WHERE k.killed_at >= ?
-              AND k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            WHERE k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
               AND EXISTS (
                   SELECT 1 FROM killmail_attackers a
                   WHERE a.killmail_id = k.killmail_id
                     AND a.alliance_id IN (" . implode(',', $hostileAlliances) . ")
               )
-        ", [$start]);
+        ");
         return ['kms' => (int) $row->n, 'isk' => (float) $row->isk];
+    }
+
+    /**
+     * One-shot temp-table population. Holds every war-attributable
+     * killmail_id. Connection-scoped — automatically dropped at end
+     * of the request.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $hostile
+     */
+    private function materialiseWarKillSet(string $start, array $wcAlly, array $hostile): void
+    {
+        $wcStr = implode(',', $wcAlly);
+        $hStr = implode(',', $hostile);
+
+        DB::statement("DROP TEMPORARY TABLE IF EXISTS _war_kms");
+        DB::statement("DROP TEMPORARY TABLE IF EXISTS _war_attackers");
+
+        // ENGINE=MEMORY for the lookup speed; MariaDB falls back to
+        // MyISAM on overflow but with ~85k rows we stay well within
+        // tmp_table_size. PRIMARY KEY ensures O(1) JOIN lookups.
+        DB::statement("
+            CREATE TEMPORARY TABLE _war_kms (
+                killmail_id BIGINT UNSIGNED NOT NULL,
+                victim_side ENUM('wc','hostile') NOT NULL,
+                PRIMARY KEY (killmail_id),
+                KEY (victim_side)
+            ) ENGINE=MEMORY
+        ");
+        DB::statement("
+            INSERT INTO _war_kms (killmail_id, victim_side)
+            SELECT k.killmail_id,
+                   CASE WHEN k.victim_alliance_id IN ($wcStr) THEN 'wc' ELSE 'hostile' END
+            FROM killmails k
+            WHERE k.killed_at >= ?
+              AND (
+                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
+                  OR
+                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
+              )
+        ", [$start]);
+
+        // Side-tagged attacker rows for the war's killmails. Pilot
+        // leaderboards group by character_id, so we materialise the
+        // (killmail × attacker) projection once instead of re-joining
+        // killmail_attackers in every leaderboard query.
+        DB::statement("
+            CREATE TEMPORARY TABLE _war_attackers (
+                killmail_id BIGINT UNSIGNED NOT NULL,
+                character_id BIGINT UNSIGNED NULL,
+                alliance_id BIGINT UNSIGNED NULL,
+                is_final_blow TINYINT(1) NOT NULL DEFAULT 0,
+                attacker_side ENUM('wc','hostile') NOT NULL,
+                KEY (character_id),
+                KEY (alliance_id),
+                KEY (killmail_id, character_id)
+            ) ENGINE=MEMORY
+        ");
+        DB::statement("
+            INSERT INTO _war_attackers (killmail_id, character_id, alliance_id, is_final_blow, attacker_side)
+            SELECT a.killmail_id, a.character_id, a.alliance_id, a.is_final_blow,
+                   CASE WHEN a.alliance_id IN ($wcStr) THEN 'wc' ELSE 'hostile' END
+            FROM _war_kms wk
+            JOIN killmail_attackers a ON a.killmail_id = wk.killmail_id
+            WHERE a.alliance_id IN ($wcStr) OR a.alliance_id IN ($hStr)
+        ");
     }
 
     /**
@@ -358,68 +433,69 @@ class WarReport extends Page
             return ['daily' => [], 'ship_groups' => [], 'alliances' => [], 'systems' => [], 'hour_of_day' => []];
         }
         $vStr = implode(',', $victimAlliances);
-        $hStr = implode(',', $hostileAlliances);
+        // hostileAlliances unused now — _war_kms already encodes the
+        // war-attributable filter for both directions.
+        unset($hostileAlliances);
         $where = "
-            WHERE k.killed_at >= ?
-              AND k.victim_alliance_id IN ($vStr)
-              AND EXISTS (
-                  SELECT 1 FROM killmail_attackers a
-                  WHERE a.killmail_id = k.killmail_id
-                    AND a.alliance_id IN ($hStr)
-              )
+            WHERE k.victim_alliance_id IN ($vStr)
         ";
 
         $daily = DB::select("
             SELECT DATE(k.killed_at) AS day, COUNT(*) AS kms, COALESCE(SUM(k.total_value),0) AS isk
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             $where
             GROUP BY DATE(k.killed_at)
             ORDER BY day ASC
-        ", [$start]);
+        ");
 
         $shipGroups = DB::select("
             SELECT COALESCE(NULLIF(k.victim_ship_group_name,''), 'Unknown') AS label,
                    COUNT(*) AS kms,
                    COALESCE(SUM(k.total_value),0) AS isk
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             $where
             GROUP BY label
             ORDER BY kms DESC
             LIMIT 12
-        ", [$start]);
+        ");
 
         $alliances = DB::select("
             SELECT k.victim_alliance_id AS id,
                    COALESCE(en.name, CONCAT('#', k.victim_alliance_id)) AS label,
                    COUNT(*) AS kms,
                    COALESCE(SUM(k.total_value),0) AS isk
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_alliance_id AND en.category = 'alliance'
             $where
             GROUP BY k.victim_alliance_id, en.name
             ORDER BY kms DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         $systems = DB::select("
             SELECT ss.id, ss.name AS label, ss.security_status,
                    COUNT(*) AS kms,
                    COALESCE(SUM(k.total_value),0) AS isk
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             $where
             GROUP BY ss.id, ss.name, ss.security_status
             ORDER BY kms DESC
             LIMIT 10
-        ", [$start]);
+        ");
 
         $hourOfDay = DB::select("
             SELECT HOUR(k.killed_at) AS hr, COUNT(*) AS kms
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             $where
             GROUP BY HOUR(k.killed_at)
             ORDER BY hr ASC
-        ", [$start]);
+        ");
 
         return [
             'daily' => $daily,
@@ -443,6 +519,7 @@ class WarReport extends Page
         if ($victimAlliances === [] || $hostileAlliances === []) {
             return [];
         }
+        unset($hostileAlliances);
         return DB::select("
             SELECT
                 k.killmail_id, k.killed_at, k.total_value, k.victim_ship_type_id,
@@ -452,7 +529,8 @@ class WarReport extends Page
                 aname.name AS victim_alliance_name,
                 fb_n.name AS fb_char_name,
                 fb_an.name AS fb_alliance_name
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             LEFT JOIN esi_entity_names vname  ON vname.entity_id = k.victim_character_id AND vname.category = 'character'
             LEFT JOIN esi_entity_names aname  ON aname.entity_id = k.victim_alliance_id AND aname.category = 'alliance'
@@ -460,11 +538,6 @@ class WarReport extends Page
             LEFT JOIN esi_entity_names fb_n   ON fb_n.entity_id = fb.character_id AND fb_n.category = 'character'
             LEFT JOIN esi_entity_names fb_an  ON fb_an.entity_id = fb.alliance_id AND fb_an.category = 'alliance'
             WHERE k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
-              AND EXISTS (
-                  SELECT 1 FROM killmail_attackers a
-                  WHERE a.killmail_id = k.killmail_id
-                    AND a.alliance_id IN (" . implode(',', $hostileAlliances) . ")
-              )
             ORDER BY k.killed_at DESC
             LIMIT $limit
         ");
@@ -483,25 +556,18 @@ class WarReport extends Page
         if ($wcAlly === [] || $hostile === []) {
             return [];
         }
-        $wcStr = implode(',', $wcAlly);
-        $hStr = implode(',', $hostile);
         return DB::select("
             SELECT k.solar_system_id, ss.name AS system_name, ss.security_status,
-                   COUNT(DISTINCT k.killmail_id) AS km_count,
+                   COUNT(*) AS km_count,
                    COALESCE(SUM(k.total_value), 0) AS isk_destroyed,
                    MAX(k.killed_at) AS last_km
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
-            WHERE k.killed_at >= ?
-              AND (
-                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
-                  OR
-                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
-              )
             GROUP BY k.solar_system_id, ss.name, ss.security_status
             ORDER BY km_count DESC
             LIMIT 20
-        ", [$start]);
+        ");
     }
 
     /**
@@ -530,18 +596,13 @@ class WarReport extends Page
                        WHEN k.victim_alliance_id IN ($hStr) THEN 'hostile'
                        ELSE 'other'
                    END AS side
-            FROM killmails k
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
             JOIN ref_solar_systems ss ON ss.id = k.solar_system_id
             LEFT JOIN esi_entity_names vc ON vc.entity_id = k.victim_corporation_id AND vc.category = 'corporation'
             LEFT JOIN esi_entity_names va ON va.entity_id = k.victim_alliance_id AND va.category = 'alliance'
-            WHERE k.killed_at >= ?
-              AND k.victim_ship_category_id = 65
-              AND (
-                  (k.victim_alliance_id IN ($wcStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($hStr)))
-                  OR
-                  (k.victim_alliance_id IN ($hStr) AND EXISTS(SELECT 1 FROM killmail_attackers a WHERE a.killmail_id = k.killmail_id AND a.alliance_id IN ($wcStr)))
-              )
+            WHERE k.victim_ship_category_id = 65
             ORDER BY k.killed_at DESC
-        ", [$start]);
+        ");
     }
 }

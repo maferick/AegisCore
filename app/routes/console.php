@@ -420,3 +420,24 @@ Schedule::command('eve-log:fetch-dscan')
     ->onOneServer()
     ->withoutOverlapping(10)
     ->name('eve-log-fetch-dscan');
+
+// War report cache warmer — buildViewData() across 26+ days of
+// conflict data trips nginx's 60s timeout on a cold cache. Build
+// fresh in the background, then atomically swap into cache via
+// Cache::put — the previous (still-warm) entry keeps serving until
+// the new one lands, so visitors never see a cold-cache 504.
+// Runs every 2 min so the 10-min TTL has plenty of headroom for
+// scheduler hiccups.
+Schedule::call(function (): void {
+    $data = (new \App\Filament\Portal\Pages\WarReport())->buildViewData();
+    \Illuminate\Support\Facades\Cache::put(
+        \App\Filament\Portal\Pages\WarReport::VIEW_CACHE_KEY,
+        $data,
+        \App\Filament\Portal\Pages\WarReport::VIEW_CACHE_TTL_SECONDS,
+    );
+})
+    ->name('war-report-warm')
+    ->cron('*/2 * * * *')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(10);
