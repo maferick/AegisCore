@@ -43,12 +43,21 @@
         </div>
 
         <details style="margin-bottom:0.75rem; font-size:0.7rem; color:#9ca3af;">
-            <summary style="cursor:pointer;">about these hypotheses</summary>
+            <summary style="cursor:pointer;">about these hypotheses + related surfaces</summary>
             <p style="margin:0.4rem 0; line-height:1.5;">
-                These are AI-generated <strong>hypotheses</strong>, not verdicts. Each card
-                shows confidence band, evidence, source rows, caveats, and why-strengthened.
+                AI-generated <strong>hypotheses</strong>, not verdicts. Each card shows
+                confidence, evidence, source rows, caveats, and why-strengthened.
                 AI proposes; you commit. Per
                 <a href="/docs/adr/0013-hypothesis-confidence-framing.md" style="color:#a5b4fc;">ADR 0013</a>.
+            </p>
+            <p style="margin:0.4rem 0; line-height:1.5;">
+                Related surfaces:
+                <a href="/portal/counter-intel" style="color:#a5b4fc;">Counter-Intel Overview</a>
+                (signal distribution + recent escalations + friendly-pilot red-contact panel) ·
+                <a href="/portal/counter-intel/watchlist" style="color:#a5b4fc;">Watchlist</a>
+                (operator-managed review queue) ·
+                <a href="/portal/intelligence/verified" style="color:#a5b4fc;">Verified intelligence</a>
+                (pinned findings).
             </p>
         </details>
 
