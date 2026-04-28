@@ -32,6 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
         \App\Domains\KillmailsBattleTheaters\Console\EvaluateRoleCalibrationCommand::class,
         \App\Domains\KillmailsBattleTheaters\Console\PromoteWeightVersionCommand::class,
         \App\Domains\KillmailsBattleTheaters\Console\ComputeAutoDoctrinesCommand::class,
+        \App\Domains\Killmails\Console\BackfillZkillCapitalValuesCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // nginx terminates TLS and forwards to php-fpm over plain HTTP, setting
