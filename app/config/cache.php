@@ -125,6 +125,10 @@ return [
     |
     */
 
-    'serializable_classes' => false,
+    // stdClass on the allow-list so DB::select() result rows can
+    // round-trip through Redis cache. stdClass has no methods, so
+    // there's no gadget-chain risk in deserializing it. Anything
+    // beyond stdClass remains blocked.
+    'serializable_classes' => [\stdClass::class],
 
 ];
