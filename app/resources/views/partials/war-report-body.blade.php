@@ -96,53 +96,10 @@
         </style>
     @endif
 
-    {{-- Top-kills ticker — last 24h of biggest war-attributable kills,
-         marquee-scrolling. Each item links to our internal kill page;
-         the small zKill badge is a secondary out-bound link. --}}
-    @php $ticker = $ticker_kills ?? []; @endphp
-    @if (count($ticker) > 0)
-        <div style="margin-bottom:1rem; padding:0.4rem 0; border:1px solid rgba(255,255,255,0.06); border-radius:6px; background:rgba(0,0,0,0.30); overflow:hidden;">
-            <div style="display:flex; align-items:center; gap:0.7rem; padding:0 0.7rem 0.4rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">
-                <span style="color:#fde68a;">⚡</span>
-                <span>Hot kills · last 24h · scrolling</span>
-            </div>
-            <div class="aegis-ticker">
-                <div class="aegis-ticker-track">
-                    @foreach (array_merge($ticker, $ticker) as $t)
-                        <a href="/kills/{{ $t->killmail_id }}" class="aegis-ticker-item">
-                            <span style="color:#fde68a; font-weight:700;">{{ $fmtIsk((float) $t->total_value) }}</span>
-                            <span style="color:#cbd5e1;">{{ $t->victim_ship_type_name ?: '?' }}</span>
-                            <span style="color:#7dd3fc;">{{ $t->system_name }}</span>
-                            <span style="color:#9ca3af; font-size:0.55rem;">{{ $t->victim_name ?: '—' }}</span>
-                            <span style="color:#7a7a82; font-size:0.55rem;">· {{ $t->victim_alliance_name ?: '—' }}</span>
-                            <span style="color:#7a7a82; font-size:0.5rem;">{{ \Carbon\Carbon::parse($t->killed_at)->format('H:i') }}</span>
-                        </a>
-                    @endforeach
-                </div>
-            </div>
-        </div>
-        <style>
-            .aegis-ticker { width:100%; overflow:hidden; padding-top:0.4rem; }
-            .aegis-ticker-track {
-                display:flex; gap:1.6rem;
-                animation: aegis-ticker-scroll 90s linear infinite;
-                will-change: transform;
-            }
-            .aegis-ticker:hover .aegis-ticker-track { animation-play-state: paused; }
-            .aegis-ticker-item {
-                display:inline-flex; align-items:baseline; gap:0.4rem;
-                padding:0.2rem 0.5rem;
-                font-size:0.65rem; white-space:nowrap;
-                text-decoration:none; color:inherit;
-                border-left:2px solid rgba(253,224,71,0.20);
-            }
-            .aegis-ticker-item:hover { background:rgba(253,224,71,0.05); }
-            @keyframes aegis-ticker-scroll {
-                from { transform: translateX(0); }
-                to   { transform: translateX(-50%); }
-            }
-        </style>
-    @endif
+    {{-- Hot-kills ticker is rendered at the bottom of the file as a
+         viewport-fixed bar; see the .aegis-ticker-fixed block below.
+         A spacer leaves room for the bar so the last section isn't
+         hidden behind it. --}}
 
 
     {{-- System hotspots --}}
@@ -526,4 +483,81 @@
             @endforeach
         </div>
     </div>
+
+    {{-- Fixed-bottom hot-kills ticker — always visible while scrolling.
+         Spacer above keeps the last section from sliding under it. --}}
+    @php $ticker = $ticker_kills ?? []; @endphp
+    @if (count($ticker) > 0)
+        <div style="height:54px;"></div>{{-- spacer matching the fixed ticker height --}}
+        <div class="aegis-ticker-fixed">
+            <div class="aegis-ticker-fixed-label">
+                <span style="color:#fde68a;">⚡</span>
+                <span>Hot kills · last 24h</span>
+            </div>
+            <div class="aegis-ticker">
+                <div class="aegis-ticker-track">
+                    @foreach (array_merge($ticker, $ticker) as $t)
+                        <a href="/kills/{{ $t->killmail_id }}" class="aegis-ticker-item">
+                            <span style="color:#fde68a; font-weight:700;">{{ $fmtIsk((float) $t->total_value) }}</span>
+                            <span style="color:#cbd5e1;">{{ $t->victim_ship_type_name ?: '?' }}</span>
+                            <span style="color:#7dd3fc;">{{ $t->system_name }}</span>
+                            <span style="color:#9ca3af; font-size:0.55rem;">{{ $t->victim_name ?: '—' }}</span>
+                            <span style="color:#7a7a82; font-size:0.55rem;">· {{ $t->victim_alliance_name ?: '—' }}</span>
+                            <span style="color:#7a7a82; font-size:0.5rem;">{{ \Carbon\Carbon::parse($t->killed_at)->format('H:i') }}</span>
+                        </a>
+                    @endforeach
+                </div>
+            </div>
+        </div>
+        <style>
+            .aegis-ticker-fixed {
+                position: fixed;
+                bottom: 0; left: 0; right: 0;
+                z-index: 90;
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                padding: 0.45rem 0.75rem;
+                background: rgba(5, 7, 9, 0.92);
+                border-top: 1px solid rgba(253, 224, 71, 0.25);
+                box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.55);
+                backdrop-filter: blur(6px);
+                -webkit-backdrop-filter: blur(6px);
+            }
+            .aegis-ticker-fixed-label {
+                flex: 0 0 auto;
+                font-size: 0.55rem;
+                color: #7a7a82;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                white-space: nowrap;
+                padding-right: 0.6rem;
+                border-right: 1px solid rgba(255,255,255,0.08);
+            }
+            .aegis-ticker { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+            .aegis-ticker-track {
+                display: flex;
+                gap: 1.6rem;
+                animation: aegis-ticker-scroll 90s linear infinite;
+                will-change: transform;
+            }
+            .aegis-ticker:hover .aegis-ticker-track { animation-play-state: paused; }
+            .aegis-ticker-item {
+                display: inline-flex;
+                align-items: baseline;
+                gap: 0.4rem;
+                padding: 0.15rem 0.5rem;
+                font-size: 0.7rem;
+                white-space: nowrap;
+                text-decoration: none;
+                color: inherit;
+                border-left: 2px solid rgba(253, 224, 71, 0.20);
+            }
+            .aegis-ticker-item:hover { background: rgba(253, 224, 71, 0.06); }
+            @keyframes aegis-ticker-scroll {
+                from { transform: translateX(0); }
+                to   { transform: translateX(-50%); }
+            }
+        </style>
+    @endif
 
