@@ -102,8 +102,9 @@
             color: var(--muted);
         }
     </style>
+    @include('partials.aegis-public-bg')
 </head>
-<body>
+<body class="aegis-public-bg" data-page="{{ $page_class ?? 'default' }}">
     <header class="public-topbar">
         <a class="brand" href="/war-report">⚔ killsineve.online</a>
         <nav>

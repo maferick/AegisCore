@@ -5,6 +5,7 @@
     'battles_link_label' => isset($scoped_label) && $scoped_label
         ? 'Battles · ' . $scoped_label
         : 'Battles',
+    'page_class' => isset($scoped_conflict) && $scoped_conflict ? $scoped_conflict : 'battles',
 ])
 
 @section('title', isset($scoped_label) && $scoped_label

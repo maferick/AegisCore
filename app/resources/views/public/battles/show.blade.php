@@ -1,4 +1,4 @@
-@extends('public.layout')
+@extends('public.layout', ['page_class' => 'battles'])
 
 @section('title', 'Battle in '.($theater->primarySystem?->name ?? '#'.$theater->primary_system_id))
 

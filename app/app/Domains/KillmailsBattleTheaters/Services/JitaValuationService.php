@@ -83,23 +83,15 @@ final class JitaValuationService
             );
         }
 
-        // Step 2: For any type_ids not resolved from market_history,
-        // fall back to ref_item_types.base_price.
-        $missing = array_values(array_diff($typeIds, array_keys($result)));
-
-        if ($missing !== []) {
-            $basePrices = DB::table('ref_item_types')
-                ->whereIn('id', $missing)
-                ->whereNotNull('base_price')
-                ->where('base_price', '>', 0)
-                ->pluck('base_price', 'id');
-
-            foreach ($basePrices as $tid => $price) {
-                $result[(int) $tid] = ValuationResult::fromBasePrice((string) $price);
-            }
-        }
-
-        // Step 3: Any still-unresolved types get unavailable.
+        // Operator policy (2026-04-28): Jita-only valuations. The
+        // CCP base_price fallback was producing 2,000× over-valuations
+        // for compressed ores (NPC base 3.07M/unit vs Jita ~1,400/u),
+        // dragging Mackinaw / Prowler kms to 200-900B totals. zKill
+        // remains the authoritative fallback at the killmail level
+        // (BackfillZkillCapitalValuesCommand --suspicious-cargo). We
+        // do NOT use ref_item_types.base_price here; missing types
+        // collapse to `unavailable` and the calling pipeline records
+        // them as zero, with the audit-trail source intact.
         foreach ($typeIds as $tid) {
             if (! isset($result[$tid])) {
                 $result[$tid] = ValuationResult::unavailable();

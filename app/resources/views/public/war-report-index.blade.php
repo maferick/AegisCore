@@ -48,8 +48,9 @@
         }
         a { color: inherit; }
     </style>
+    @include('partials.aegis-public-bg')
 </head>
-<body>
+<body class="aegis-public-bg" data-page="war-report">
     <div class="container">
         <div class="public-header">
             <h1>⚔ killsineve.online — Active Conflicts</h1>

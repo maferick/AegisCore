@@ -22,6 +22,8 @@
             max-width: 1480px;
             margin: 0 auto;
             padding: 1.5rem 1.25rem 3rem;
+            position: relative;
+            z-index: 1;
         }
         .public-header {
             display: flex;
@@ -54,8 +56,26 @@
             font-size: 0.7em;
         }
     </style>
+    @include('partials.aegis-public-bg')
 </head>
-<body>
+<body class="aegis-public-bg" data-page="{{ $conflict_key ?? 'war-report' }}">
+    {{-- Watermark logos — Fraternity (anchor of WinterCo, the panda
+         coalition) on the left, opposing-bloc anchor on the right.
+         Pulled via the local /img proxy so the page renders without
+         hitting CCP for them. --}}
+    @php
+        $opposingAnchorId = match ($conflict_key ?? '') {
+            'vs-imperium'   => 1354830081,  // Goonswarm Federation (bee)
+            'vs-initiative' =>  1900696668, // The Initiative.
+            default => null,
+        };
+    @endphp
+    @if ($opposingAnchorId)
+        <div class="aegis-watermarks" aria-hidden="true">
+            <img class="aegis-watermark left"  src="/img/alliance/99003581?size=512" alt="" referrerpolicy="no-referrer">
+            <img class="aegis-watermark right" src="/img/alliance/{{ $opposingAnchorId }}?size=512" alt="" referrerpolicy="no-referrer">
+        </div>
+    @endif
     <div class="container">
         <div class="public-header">
             <h1>⚔ {{ $display_label ?? 'War Report' }}</h1>
