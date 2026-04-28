@@ -414,6 +414,15 @@ class EveSsoController extends Controller
     {
         $conflict = (string) $request->session()->pull('war_stats.return_conflict', 'vs-imperium');
 
+        // Hard boundary: the war-stats flow MUST NOT log the visitor
+        // in as a Filament User. If the visitor happened to have an
+        // existing /portal session cookie (shared subdomain cookie),
+        // tear it down here so the redirect can't accidentally land
+        // on /admin or /portal. We're a read-only public mirror.
+        if (Auth::check()) {
+            Auth::logout();
+        }
+
         $request->session()->put('war_stats.character_id', (int) $token->characterId);
         $request->session()->put('war_stats.character_name', (string) $token->characterName);
         $request->session()->put('war_stats.scopes_granted', $token->scopes);

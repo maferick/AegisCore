@@ -79,7 +79,16 @@ final class EveSsoClient
     {
         $public = config('eve.sso.public', []);
         if (empty($public['client_id']) || empty($public['client_secret']) || empty($public['callback_url'])) {
-            return self::fromConfig();
+            // Fail loud — operator drew an explicit "never share creds
+            // with the internal winterco app" boundary, so we DO NOT
+            // silently fall back. Setting the public env vars is a
+            // hard requirement for the war-stats SSO flow.
+            throw new EveSsoException(
+                'Public EVE SSO is not configured. Set EVE_SSO_PUBLIC_CLIENT_ID, '
+                .'EVE_SSO_PUBLIC_CLIENT_SECRET, and EVE_SSO_PUBLIC_CALLBACK_URL in '
+                .'.env (separate CCP application from the internal winterco one), '
+                .'then `php artisan config:clear`.',
+            );
         }
         $cfg = config('eve.sso');
         return new self(
