@@ -38,7 +38,6 @@
                 <p style="margin:0; font-size:0.78rem; color:#9ca3af;">
                     Conflict floor <span style="color:#cbd5e1;">{{ \Carbon\Carbon::parse($war_start)->format('Y-m-d') }}</span> ·
                     <span style="color:#cbd5e1;">{{ $total_days }}</span> days running ·
-                    <span style="color:#cbd5e1;">{{ $wc_alliance_count }}</span> WinterCo alliances ·
                     all charts cover entire conflict
                 </p>
             </div>
@@ -331,27 +330,6 @@
                     </div>
                 @endif
 
-                {{-- Top systems for this side --}}
-                @if (count($r['systems']) > 0)
-                    <div style="margin-bottom:0.65rem;">
-                        <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.3rem;">Top systems (where they died)</div>
-                        @foreach ($r['systems'] as $s)
-                            @php
-                                $w = max(2, (int) round(((int) $s->kms / $maxSys) * 100));
-                                $sysColor = $sevColor($s->security_status ?? null);
-                            @endphp
-                            <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;">
-                                <div style="flex:0 0 70px; color:{{ $sysColor }}; font-weight:600;">{{ $s->label }}</div>
-                                <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
-                                    <div style="height:100%; width:{{ $w }}%; background:{{ $col['tint'] }}; opacity:0.55;"></div>
-                                </div>
-                                <div style="flex:0 0 40px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $fmtNum($s->kms) }}</div>
-                                <div style="flex:0 0 56px; text-align:right; color:#fde68a; font-size:0.58rem;">{{ $fmtIsk((float) $s->isk) }}</div>
-                            </div>
-                        @endforeach
-                    </div>
-                @endif
-
                 {{-- Recent feed (last 15) --}}
                 @if (count($recentRows) > 0)
                     <details open style="margin-top:0.4rem;">
@@ -393,5 +371,47 @@
                 @endif
             </div>
         @endforeach
+    </div>
+
+    {{-- Top systems (where each side died) — full-width footer
+         section. Per-side block was misaligning the per-side panel
+         heights, so rendered here as a single row mirroring the
+         upwell-structure timeline style. --}}
+    <div style="margin-top:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
+        <div style="display:flex; align-items:baseline; gap:0.6rem; margin-bottom:0.6rem; flex-wrap:wrap;">
+            <h2 style="margin:0; font-size:0.85rem; color:#e5e5e7;">Top systems by side losses</h2>
+            <span style="font-size:0.6rem; color:#7a7a82;">where each side died · entire conflict</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.6rem;">
+            @foreach (['wc', 'goon', 'init'] as $key)
+                @php
+                    $col = $tiles[$key];
+                    $r = $rollups[$key] ?? ['systems' => []];
+                    $sysRows = $r['systems'] ?? [];
+                    $maxSys = $maxOf($sysRows, 'kms');
+                @endphp
+                <div style="padding:0.55rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20);">
+                    <div style="font-size:0.6rem; color:{{ $col['tint'] }}; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:0.35rem;">{{ $col['label'] }}</div>
+                    @if (count($sysRows) === 0)
+                        <p style="font-size:0.65rem; color:#9ca3af; font-style:italic;">No data.</p>
+                    @else
+                        @foreach ($sysRows as $s)
+                            @php
+                                $w = max(2, (int) round(((int) $s->kms / $maxSys) * 100));
+                                $sysColor = $sevColor($s->security_status ?? null);
+                            @endphp
+                            <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.62rem; margin-bottom:0.15rem;">
+                                <div style="flex:0 0 70px; color:{{ $sysColor }}; font-weight:600;">{{ $s->label }}</div>
+                                <div style="flex:1; height:11px; background:rgba(255,255,255,0.04); border-radius:2px; overflow:hidden;">
+                                    <div style="height:100%; width:{{ $w }}%; background:{{ $col['tint'] }}; opacity:0.55;"></div>
+                                </div>
+                                <div style="flex:0 0 40px; text-align:right; color:#e5e5e7; font-weight:600;">{{ $fmtNum($s->kms) }}</div>
+                                <div style="flex:0 0 56px; text-align:right; color:#fde68a; font-size:0.58rem;">{{ $fmtIsk((float) $s->isk) }}</div>
+                            </div>
+                        @endforeach
+                    @endif
+                </div>
+            @endforeach
+        </div>
     </div>
 
