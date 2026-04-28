@@ -48,34 +48,67 @@ class CounterIntelDashboard extends Page
         $blocName = DB::table('coalition_blocs')->where('id', $blocId)->value('display_name')
             ?? "Bloc #{$blocId}";
 
-        // Top candidates by latest band — pull from ci_render_diagnostics
-        // (the audit table) joined to esi_entity_names + watchlist
-        // status. Band priority sort: critical > high > elevated > note_only.
+        // Top candidates — single source of truth is the fused
+        // hypothesis table written by phase18-hypothesis-fusion.
+        // The Command Surface (/portal/counter-intel/command) is
+        // the primary; this Overview page surfaces the same top
+        // entries so rankings agree across surfaces.
+        //
+        // Map fusion rows back to the Overview's existing column
+        // shape so the blade render stays the same.
         $topRows = DB::select(<<<'SQL'
-            SELECT d.character_id, d.rendered_band, d.confidence, d.flag_count, d.note_count,
-                   d.declared_in_bloc, d.rendered_at, en.name AS character_name,
+            SELECT h.primary_character_id AS character_id,
+                   CASE h.severity
+                     WHEN 'critical' THEN 'critical'
+                     WHEN 'elevated' THEN 'high'
+                     WHEN 'watch'    THEN 'elevated'
+                     ELSE 'note_only'
+                   END AS rendered_band,
+                   h.confidence,
+                   h.evidence_count AS flag_count,
+                   h.corroboration_count AS note_count,
+                   1 AS declared_in_bloc,
+                   h.last_strengthened_at AS rendered_at,
+                   en.name AS character_name,
                    w.status AS watchlist_status, w.id AS watchlist_id
-              FROM ci_render_diagnostics d
+              FROM counter_intel_hypotheses h
               LEFT JOIN esi_entity_names en
-                ON en.entity_id = d.character_id AND en.category = 'character'
+                ON en.entity_id = h.primary_character_id AND en.category = 'character'
               LEFT JOIN ci_watchlist_entries w
-                ON w.character_id = d.character_id AND w.viewer_bloc_id = d.viewer_bloc_id
-             WHERE d.viewer_bloc_id = ?
-               AND d.rendered_on >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-               AND d.rendered_band IN ('critical', 'high', 'elevated')
-             ORDER BY FIELD(d.rendered_band, 'critical', 'high', 'elevated'),
-                      d.flag_count DESC, d.note_count DESC, d.rendered_at DESC
-             LIMIT 50
+                ON w.character_id = h.primary_character_id AND w.viewer_bloc_id = h.viewer_bloc_id
+             WHERE h.viewer_bloc_id = ?
+               AND h.status <> 'archived'
+               AND h.confidence IN ('high', 'medium', 'confirmed')
+             ORDER BY FIELD(h.confidence, 'confirmed', 'high', 'medium'),
+                      FIELD(h.severity, 'critical', 'elevated', 'watch', 'info'),
+                      h.suspicion_score DESC,
+                      h.last_strengthened_at DESC
+             LIMIT 25
         SQL, [$blocId]);
 
-        // Signal-band distribution (last 24h diagnostics).
-        $bandDist = DB::table('ci_render_diagnostics')
+        // Signal-band distribution — same fusion source as the top
+        // candidates so the Overview's KPI counters match what the
+        // Command Surface shows. Maps fusion severity → legacy
+        // band names so the blade's existing tile colours still
+        // line up.
+        $sevToBand = [
+            'critical' => 'critical',
+            'elevated' => 'high',
+            'watch'    => 'elevated',
+            'info'     => 'note_only',
+        ];
+        $bandDist = ['critical' => 0, 'high' => 0, 'elevated' => 0, 'note_only' => 0, 'clean' => 0];
+        $rawSev = DB::table('counter_intel_hypotheses')
             ->where('viewer_bloc_id', $blocId)
-            ->where('rendered_at', '>=', now()->subDay())
-            ->groupBy('rendered_band')
-            ->select('rendered_band', DB::raw('COUNT(*) AS n'))
-            ->pluck('n', 'rendered_band')
+            ->where('status', '<>', 'archived')
+            ->groupBy('severity')
+            ->select('severity', DB::raw('COUNT(*) AS n'))
+            ->pluck('n', 'severity')
             ->all();
+        foreach ($rawSev as $sev => $n) {
+            $b = $sevToBand[$sev] ?? 'note_only';
+            $bandDist[$b] = ($bandDist[$b] ?? 0) + (int) $n;
+        }
 
         // Recent escalations (last 7 days).
         $escalations = DB::select(<<<'SQL'
