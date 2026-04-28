@@ -851,6 +851,11 @@ services:
     volumes:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/nginx/conf.d:/etc/nginx/conf.d:ro
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/nginx/certs:/etc/nginx/certs:ro
+      # ACME / Let's Encrypt: webroot for the http-01 challenge plus
+      # the certbot config dir mounted read-only so the nginx ssl
+      # directives can read /etc/letsencrypt/live/<host>/fullchain.pem.
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/nginx/letsencrypt:/var/www/letsencrypt
+      - ${AEGISCORE_ROOT:-/opt/aegiscore}/letsencrypt/etc:/etc/letsencrypt:ro
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/docker/nginx/logs:/var/log/nginx
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html:ro
     depends_on:

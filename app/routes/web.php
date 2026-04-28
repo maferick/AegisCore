@@ -103,6 +103,13 @@ Route::get('/internal/map/{scope}', MapDataController::class)
 // renders, minus coalition bloc labels (internal intel) and the
 // portal nav chrome. Read-only; theater generation stays in the
 // admin + scheduler path. Not auth-gated by design.
+// Public war-report mirror — same chart/leaderboard rollup the
+// authed Filament page renders, but in a plain dark layout suitable
+// for the public killsineve.online host. Read-only; auth-free by
+// design. Cached at the data layer (10 min TTL, 2-min warmer).
+Route::get('/war-report', \App\Http\Controllers\PublicWarReportController::class)
+    ->name('public.war-report');
+
 Route::get('/battles', [PublicBattlesController::class, 'index'])
     ->name('public.battles.index');
 // Accept either numeric id (back-compat with old share links) or
