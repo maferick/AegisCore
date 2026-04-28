@@ -34,14 +34,29 @@
             </p>
         </div>
 
-        {{-- Tier strip --}}
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
+        {{-- Tier strip · KPI tiles with category icons + heavier
+             number weight for scan-in-seconds. --}}
+        @php
+            $tierIcons = ['strategic' => '⬤', 'hot' => '▲', 'contested' => '◆', 'watch' => '◇', 'safe' => '○'];
+        @endphp
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.5rem; margin-bottom:1rem;">
             @foreach (['strategic','hot','contested','watch','safe'] as $tier)
-                @php $count = $by_tier[$tier] ?? 0; @endphp
-                <a href="?tier={{ $tier }}" class="fi-section rounded-xl shadow-sm" style="text-decoration:none; padding:0.6rem; text-align:center; background:{{ $tierBg[$tier] }}; border:1px solid {{ $tierColors[$tier] }}33;">
-                    <div style="font-size:0.55rem; text-transform:uppercase; letter-spacing:0.08em; color:{{ $tierColors[$tier] }};">{{ $tier }}</div>
-                    <div style="font-size:1.4rem; font-weight:600; color:#e5e5e7; margin-top:0.2rem;">{{ $count }}</div>
-                    <div style="font-size:0.55rem; color:#6b7280; margin-top:0.1rem;">systems</div>
+                @php
+                    $count = $by_tier[$tier] ?? 0;
+                    $col = $tierColors[$tier];
+                @endphp
+                <a href="?tier={{ $tier }}" class="fi-section rounded-xl shadow-sm"
+                   style="text-decoration:none; padding:0.7rem; text-align:center;
+                          background:{{ $tierBg[$tier] }};
+                          border:1px solid {{ $count > 0 && in_array($tier, ['strategic','hot'], true) ? $col : $col.'33' }};">
+                    <div style="display:flex; gap:0.4rem; align-items:center; justify-content:center;">
+                        <span style="font-size:0.85rem; color:{{ $col }};">{{ $tierIcons[$tier] }}</span>
+                        <div style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $col }}; font-weight:600;">{{ $tier }}</div>
+                    </div>
+                    <div style="font-size:1.7rem; font-weight:700; color:{{ $count > 0 ? '#e5e7eb' : '#7a7a82' }}; margin-top:0.3rem; line-height:1;">{{ $count }}</div>
+                    <div style="font-size:0.55rem; color:#6b7280; margin-top:0.25rem;">systems</div>
                 </a>
             @endforeach
         </div>

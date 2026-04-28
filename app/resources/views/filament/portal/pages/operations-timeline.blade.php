@@ -35,6 +35,8 @@
             </p>
         </div>
 
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
         {{-- Filters --}}
         <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
             <form method="get" style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">

@@ -115,10 +115,31 @@ class OperationsHeatmap extends Page
             ->where('window_end_date', $latestDate)
             ->max('computed_at');
 
+        // Verdict — single-line theatre temperature for the
+        // operator. Same severity ladder as the rest of the
+        // dashboards.
+        $strategic = (int) ($byTier['strategic'] ?? 0);
+        $hot       = (int) ($byTier['hot']       ?? 0);
+        $contested = (int) ($byTier['contested'] ?? 0);
+        $details = [];
+        if ($strategic > 0) $details[] = "{$strategic} strategic";
+        if ($hot > 0)       $details[] = "{$hot} hot";
+        if ($contested > 0) $details[] = "{$contested} contested";
+        if ($strategic > 0) {
+            $verdict = ['severity' => 'critical', 'headline' => 'Strategic-tier systems active', 'details' => $details];
+        } elseif ($hot > 0) {
+            $verdict = ['severity' => 'elevated', 'headline' => 'Hot-tier systems present', 'details' => $details];
+        } elseif ($contested > 0) {
+            $verdict = ['severity' => 'warning', 'headline' => 'Contested systems present', 'details' => $details];
+        } else {
+            $verdict = ['severity' => 'info', 'headline' => 'Theatre quiet — no tier-flagged systems', 'details' => []];
+        }
+
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $blocId,
             'viewer_bloc_name' => $blocName,
+            'verdict' => $verdict,
             'latest_date' => $latestDate,
             'latest_computed_at' => $latestComputedAt,
             'rows' => $rows,

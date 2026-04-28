@@ -104,10 +104,33 @@ class OperationsTimeline extends Page
             ->select('incident_type', DB::raw('COUNT(*) AS n'))
             ->pluck('n', 'incident_type')->all();
 
+        // Verdict — operator's first-glance answer for the
+        // selected window. Severity ladder mirrors the rest of
+        // the dashboards so colour pattern transfers.
+        $coalition = (int) ($countsBySev['coalition_level'] ?? 0);
+        $escalation = (int) ($countsBySev['escalation'] ?? 0);
+        $strategic = (int) ($countsBySev['strategic'] ?? 0);
+        $tactical  = (int) ($countsBySev['tactical']  ?? 0);
+        $details = [];
+        if ($coalition > 0)  $details[] = "{$coalition} coalition-level";
+        if ($escalation > 0) $details[] = "{$escalation} escalation";
+        if ($strategic > 0)  $details[] = "{$strategic} strategic";
+        if ($tactical > 0)   $details[] = "{$tactical} tactical";
+        if ($coalition > 0 || $escalation > 0) {
+            $verdict = ['severity' => 'critical', 'headline' => 'Coalition-level / escalation incidents in window', 'details' => $details];
+        } elseif ($strategic > 0) {
+            $verdict = ['severity' => 'elevated', 'headline' => 'Strategic-severity incidents in window', 'details' => $details];
+        } elseif ($tactical > 0) {
+            $verdict = ['severity' => 'warning', 'headline' => 'Tactical-severity incidents in window', 'details' => $details];
+        } else {
+            $verdict = ['severity' => 'info', 'headline' => 'Quiet window — no notable incidents', 'details' => []];
+        }
+
         return [
             'no_bloc' => false,
             'viewer_bloc_id' => $blocId,
             'viewer_bloc_name' => $blocName,
+            'verdict' => $verdict,
             'rows' => $rows,
             'counts_by_severity' => $countsBySev,
             'counts_by_type' => $countsByType,

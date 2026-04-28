@@ -18,6 +18,30 @@
             ];
         @endphp
 
+        <x-verdict-banner :verdict="$verdict ?? null" />
+
+        {{-- KPI tiles · open-queue severity counts --}}
+        @php
+            $sevIcons = ['urgent' => '⬤', 'elevated' => '▲', 'watch' => '◆', 'info' => '○'];
+        @endphp
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-bottom:0.75rem;">
+            @foreach (['urgent', 'elevated', 'watch', 'info'] as $sev)
+                @php
+                    $col = $sevColors[$sev] ?? '#9ca3af';
+                    $n = $sev_counts[$sev] ?? 0;
+                @endphp
+                <div class="fi-section rounded-xl bg-white p-3 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                     style="text-align:center; {{ $n > 0 && in_array($sev, ['urgent','elevated'], true) ? 'border:1px solid '.$col.';' : '' }}">
+                    <div style="display:flex; gap:0.4rem; align-items:center; justify-content:center;">
+                        <span style="font-size:0.85rem; color:{{ $col }};">{{ $sevIcons[$sev] }}</span>
+                        <div style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.1em; color:{{ $col }}; font-weight:600;">{{ $sev }}</div>
+                    </div>
+                    <div style="font-size:1.7rem; font-weight:700; color:{{ $n > 0 ? '#e5e7eb' : '#7a7a82' }}; margin-top:0.3rem; line-height:1;">{{ number_format($n) }}</div>
+                    <div style="font-size:0.55rem; color:#6b7280; margin-top:0.25rem;">open in queue</div>
+                </div>
+            @endforeach
+        </div>
+
         {{-- Filters --}}
         <div class="fi-section rounded-xl bg-white p-4 shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 mb-3">
             <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; font-size:0.7rem;">

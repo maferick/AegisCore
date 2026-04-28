@@ -216,8 +216,40 @@ class StrategicAlerts extends Page
             'dismissed' => DB::table('strategic_alerts')->where('viewer_bloc_id', $blocId)->whereNotNull('dismissed_at')->count(),
         ];
 
+        // Severity counts on the OPEN queue — drives the verdict
+        // headline + KPI tiles. Operator wants "what's hot right
+        // now?", not historical totals.
+        $sev = DB::table('strategic_alerts')
+            ->where('viewer_bloc_id', $blocId)
+            ->whereNull('dismissed_at')
+            ->groupBy('severity')
+            ->selectRaw('severity, COUNT(*) as n')
+            ->pluck('n', 'severity')
+            ->all();
+        $sevCounts = [
+            'urgent'   => (int) ($sev['urgent']   ?? 0),
+            'elevated' => (int) ($sev['elevated'] ?? 0),
+            'watch'    => (int) ($sev['watch']    ?? 0),
+            'info'     => (int) ($sev['info']     ?? 0),
+        ];
+        $details = [];
+        if ($sevCounts['urgent']   > 0) $details[] = "{$sevCounts['urgent']} urgent";
+        if ($sevCounts['elevated'] > 0) $details[] = "{$sevCounts['elevated']} elevated";
+        if ($sevCounts['watch']    > 0) $details[] = "{$sevCounts['watch']} watch";
+        if ($sevCounts['urgent'] > 0) {
+            $verdict = ['severity' => 'critical', 'headline' => 'Urgent alerts open', 'details' => $details];
+        } elseif ($sevCounts['elevated'] > 0) {
+            $verdict = ['severity' => 'elevated', 'headline' => 'Elevated alerts open', 'details' => $details];
+        } elseif ($sevCounts['watch'] > 0) {
+            $verdict = ['severity' => 'warning', 'headline' => 'Watch-band alerts open', 'details' => $details];
+        } else {
+            $verdict = ['severity' => 'info', 'headline' => 'Alert queue clear', 'details' => []];
+        }
+
         return [
             'no_bloc' => false,
+            'verdict' => $verdict,
+            'sev_counts' => $sevCounts,
             'alerts' => $alerts,
             'kind_counts' => $kindCounts,
             'totals' => $totals,
