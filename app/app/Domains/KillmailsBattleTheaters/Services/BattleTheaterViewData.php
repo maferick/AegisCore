@@ -352,10 +352,14 @@ final class BattleTheaterViewData
      * totalValue (spec § 5.1 + § 5.2).
      *
      * Capsules — victim_character_id is set and (on normal fights)
-     * matches a participant whose ship kill is already tracked. We
-     * add the capsule's totalValue to that participant's isk_lost
-     * and bump ``deaths``. The capsule's own row is NOT added — it
-     * belongs to the same pilot.
+     * matches a participant whose ship kill is already tracked.
+     * The Python theater_clustering ingest counts every km-as-
+     * victim into participants.deaths + isk_lost, including pods,
+     * so we DO NOT add another +1 / + total_value for capsules
+     * here — that double-counts. Earlier code used to bump on
+     * the assumption Python excluded pods; it does not. Bug
+     * surfaced as Side B losses 6,219 vs DB-truth 4,870 on
+     * 4-HWWF (delta = pod count 1,362).
      *
      * Structures — victim_character_id is NULL; we synthesise a
      * participant with character_id = -killmail_id, corporation_id
@@ -384,26 +388,15 @@ final class BattleTheaterViewData
         }
 
         // --- Capsules ------------------------------------------------
-        // ref_item_groups.id 29 = "Capsule" family. Pod and Capsule
-        // (Genolution 'Auroral' 197-variant) all roll up under it.
-        $capsules = DB::table('killmails as k')
-            ->join('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
-            ->whereIn('k.killmail_id', $killmailIds)
-            ->where('t.group_id', 29)
-            ->whereNotNull('k.victim_character_id')
-            ->select(['k.killmail_id', 'k.victim_character_id', 'k.total_value'])
-            ->get();
-
-        $byChar = $participants->keyBy(fn ($p) => (int) $p->character_id);
-        foreach ($capsules as $c) {
-            $cid = (int) $c->victim_character_id;
-            $p = $byChar->get($cid);
-            if ($p === null) {
-                continue; // pilot not in participants — leave for the structure path / NPC data
-            }
-            $p->isk_lost = (float) $p->isk_lost + (float) $c->total_value;
-            $p->deaths = (int) $p->deaths + 1;
-        }
+        // Pods are already counted by the Python theater_clustering
+        // ingest (each killmail-as-victim, regardless of ship_group,
+        // increments participants.deaths and isk_lost). PHP no longer
+        // bumps deaths/isk_lost here — that previously caused
+        // Side-B losses to inflate by exactly the pod count
+        // (e.g. 4-HWWF: page 6,219 vs DB-truth 4,870, delta 1,362
+        // = pod count). No-op block kept as a marker; a future
+        // ISK-reconciliation pass can re-introduce a per-killmail
+        // delta if Python ever stops covering pods.
 
         // --- Structures ---------------------------------------------
         // victim_character_id IS NULL ⇒ structure / deployable /
