@@ -40,7 +40,8 @@ final class BackfillZkillCapitalValuesCommand extends Command
         {--threshold=1.15 : zkill must exceed our value by this factor before overwrite}
         {--refresh : refetch even rows that already have zkill_value_fetched_at}
         {--include-structures : also backfill upwell structures (Keepstars, etc.)}
-        {--structures-only : only structures, skip cap+ ships}';
+        {--structures-only : only structures, skip cap+ ships}
+        {--suspicious-cargo= : alt mode — fetch zkill values for kms with cargo_value > N ISK regardless of ship class (corrects base_price-inflated mining hauls etc.)}';
 
     protected $description = 'Pull zKill totalValue/fittedValue for capital+ kills and (optionally) overwrite our under-priced hulls.';
 
@@ -89,21 +90,42 @@ final class BackfillZkillCapitalValuesCommand extends Command
         }
         $labelMap = self::CAPITAL_GROUPS + self::STRUCTURE_GROUPS;
 
-        $q = DB::table('killmails as k')
-            ->join('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
-            ->whereIn('t.group_id', $groupIds)
-            ->where('k.killed_at', '>=', $sinceDt);
-        if (! $refresh) {
-            $q->whereNull('k.zkill_value_fetched_at');
+        $suspiciousCargo = $this->option('suspicious-cargo');
+
+        if ($suspiciousCargo !== null) {
+            // Cargo-inflated mode: target kms whose cargo_value exceeds
+            // the operator-set threshold. base_price fallback paths
+            // (compressed ores etc.) routinely produce 200B+ Mackinaw
+            // / shuttle / Prowler kms; zkill's totalValue corrects to
+            // realistic Jita-anchored numbers.
+            $cargoFloor = (float) $suspiciousCargo;
+            $q = DB::table('killmails as k')
+                ->where('k.killed_at', '>=', $sinceDt)
+                ->where('k.cargo_value', '>', $cargoFloor)
+                ->selectRaw("k.killmail_id, k.victim_ship_type_name, k.total_value,
+                             k.hull_value, k.fitted_value, k.cargo_value, k.drone_value,
+                             k.killed_at, 0 AS group_id");
+            if (! $refresh) {
+                $q->whereNull('k.zkill_value_fetched_at');
+            }
+            $rows = $q->orderByDesc('k.cargo_value')->limit($limit)->get();
+        } else {
+            $q = DB::table('killmails as k')
+                ->join('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+                ->whereIn('t.group_id', $groupIds)
+                ->where('k.killed_at', '>=', $sinceDt);
+            if (! $refresh) {
+                $q->whereNull('k.zkill_value_fetched_at');
+            }
+            $rows = $q->orderBy('k.killed_at', 'desc')
+                ->select([
+                    'k.killmail_id', 'k.victim_ship_type_name', 'k.total_value',
+                    'k.hull_value', 'k.fitted_value', 'k.cargo_value', 'k.drone_value',
+                    'k.killed_at', 't.group_id',
+                ])
+                ->limit($limit)
+                ->get();
         }
-        $rows = $q->orderBy('k.killed_at', 'desc')
-            ->select([
-                'k.killmail_id', 'k.victim_ship_type_name', 'k.total_value',
-                'k.hull_value', 'k.fitted_value', 'k.cargo_value', 'k.drone_value',
-                'k.killed_at', 't.group_id',
-            ])
-            ->limit($limit)
-            ->get();
 
         $this->info(sprintf(
             'Backfill candidates: %d cap+ kills since %s (apply=%s, threshold=×%.2f)',
@@ -139,29 +161,47 @@ final class BackfillZkillCapitalValuesCommand extends Command
                 'updated_at' => now(),
             ];
 
-            if ($apply && $val['total'] > $oldTotal * $threshold) {
+            // Apply criteria differ between modes:
+            //   capital+    zkill > our × threshold (we're under-priced)
+            //   suspicious  zkill < our / threshold (we're over-priced;
+            //               Mackinaw at 300B vs zkill 0.3B)
+            $shouldApply = false;
+            if ($apply) {
+                if ($suspiciousCargo !== null) {
+                    $shouldApply = $oldTotal > 0 && ($val['total'] * $threshold) < $oldTotal;
+                } else {
+                    $shouldApply = $val['total'] > $oldTotal * $threshold;
+                }
+            }
+            if ($shouldApply) {
                 $update['total_value'] = $val['total'];
-                // Re-derive hull = total - fitted - cargo - drone where
-                // fitted/cargo/drone are our existing EveRef-priced
-                // component sums. zKill's `fittedValue` already includes
-                // the hull, so subtracting it would zero hull out.
-                // Subtracting only the non-hull components leaves the
-                // hull-only residual, which matches reality (Avatar
-                // ~140-150B, Hel ~45-50B). Clamp to >= 0.
+                // Re-derive components from zkill: zkill_fitted includes
+                // the hull, residual is cargo + drone. For capital+ we
+                // keep our existing fitted/cargo and use total - fitted
+                // - cargo - drone for hull. For suspicious-cargo (where
+                // our cargo number is the bug) we wipe cargo and let
+                // zkill's residual carry it.
                 $fitted = (float) ($r->fitted_value ?? 0);
                 $cargo = (float) ($r->cargo_value ?? 0);
                 $drone = (float) ($r->drone_value ?? 0);
-                $newHull = max(0.0, $val['total'] - $fitted - $cargo - $drone);
-                $update['hull_value'] = $newHull;
+                if ($suspiciousCargo !== null) {
+                    // hull stays (real), fitted stays (real), cargo +
+                    // drone collapse to whatever zkill says is left.
+                    $update['cargo_value'] = max(0.0, $val['total'] - $val['fitted']);
+                    $update['drone_value'] = 0;
+                } else {
+                    $newHull = max(0.0, $val['total'] - $fitted - $cargo - $drone);
+                    $update['hull_value'] = $newHull;
+                }
                 $overwrites++;
-                $totalIskCorrected += ($val['total'] - $oldTotal);
-                $cls = $labelMap[(int) $r->group_id] ?? 'cap';
+                $totalIskCorrected += ($oldTotal - $val['total']); // signed: positive when we shrink
+                $cls = $labelMap[(int) $r->group_id] ?? ($suspiciousCargo !== null ? 'cargo' : 'cap');
                 $this->line(sprintf(
-                    "  [overwrite] km=%d %s %s : total %.2fB → %.2fB (Δ %.2fB) · hull → %.2fB",
+                    "  [overwrite] km=%d %s %s : total %.2fB → %.2fB (Δ %s%.2fB)",
                     $kmId, $cls, $r->victim_ship_type_name,
                     $oldTotal / 1e9, $val['total'] / 1e9,
+                    $val['total'] > $oldTotal ? '+' : '',
                     ($val['total'] - $oldTotal) / 1e9,
-                    $newHull / 1e9,
                 ));
             }
 
