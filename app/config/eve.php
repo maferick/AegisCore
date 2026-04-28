@@ -35,6 +35,19 @@ return [
         'client_secret' => env('EVE_SSO_CLIENT_SECRET'),
         'callback_url' => env('EVE_SSO_CALLBACK_URL'),
 
+        // Optional separate CCP app for the public killsineve.online
+        // war-stats flow. Register a NEW application at
+        // https://developers.eveonline.com/applications with the
+        // callback URL set to https://killsineve.online/auth/eve/callback
+        // and the scopes `publicData esi-killmails.read_killmails.v1`
+        // enabled. Set the three env vars below; falls back to the
+        // internal app credentials when these are blank.
+        'public' => [
+            'client_id' => env('EVE_SSO_PUBLIC_CLIENT_ID'),
+            'client_secret' => env('EVE_SSO_PUBLIC_CLIENT_SECRET'),
+            'callback_url' => env('EVE_SSO_PUBLIC_CALLBACK_URL', 'https://killsineve.online/auth/eve/callback'),
+        ],
+
         // Scopes requested for the user-facing /auth/eve login. `publicData`
         // is the floor — enough to read the JWT identity claim but nothing
         // character-sensitive. Override via EVE_SSO_LOGIN_SCOPES if a

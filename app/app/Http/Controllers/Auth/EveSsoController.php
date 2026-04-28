@@ -268,7 +268,10 @@ class EveSsoController extends Controller
         }
 
         try {
-            $sso = EveSsoClient::fromConfig();
+            // Public-app credentials — separate CCP application from
+            // the internal winterco one. Falls back to the internal
+            // client if EVE_SSO_PUBLIC_* aren't set.
+            $sso = EveSsoClient::fromPublicConfig();
         } catch (EveSsoException $e) {
             Log::warning('EVE SSO misconfigured (war_stats flow)', ['error' => $e->getMessage()]);
             return redirect('/war-report/' . $conflict)
@@ -327,7 +330,13 @@ class EveSsoController extends Controller
         }
 
         try {
-            $sso = EveSsoClient::fromConfig();
+            // war_stats flow uses the separate public CCP app; every
+            // other flow uses the internal app. Match the app used
+            // for /authorize so HTTP Basic credentials at /token line
+            // up.
+            $sso = $flow === self::FLOW_WAR_STATS
+                ? EveSsoClient::fromPublicConfig()
+                : EveSsoClient::fromConfig();
             $token = $sso->exchangeCode($code, (string) $codeVerifier);
         } catch (EveSsoException $e) {
             Log::warning('EVE SSO token exchange failed', [

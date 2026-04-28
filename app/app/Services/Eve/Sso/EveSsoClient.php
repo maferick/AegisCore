@@ -68,6 +68,30 @@ final class EveSsoClient
     }
 
     /**
+     * Separate client for the public killsineve.online war-stats SSO
+     * flow. Lets the operator register a different CCP application
+     * (different client_id / secret / callback URL) for the public
+     * mirror so its OAuth surface stays isolated from the internal
+     * winterco app. Falls back to the internal app's config if the
+     * public-specific keys aren't set.
+     */
+    public static function fromPublicConfig(): self
+    {
+        $public = config('eve.sso.public', []);
+        if (empty($public['client_id']) || empty($public['client_secret']) || empty($public['callback_url'])) {
+            return self::fromConfig();
+        }
+        $cfg = config('eve.sso');
+        return new self(
+            clientId: (string) $public['client_id'],
+            clientSecret: (string) $public['client_secret'],
+            callbackUrl: (string) $public['callback_url'],
+            authorizeUrl: (string) $cfg['authorize_url'],
+            tokenUrl: (string) $cfg['token_url'],
+        );
+    }
+
+    /**
      * Cheap predicate: are the three required env vars populated?
      *
      * Lets call sites (e.g. the Filament login render hook) ask
