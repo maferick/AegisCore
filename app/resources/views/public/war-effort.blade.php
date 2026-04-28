@@ -172,6 +172,64 @@
                 </div>
             </div>
 
+            {{-- Activity map — same SVG region map the portal uses,
+                 scoped to this conflict's window. --}}
+            @if (! empty($stats['activity_map']['regions']))
+                <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Your war footprint</h2>
+                <div style="margin-bottom:1.5rem; padding:0.7rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
+                    @include('filament.portal.partials.activity-map', ['c' => $stats['activity_map']])
+                </div>
+            @endif
+
+            {{-- Best buddies + arch enemies --}}
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:0.7rem; margin-bottom:1.5rem;">
+                @if (! empty($stats['top_buddies']))
+                    <div style="padding:0.85rem 1rem; border:1px solid rgba(134,239,172,0.20); border-radius:8px; background:rgba(0,0,0,0.30);">
+                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#86efac;">Your best buddies</h3>
+                        <p style="margin:0 0 0.6rem 0; font-size:0.6rem; color:#7a7a82;">Top 10 pilots most often on the same killmail with you.</p>
+                        @foreach ($stats['top_buddies'] as $i => $b)
+                            <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.7rem;">
+                                <span style="flex:0 0 18px; color:#7a7a82; font-size:0.6rem;">#{{ $i + 1 }}</span>
+                                <img src="/img/character/{{ $b->id }}?size=64" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:28px; height:28px; border-radius:50%; flex:0 0 28px;">
+                                <div style="flex:1; min-width:0;">
+                                    <div style="color:#e5e5e7; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $b->name ?: '#'.$b->id }}</div>
+                                    <div style="font-size:0.55rem; color:#7a7a82; display:flex; align-items:center; gap:0.25rem;">
+                                        @if ($b->alliance_id)
+                                            <img src="/img/alliance/{{ $b->alliance_id }}?size=32" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:12px; height:12px;">
+                                        @endif
+                                        <span>{{ $b->alliance_name ?: '—' }}</span>
+                                    </div>
+                                </div>
+                                <div style="flex:0 0 80px; text-align:right; color:#86efac; font-weight:700;">{{ $fmtNum((int) $b->shared_kms) }} <span style="font-size:0.55rem; color:#7a7a82;">shared</span></div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+
+                @if (! empty($stats['top_enemies']))
+                    <div style="padding:0.85rem 1rem; border:1px solid rgba(252,165,165,0.20); border-radius:8px; background:rgba(0,0,0,0.30);">
+                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#fca5a5;">{{ $enemy_title }}</h3>
+                        <p style="margin:0 0 0.6rem 0; font-size:0.6rem; color:#7a7a82;">Top 10 opposing pilots you traded blows with the most. Title rerolls every visit.</p>
+                        @foreach ($stats['top_enemies'] as $i => $e)
+                            <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.7rem;">
+                                <span style="flex:0 0 18px; color:#7a7a82; font-size:0.6rem;">#{{ $i + 1 }}</span>
+                                <img src="/img/character/{{ $e->id }}?size=64" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:28px; height:28px; border-radius:50%; flex:0 0 28px;">
+                                <div style="flex:1; min-width:0;">
+                                    <div style="color:#e5e5e7; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $e->name ?: '#'.$e->id }}</div>
+                                    <div style="font-size:0.55rem; color:#7a7a82; display:flex; align-items:center; gap:0.25rem;">
+                                        @if ($e->alliance_id)
+                                            <img src="/img/alliance/{{ $e->alliance_id }}?size=32" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:12px; height:12px;">
+                                        @endif
+                                        <span>{{ $e->alliance_name ?: '—' }}</span>
+                                    </div>
+                                </div>
+                                <div style="flex:0 0 80px; text-align:right; color:#fca5a5; font-weight:700;">{{ $fmtNum((int) $e->encounters) }} <span style="font-size:0.55rem; color:#7a7a82;">fights</span></div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+
             {{-- Top systems where you fought --}}
             @if (! empty($stats['top_systems']))
                 <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Where you fought</h2>

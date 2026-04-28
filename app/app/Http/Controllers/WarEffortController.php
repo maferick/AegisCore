@@ -61,6 +61,7 @@ final class WarEffortController extends Controller
             'scopes_granted' => $request->session()->get('war_stats.scopes_granted', []),
             'stats' => $stats,
             'badges' => $badges,
+            'enemy_title' => self::enemyTitle(),
             'page_class' => $conflict,
             'display_label' => WarReport::displayLabel($conflict),
         ]);
@@ -132,6 +133,81 @@ final class WarEffortController extends Controller
             ) per_km
         ", [$charId]);
 
+        // Top buddies — characters most often on the same killmail as
+        // attacker. Co-presence count, FBs ignored, self-excluded.
+        $topBuddies = DB::select("
+            SELECT a2.character_id AS id,
+                   en.name AS name,
+                   an.name AS alliance_name,
+                   a2.alliance_id AS alliance_id,
+                   COUNT(DISTINCT a1.killmail_id) AS shared_kms
+            FROM _war_attackers a1
+            JOIN _war_attackers a2 ON a2.killmail_id = a1.killmail_id AND a2.character_id <> a1.character_id
+            JOIN _war_kms wk ON wk.killmail_id = a1.killmail_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = a2.character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = a2.alliance_id AND an.category = 'alliance'
+            WHERE a1.character_id = ?
+              AND a1.attacker_side <> wk.victim_side
+              AND a2.attacker_side = a1.attacker_side
+              AND a2.character_id IS NOT NULL AND a2.character_id > 0
+            GROUP BY a2.character_id, a2.alliance_id, en.name, an.name
+            ORDER BY shared_kms DESC
+            LIMIT 10
+        ", [$charId]);
+
+        // Top arch-enemies — opposing-side pilots who showed up in the
+        // most kms involving this character (victim of mine OR attacker
+        // when I was victim).
+        $topEnemies = DB::select("
+            SELECT cid AS id,
+                   MAX(name) AS name,
+                   MAX(alliance_name) AS alliance_name,
+                   MAX(alliance_id) AS alliance_id,
+                   SUM(n) AS encounters
+            FROM (
+                -- They were victims, I was attacker
+                SELECT k.victim_character_id AS cid,
+                       en.name AS name,
+                       an.name AS alliance_name,
+                       k.victim_alliance_id AS alliance_id,
+                       COUNT(DISTINCT k.killmail_id) AS n
+                FROM _war_attackers a
+                JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                JOIN killmails k ON k.killmail_id = a.killmail_id
+                LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_character_id AND en.category = 'character'
+                LEFT JOIN esi_entity_names an ON an.entity_id = k.victim_alliance_id AND an.category = 'alliance'
+                WHERE a.character_id = ?
+                  AND a.attacker_side <> wk.victim_side
+                  AND k.victim_character_id IS NOT NULL AND k.victim_character_id > 0
+                GROUP BY k.victim_character_id, en.name, an.name, k.victim_alliance_id
+                UNION ALL
+                -- They were attackers, I was victim
+                SELECT a.character_id AS cid,
+                       en.name AS name,
+                       an.name AS alliance_name,
+                       a.alliance_id AS alliance_id,
+                       COUNT(DISTINCT a.killmail_id) AS n
+                FROM _war_kms wk
+                JOIN killmails k ON k.killmail_id = wk.killmail_id
+                JOIN _war_attackers a ON a.killmail_id = k.killmail_id
+                LEFT JOIN esi_entity_names en ON en.entity_id = a.character_id AND en.category = 'character'
+                LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
+                WHERE k.victim_character_id = ?
+                  AND a.character_id IS NOT NULL AND a.character_id > 0
+                GROUP BY a.character_id, en.name, an.name, a.alliance_id
+            ) AS combined
+            GROUP BY cid
+            ORDER BY encounters DESC
+            LIMIT 10
+        ", [$charId, $charId]);
+
+        // Activity-map data — reuse the existing portal builder so the
+        // public mirror gets the same SVG region map without a parallel
+        // implementation. Scope by conflict start.
+        $sinceUtc = WarReport::CONFLICTS[$conflict]['start'] ?? null;
+        $activityMap = (new \App\Http\Controllers\Portal\CharacterActivityMapController())
+            ->build($charId, $sinceUtc);
+
         // Top systems where the character fought (attacker side).
         $topSystems = DB::select("
             SELECT ss.id, ss.name, ss.security_status,
@@ -176,7 +252,34 @@ final class WarEffortController extends Controller
                 ? round(((int) $row->battles_attended / (int) $totalBattles->n) * 100, 1)
                 : 0.0,
             'top_systems' => $topSystems,
+            'top_buddies' => $topBuddies,
+            'top_enemies' => $topEnemies,
+            'activity_map' => $activityMap,
         ];
+    }
+
+    /**
+     * Reddit-meme rotating banner for the arch-enemies section. Picked
+     * randomly per visit to keep things fresh.
+     *
+     * @return list<string>
+     */
+    public const array ENEMY_TITLES = [
+        'Arch Nemeses Hall of Fame',
+        'They Have Personally Wronged You',
+        'My Sworn Beefs',
+        'Names In My Notepad',
+        'The Touch-Grass Brigade',
+        'Permanent Standings: -10',
+        'On Sight',
+        'The Group Chat',
+        'My Therapist Knows Their Names',
+        'Built Different (Mostly Dead)',
+    ];
+
+    public static function enemyTitle(): string
+    {
+        return self::ENEMY_TITLES[array_rand(self::ENEMY_TITLES)];
     }
 
     /**

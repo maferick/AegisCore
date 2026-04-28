@@ -38,32 +38,43 @@ class CharacterActivityMapController extends Controller
     }
 
     /**
+     * Public so the killsineve.online war-effort page can render the
+     * same map via WarEffortController. $sinceUtc lets the public
+     * call scope by conflict start instead of the default rolling
+     * 30-day window.
+     *
      * @return array{active: array<int, array<string, mixed>>, neighbors: array<int, array<string, mixed>>, gates: list<list<int>>, titan: list<list<mixed>>}
      */
-    private function build(int $cid): array
+    public function build(int $cid, ?string $sinceUtc = null): array
     {
-        $activeSystems = DB::select(<<<'SQL'
-            SELECT s.id, s.name, s.position2d_x AS x, s.position2d_y AS y,
+        $sinceClause = $sinceUtc !== null ? '? ' : 'DATE_SUB(NOW(), INTERVAL 30 DAY) ';
+        $bindings = $sinceUtc !== null
+            ? [$cid, $sinceUtc, $cid, $sinceUtc]
+            : [$cid, $cid];
+
+        $activeSystems = DB::select(
+            "SELECT s.id, s.name, s.position2d_x AS x, s.position2d_y AS y,
                    s.security_status AS sec, s.region_id,
                    SUM(u.n) AS n
               FROM (
                 SELECT k.solar_system_id AS sid, COUNT(*) AS n
                   FROM killmail_attackers ka
                   JOIN killmails k ON k.killmail_id=ka.killmail_id
-                 WHERE ka.character_id=? AND k.killed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                 WHERE ka.character_id=? AND k.killed_at >= $sinceClause
                  GROUP BY k.solar_system_id
                 UNION ALL
                 SELECT k.solar_system_id AS sid, COUNT(*) AS n
                   FROM killmails k
-                 WHERE k.victim_character_id=? AND k.killed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                 WHERE k.victim_character_id=? AND k.killed_at >= $sinceClause
                  GROUP BY k.solar_system_id
               ) u
               JOIN ref_solar_systems s ON s.id = u.sid
              WHERE s.position2d_x IS NOT NULL AND s.position2d_y IS NOT NULL
              GROUP BY s.id, s.name, s.position2d_x, s.position2d_y, s.security_status, s.region_id
              ORDER BY n DESC
-             LIMIT 200
-        SQL, [$cid, $cid]);
+             LIMIT 200",
+            $bindings,
+        );
 
         $activeMap = [];
         foreach ($activeSystems as $r) {
