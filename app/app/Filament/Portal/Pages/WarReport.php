@@ -523,7 +523,7 @@ class WarReport extends Page
      *
      * @return list<int>
      */
-    private function blocAlliances(int $blocId): array
+    public function blocAlliances(int $blocId): array
     {
         $rows = DB::table('coalition_entity_labels')
             ->where('bloc_id', $blocId)
@@ -543,7 +543,7 @@ class WarReport extends Page
      *
      * @return list<int>
      */
-    private function inferInitiativeAlly(): array
+    public function inferInitiativeAlly(): array
     {
         $anchor = self::INITIATIVE_ANCHOR_ALLIANCE_ID;
 
@@ -788,7 +788,12 @@ class WarReport extends Page
      * @param  list<int>  $wcAlly
      * @param  list<int>  $hostile
      */
-    private function materialiseWarKillSet(string $start, array $wcAlly, array $hostile): void
+    /**
+     * Public so external callers (the public WarEffortController for
+     * the /me page) can prime the temp tables without paying for the
+     * full buildViewData rollups + leaderboards + ticker round.
+     */
+    public function materialiseWarKillSet(string $start, array $wcAlly, array $hostile): void
     {
         $wcStr = implode(',', $wcAlly);
         $hStr = implode(',', $hostile);

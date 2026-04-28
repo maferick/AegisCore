@@ -48,9 +48,22 @@ final class WarEffortController extends Controller
             ]);
         }
 
-        $stats = $this->computeStats($conflict, $charId);
-        $badges = $this->resolveBadges($conflict, $stats);
-        $overallBadge = WarEffortBadges::overallBadge($badges);
+        // Cache the heavy compute per (conflict, character) for 5 min
+        // — repeat /me hits read straight from cache, only the first
+        // visit pays the temp-table + percentile cost.
+        $cacheKey = "war_effort.me.v2.$conflict.$charId";
+        $payload = Cache::remember($cacheKey, 300, function () use ($conflict, $charId): array {
+            $stats = $this->computeStats($conflict, $charId);
+            $badges = $this->resolveBadges($conflict, $stats);
+            return [
+                'stats' => $stats,
+                'badges' => $badges,
+                'overall_badge' => WarEffortBadges::overallBadge($badges),
+            ];
+        });
+        $stats = $payload['stats'];
+        $badges = $payload['badges'];
+        $overallBadge = $payload['overall_badge'];
 
         return view('public.war-effort', [
             'conflict' => $conflict,
@@ -103,11 +116,17 @@ final class WarEffortController extends Controller
      */
     private function computeStats(string $conflict, int $charId): array
     {
-        // Materialise the conflict's _war_kms via WarReport so the
-        // queries below can JOIN against it. buildViewData primes
-        // the temp tables in this connection.
+        // Prime only the temp tables we need (_war_kms +
+        // _war_attackers) — buildViewData also runs the rollups +
+        // leaderboards + ticker which take 25-50s and we don't need
+        // any of that here. Just the materialise step.
         $page = new WarReport();
-        $page->buildViewData($conflict);
+        $start = WarReport::CONFLICTS[$conflict]['start'] ?? '2026-04-02 00:00:00';
+        $wcAlly = $page->blocAlliances(1); // WINTERCO_BLOC_ID
+        $opposingAlly = $conflict === WarReport::CONFLICT_INITIATIVE
+            ? $page->inferInitiativeAlly()
+            : $page->blocAlliances(3);
+        $page->materialiseWarKillSet($start, $wcAlly, $opposingAlly);
 
         // Per-character involvement set: the distinct killmails the
         // character was an attacker on, with the total_value attached

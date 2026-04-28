@@ -4,8 +4,64 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
-    <meta http-equiv="refresh" content="1;url=/war-report/{{ $conflict }}/me">
+    <meta http-equiv="refresh" content="3;url=/war-report/{{ $conflict }}/me">
     <title>Loading your war effort…</title>
+    @php
+        $sayings = [
+            "Asking the killboard nicely if it remembers you.",
+            "Counting how many times you said 'XING UP'.",
+            "Checking who you owe ammo to.",
+            "Decrypting your local-chat regrets.",
+            "Re-reading every titan kill in your name.",
+            "Bribing the cache for a faster lookup.",
+            "Aligning to the bookmark of truth.",
+            "Spinning up the Aegis brain — please warp slow.",
+            "Telling the FC you'll be back in a sec.",
+            "Counting your shidded shuttles. (privately, with respect.)",
+            "Verifying your standings with the loot fairy.",
+            "Reticulating splines.",
+            "Putting the bloc on a spreadsheet.",
+            "Spinning Drake-shaped cargo containers.",
+            "Pulling killmails from the warp tunnel.",
+            "Reading your DNA fitting out loud.",
+            "Re-fitting your Crow for the pings.",
+            "Convincing zKill to be polite.",
+            "Counting Pandas. (Carefully, they bite.)",
+            "Counting bees. (More carefully — they sting.)",
+            "Negotiating with timezone tanking.",
+            "Asking your alliance leadership for a moment.",
+            "Pulling lat/long from EVE Gate ™.",
+            "Booping a probe into your battle history.",
+            "It's a feature, not a bug. Probably.",
+            "Counting structures you mailed to bonus rooms.",
+            "Adjusting Goon-to-Frat ratio in real time.",
+            "Tallying capacitor crimes.",
+            "Asking ESI to tell us a joke.",
+            "Loading more cyno frigates.",
+            "Squeezing the database for one more row.",
+            "Polishing your killboard to a mirror finish.",
+            "Aligning to math.",
+            "Stop, hammer time.",
+            "Buffering — like a Vargur.",
+            "Loading… the FC just said 'one minute'.",
+            "Eating one (1) cargo container of crystals.",
+            "Yes the warp drive is active.",
+            "Convincing CCP we're a real boy.",
+            "Spinning, like ships in station.",
+            "Drake-tier patience required.",
+            "Counting what bumped, what tackled, what cried.",
+            "Drafting your kill report acceptance speech.",
+            "It is Wednesday, my dudes.",
+            "Yo dawg I heard you like fleets.",
+            "X-up if you can read this.",
+            "Sequencing your supercap thirst.",
+            "Logging into the imaginary friend chat.",
+            "Querying the loot table god.",
+            "Sharpening the Naglfar (don't ask).",
+            "Recompiling fleet history at warp 4.",
+        ];
+        $saying = $sayings[array_rand($sayings)];
+    @endphp
     <style>
         :root { color-scheme: dark; }
         body {
@@ -48,7 +104,8 @@
     <div class="panel">
         <div class="spinner"></div>
         <h1>Calculating your war effort…</h1>
-        <p>Crunching ~100k killmails. This page auto-refreshes; if it doesn't, <a href="/war-report/{{ $conflict }}/me">click here</a>.</p>
+        <p style="font-style:italic; color:#cbd5e1;">{{ $saying }}</p>
+        <p style="margin-top:0.6rem; font-size:0.65rem;">First-load can take ~30s while we crunch ~100k killmails. Subsequent loads are instant.</p>
     </div>
 </body>
 </html>
