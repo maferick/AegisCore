@@ -5,26 +5,33 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Filament\Portal\Pages\WarReport;
+use App\Filament\Portal\Pages\WarReportIndex;
 use Illuminate\Contracts\View\View;
+use Illuminate\Http\Request;
 
 /**
- * Public war-report mirror at /war-report.
+ * Public war-report mirror.
  *
- * Same view-data assembly as the authed Filament page (so charts +
- * leaderboards never drift between the two surfaces) — the page-class
- * is just used as a service here, not rendered inside the Filament
- * panel. The public blade wraps the shared body partial in a plain
- * dark layout instead of the Filament panel chrome.
+ * Two routes feed in here:
+ *   GET /war-report                    → conflict landing (cards)
+ *   GET /war-report/{conflict}         → scoped 2-up report
  *
- * Cached aggressively at the data layer: WarReport::getViewData()
- * already serves from a 10-min Redis cache warmed by a 2-minute
- * scheduled task, so this endpoint is dominated by blade rendering.
+ * Same view-data assembly as the authed Filament pages (single source
+ * of truth for charts + leaderboards). The public blades wrap the
+ * shared body partial in a plain dark layout instead of the Filament
+ * panel chrome.
  */
 final class PublicWarReportController extends Controller
 {
-    public function __invoke(): View
+    public function index(): View
+    {
+        return view('public.war-report-index', WarReportIndex::buildIndexData());
+    }
+
+    public function show(Request $request, string $conflict): View
     {
         $page = new WarReport();
+        $page->mount($conflict);
         $data = $page->getViewData();
         return view('public.war-report', $data);
     }

@@ -56,8 +56,8 @@
         <a href="/portal/war-report" class="aegis-war-link">
             <span class="aegis-war-link-icon">⚔</span>
             <span class="aegis-war-link-text">
-                <span class="aegis-war-link-title">War Report</span>
-                <span class="aegis-war-link-sub">WinterCo vs Imperium + The Initiative. · since 2026-04-02 · ongoing</span>
+                <span class="aegis-war-link-title">War Reports</span>
+                <span class="aegis-war-link-sub">WinterCo vs Imperium · WinterCo vs Initiative · since 2026-04-02</span>
             </span>
         </a>
     </div>

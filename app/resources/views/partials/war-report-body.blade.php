@@ -13,12 +13,12 @@
             return '#fca5a5';
         };
         $tiles = [
-            'wc'   => ['label' => 'WinterCo losses',  'tint' => '#86efac', 'count' => $totals['wc']['kms'],   'isk' => $totals['wc']['isk']],
-            'goon' => ['label' => 'Imperium losses',  'tint' => '#fca5a5', 'count' => $totals['goon']['kms'], 'isk' => $totals['goon']['isk']],
-            'init' => ['label' => 'Initiative losses','tint' => '#fdba74', 'count' => $totals['init']['kms'], 'isk' => $totals['init']['isk']],
+            'wc' => ['label' => 'WinterCo losses', 'tint' => '#86efac', 'count' => $totals['wc']['kms'], 'isk' => $totals['wc']['isk']],
+            'op' => ['label' => $opposing_label . ' losses', 'tint' => $opposing_tint, 'count' => $totals['op']['kms'], 'isk' => $totals['op']['isk']],
         ];
-        $totalKms = $totals['wc']['kms'] + $totals['goon']['kms'] + $totals['init']['kms'];
-        $totalIsk = $totals['wc']['isk'] + $totals['goon']['isk'] + $totals['init']['isk'];
+        $sideKeys = ['wc', 'op'];
+        $totalKms = $totals['wc']['kms'] + $totals['op']['kms'];
+        $totalIsk = $totals['wc']['isk'] + $totals['op']['isk'];
     @endphp
 
     {{-- Hero banner --}}
@@ -28,12 +28,19 @@
         <div style="display:flex; gap:2rem; align-items:flex-start; flex-wrap:wrap;">
             <div style="flex:2; min-width:280px;">
                 <div style="font-size:0.6rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.12em; margin-bottom:0.4rem;">Active conflict</div>
+                @php
+                    // Display label is computed per-render (not cached)
+                    // so the side-order swaps each visit. parse the
+                    // already-formatted "{A} vs {B}" string into spans
+                    // tinted by which side is which.
+                    $label = $display_label ?? ('WinterCo vs ' . $opposing_label);
+                    [$leftRaw, $rightRaw] = array_pad(array_map('trim', explode(' vs ', $label, 2)), 2, '');
+                    $colorOf = fn (string $name): string => $name === 'WinterCo' ? '#86efac' : $opposing_tint;
+                @endphp
                 <h1 style="margin:0 0 0.4rem 0; font-size:1.5rem; color:#e5e5e7; font-weight:700; letter-spacing:0.02em;">
-                    <span style="color:#86efac;">WinterCo</span>
+                    <span style="color:{{ $colorOf($leftRaw) }};">{{ $leftRaw }}</span>
                     <span style="color:#7a7a82; font-weight:400;"> vs </span>
-                    <span style="color:#fca5a5;">Imperium</span>
-                    <span style="color:#7a7a82; font-weight:400;"> + </span>
-                    <span style="color:#fdba74;">The Initiative.</span>
+                    <span style="color:{{ $colorOf($rightRaw) }};">{{ $rightRaw }}</span>
                 </h1>
                 <p style="margin:0; font-size:0.78rem; color:#9ca3af;">
                     Conflict floor <span style="color:#cbd5e1;">{{ \Carbon\Carbon::parse($war_start)->format('Y-m-d') }}</span> ·
@@ -88,8 +95,8 @@
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:0.4rem;">
                 @foreach ($lb['most_valuable'] as $i => $m)
                     @php
-                        $sideTint = $m->side === 'wc' ? '#86efac' : ($m->side === 'hostile' ? '#fca5a5' : '#9ca3af');
-                        $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? 'Imperium/Init' : '—');
+                        $sideTint = $m->side === 'wc' ? '#86efac' : ($m->side === 'hostile' ? $opposing_tint : '#9ca3af');
+                        $sideLbl = $m->side === 'wc' ? 'WinterCo' : ($m->side === 'hostile' ? $opposing_label : '—');
                     @endphp
                     <a href="https://zkillboard.com/kill/{{ $m->killmail_id }}/" target="_blank" rel="noopener"
                        style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
@@ -163,13 +170,13 @@
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:0.4rem;">
                 @foreach ($top_implant_pods as $p)
                     @php
-                        $sideTint = $p->side === 'wc' ? '#86efac' : ($p->side === 'hostile' ? '#fca5a5' : '#9ca3af');
+                        $sideTint = $p->side === 'wc' ? '#86efac' : ($p->side === 'hostile' ? $opposing_tint : '#9ca3af');
                     @endphp
                     <a href="https://zkillboard.com/kill/{{ $p->killmail_id }}/" target="_blank" rel="noopener"
                        style="display:block; padding:0.5rem 0.7rem; border:1px solid rgba(255,255,255,0.06); border-radius:5px; background:rgba(0,0,0,0.20); text-decoration:none; color:inherit;">
                         <div style="display:flex; align-items:baseline; gap:0.5rem;">
                             <span style="font-size:0.95rem; font-weight:700; color:#fde68a;">{{ $fmtIsk((float) $p->total_value) }}</span>
-                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? 'Imperium/Init' : '—') }}</span>
+                            <span style="font-size:0.55rem; color:{{ $sideTint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $p->side === 'wc' ? 'WinterCo' : ($p->side === 'hostile' ? $opposing_label : '—') }}</span>
                         </div>
                         <div style="font-size:0.65rem; color:#cbd5e1; margin-top:0.15rem;">{{ $p->victim_name ?: 'unknown pilot' }} <span style="color:#7a7a82;">· {{ $p->victim_alliance_name ?: '—' }}</span></div>
                         <div style="font-size:0.6rem; color:#7a7a82; margin-top:0.1rem;">{{ $p->system_name }} · {{ \Carbon\Carbon::parse($p->killed_at)->format('M d H:i') }}</div>
@@ -201,8 +208,8 @@
                     <tbody>
                         @foreach ($structures as $s)
                             @php
-                                $sideColor = $s->side === 'wc' ? '#86efac' : ($s->side === 'hostile' ? '#fca5a5' : '#9ca3af');
-                                $sideLbl = $s->side === 'wc' ? 'WinterCo' : ($s->side === 'hostile' ? 'Imperium/Init' : '—');
+                                $sideColor = $s->side === 'wc' ? '#86efac' : ($s->side === 'hostile' ? $opposing_tint : '#9ca3af');
+                                $sideLbl = $s->side === 'wc' ? 'WinterCo' : ($s->side === 'hostile' ? $opposing_label : '—');
                             @endphp
                             <tr style="border-top:1px solid rgba(255,255,255,0.04);">
                                 <td style="padding:0.35rem 0.6rem; color:#cbd5e1; white-space:nowrap;">{{ \Carbon\Carbon::parse($s->killed_at)->format('M d H:i') }}</td>
@@ -233,8 +240,8 @@
     @endphp
 
     {{-- Per-side breakdown panels — histograms instead of raw lists --}}
-    <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.75rem;">
-        @foreach (['wc', 'goon', 'init'] as $key)
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.75rem;">
+        @foreach ($sideKeys as $key)
             @php
                 $col = $tiles[$key];
                 $r = $rollups[$key] ?? ['daily' => [], 'ship_groups' => [], 'alliances' => [], 'systems' => [], 'hour_of_day' => []];
@@ -382,8 +389,8 @@
             <h2 style="margin:0; font-size:0.85rem; color:#e5e5e7;">Top systems by side losses</h2>
             <span style="font-size:0.6rem; color:#7a7a82;">where each side died · entire conflict</span>
         </div>
-        <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.6rem;">
-            @foreach (['wc', 'goon', 'init'] as $key)
+        <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.6rem;">
+            @foreach ($sideKeys as $key)
                 @php
                     $col = $tiles[$key];
                     $r = $rollups[$key] ?? ['systems' => []];

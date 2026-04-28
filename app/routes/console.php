@@ -429,12 +429,15 @@ Schedule::command('eve-log:fetch-dscan')
 // Runs every 2 min so the 10-min TTL has plenty of headroom for
 // scheduler hiccups.
 Schedule::call(function (): void {
-    $data = (new \App\Filament\Portal\Pages\WarReport())->buildViewData();
-    \Illuminate\Support\Facades\Cache::put(
-        \App\Filament\Portal\Pages\WarReport::VIEW_CACHE_KEY,
-        $data,
-        \App\Filament\Portal\Pages\WarReport::VIEW_CACHE_TTL_SECONDS,
-    );
+    $page = new \App\Filament\Portal\Pages\WarReport();
+    foreach (array_keys(\App\Filament\Portal\Pages\WarReport::CONFLICTS) as $conflict) {
+        $data = $page->buildViewData($conflict);
+        \Illuminate\Support\Facades\Cache::put(
+            \App\Filament\Portal\Pages\WarReport::VIEW_CACHE_KEY . '.' . $conflict,
+            $data,
+            \App\Filament\Portal\Pages\WarReport::VIEW_CACHE_TTL_SECONDS,
+        );
+    }
 })
     ->name('war-report-warm')
     ->cron('*/2 * * * *')

@@ -12,16 +12,16 @@ use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
 /**
- * /portal/war-report — WinterCo vs Goonswarm + The Initiative., from
- * 2026-04-02 onward (ongoing).
+ * /portal/war-report/{conflict} — scoped war report.
  *
- * Pure descriptive surface: every war-attributable killmail (victim on
- * one side, ≥1 attacker on the opposing side), 3-column losses layout,
- * system hotspots, and an upwell-structure kill timeline.
+ * Conflict slug picks the opposing bloc:
+ *   vs-imperium   → WinterCo bloc (1) vs Imperium bloc (3)
+ *   vs-initiative → WinterCo bloc (1) vs The Initiative.
+ *                   (anchor + inferred-aligned partner alliances)
  *
- * Bloc/alliance scope is hard-coded — this is a single-conflict page,
- * not a configurable matchup builder. If the conflict spec changes,
- * change the constants below.
+ * Pure descriptive surface: every war-attributable killmail (victim
+ * on one side, ≥1 attacker on the opposing side), 2-column per-side
+ * histograms, system hotspots, leaderboards, structure timeline.
  */
 class WarReport extends Page
 {
@@ -33,11 +33,52 @@ class WarReport extends Page
 
     protected static ?int $navigationSort = 5;
 
-    protected static ?string $title = 'War Report — WinterCo vs Imperium + Initiative';
+    protected static ?string $slug = 'war-report/{conflict}';
 
-    protected static ?string $slug = 'war-report';
+    protected static bool $shouldRegisterNavigation = false;
 
     protected string $view = 'filament.portal.pages.war-report';
+
+    public string $conflict = self::CONFLICT_IMPERIUM;
+
+    public const string CONFLICT_IMPERIUM = 'vs-imperium';
+    public const string CONFLICT_INITIATIVE = 'vs-initiative';
+
+    public const array CONFLICTS = [
+        self::CONFLICT_IMPERIUM => [
+            'opposing_label' => 'Imperium',
+            'opposing_tint' => '#fca5a5',
+        ],
+        self::CONFLICT_INITIATIVE => [
+            'opposing_label' => 'Initiative',
+            'opposing_tint' => '#fdba74',
+        ],
+    ];
+
+    public function mount(string $conflict): void
+    {
+        $this->conflict = isset(self::CONFLICTS[$conflict]) ? $conflict : self::CONFLICT_IMPERIUM;
+    }
+
+    public function getTitle(): string
+    {
+        return 'War Report — ' . self::displayLabel($this->conflict);
+    }
+
+    /**
+     * Display label for a conflict — alternates side order per render
+     * so the page reads "WinterCo vs Imperium" half the time and
+     * "Imperium vs WinterCo" the other half. No persistent ordering
+     * → both sides appear first equally often. Random per request,
+     * not cached at the data layer (label is computed in the blade).
+     */
+    public static function displayLabel(string $conflict): string
+    {
+        $opposing = self::CONFLICTS[$conflict]['opposing_label'] ?? 'Unknown';
+        return mt_rand(0, 1) === 0
+            ? "WinterCo vs {$opposing}"
+            : "{$opposing} vs WinterCo";
+    }
 
     /** Conflict floor — every query is bounded by this. */
     private const string WAR_START = '2026-04-02 00:00:00';
@@ -74,16 +115,20 @@ class WarReport extends Page
      */
     public function getViewData(): array
     {
-        // TTL alone controls freshness; the 4-minute war-report-warm
-        // scheduled task (routes/console.php) refreshes via
-        // Cache::put + buildViewData() before the TTL expires. If the
-        // warmer ever misses a cycle and the cache is empty, we
-        // fall back to building inline — slow but correct.
+        // Cache key per conflict — 2-side payloads differ between
+        // vs-imperium and vs-initiative, so each gets its own slot.
+        $key = self::VIEW_CACHE_KEY . '.' . $this->conflict;
         return Cache::remember(
-            self::VIEW_CACHE_KEY,
+            $key,
             self::VIEW_CACHE_TTL_SECONDS,
-            fn (): array => $this->buildViewData(),
-        );
+            fn (): array => $this->buildViewData($this->conflict),
+        ) + [
+            'conflict_key' => $this->conflict,
+            // Display label is intentionally OUT of the cached payload
+            // so each request gets a fresh swap (WinterCo vs X / X vs
+            // WinterCo). Cached label would lock the order for 10 min.
+            'display_label' => self::displayLabel($this->conflict),
+        ];
     }
 
     /**
@@ -93,62 +138,52 @@ class WarReport extends Page
      *
      * @return array<string, mixed>
      */
-    public function buildViewData(): array
+    public function buildViewData(string $conflict = self::CONFLICT_IMPERIUM): array
     {
+        if (! isset(self::CONFLICTS[$conflict])) {
+            $conflict = self::CONFLICT_IMPERIUM;
+        }
         $start = self::WAR_START;
         $now = now();
         $totalDays = max(1, (int) Carbon::parse($start)->diffInDays($now));
 
-        // Bloc-wide alliance lists. Side membership is broad — every
-        // partner alliance flying with the bloc registers as victim /
-        // attacker, not just the named lead alliance.
         $wcAlly = $this->blocAlliances(self::WINTERCO_BLOC_ID);
-        $imperiumAlly = $this->blocAlliances(self::IMPERIUM_BLOC_ID);
-        $initiativeAlly = $this->inferInitiativeAlly();
-        $hostile = array_values(array_unique(array_merge($imperiumAlly, $initiativeAlly)));
+        $opposingAlly = $conflict === self::CONFLICT_INITIATIVE
+            ? $this->inferInitiativeAlly()
+            : $this->blocAlliances(self::IMPERIUM_BLOC_ID);
 
-        // Materialise the war-attributable killmail set into a per-
-        // connection temp table once, then JOIN against it for every
-        // downstream query. Without this each query repeats the same
-        // ~12s EXISTS scan over 1.6M+ killmail_attackers rows; uncached
-        // build dropped from ~92s to single-digit seconds in profiling.
-        $this->materialiseWarKillSet($start, $wcAlly, $hostile);
+        // Materialise the war-attributable killmail set for this
+        // conflict pair into a per-connection temp table; downstream
+        // queries JOIN against it instead of re-running EXISTS scans.
+        $this->materialiseWarKillSet($start, $wcAlly, $opposingAlly);
 
-        // Side-level totals + ISK across the entire conflict (not just
-        // the rendered window) — used in the hero banner and tile row.
         $totals = [
-            'wc'   => $this->sideLossTotals($start, $wcAlly, $hostile),
-            'goon' => $this->sideLossTotals($start, $imperiumAlly, $wcAlly),
-            'init' => $this->sideLossTotals($start, $initiativeAlly, $wcAlly),
+            'wc' => $this->sideLossTotals($start, $wcAlly, $opposingAlly),
+            'op' => $this->sideLossTotals($start, $opposingAlly, $wcAlly),
         ];
-
-        // Aggregated rollups per side — daily activity, ship-group
-        // breakdown, top alliances, top systems. These power the
-        // histograms / horizontal bar charts on the page; raw
-        // killmail lists are limited to a small "recent" strip.
         $rollups = [
-            'wc'   => $this->sideRollups($start, $wcAlly, $hostile),
-            'goon' => $this->sideRollups($start, $imperiumAlly, $wcAlly),
-            'init' => $this->sideRollups($start, $initiativeAlly, $wcAlly),
+            'wc' => $this->sideRollups($start, $wcAlly, $opposingAlly),
+            'op' => $this->sideRollups($start, $opposingAlly, $wcAlly),
         ];
-
-        // Compact "recent" feed per side — last 15 mails so the
-        // operator can eyeball the latest activity without scrolling
-        // a 5k-row list.
         $recent = [
-            'wc'   => $this->recentLosses($wcAlly, $hostile, 15),
-            'goon' => $this->recentLosses($imperiumAlly, $wcAlly, 15),
-            'init' => $this->recentLosses($initiativeAlly, $wcAlly, 15),
+            'wc' => $this->recentLosses($wcAlly, $opposingAlly, 15),
+            'op' => $this->recentLosses($opposingAlly, $wcAlly, 15),
         ];
 
-        $hotspots = $this->systemHotspots($start, $wcAlly, $hostile);
-        $structures = $this->upwellStructureTimeline($start, $wcAlly, $hostile);
-        $topImplantPods = $this->topImplantPods($start, $wcAlly, $hostile);
-        $leaderboards = $this->leaderboards($start, $wcAlly, $hostile);
+        $hotspots = $this->systemHotspots($start, $wcAlly, $opposingAlly);
+        $structures = $this->upwellStructureTimeline($start, $wcAlly, $opposingAlly);
+        $topImplantPods = $this->topImplantPods($start, $wcAlly, $opposingAlly);
+        $leaderboards = $this->leaderboards($start, $wcAlly, $opposingAlly);
+
+        $opposingLabel = self::CONFLICTS[$conflict]['opposing_label'];
+        $opposingTint = self::CONFLICTS[$conflict]['opposing_tint'];
 
         return [
             'war_start' => $start,
             'total_days' => $totalDays,
+            'conflict' => $conflict,
+            'opposing_label' => $opposingLabel,
+            'opposing_tint' => $opposingTint,
             'totals' => $totals,
             'rollups' => $rollups,
             'recent' => $recent,
@@ -156,7 +191,6 @@ class WarReport extends Page
             'structures' => $structures,
             'top_implant_pods' => $topImplantPods,
             'leaderboards' => $leaderboards,
-            'wc_alliance_count' => count($wcAlly),
         ];
     }
 
