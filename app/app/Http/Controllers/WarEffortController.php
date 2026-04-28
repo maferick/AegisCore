@@ -231,6 +231,13 @@ final class WarEffortController extends Controller
         $activityMap = (new \App\Http\Controllers\Portal\CharacterActivityMapController())
             ->build($charId, $sinceUtc);
 
+        $loss = DB::selectOne("
+            SELECT COUNT(*) AS losses, COALESCE(SUM(k.total_value), 0) AS isk_lost
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            WHERE k.victim_character_id = ?
+        ", [$charId]);
+
         // Reputation/survival/menace metrics — feed the new badge tiers.
         $rep = DB::selectOne("
             SELECT
@@ -261,13 +268,6 @@ final class WarEffortController extends Controller
             GROUP BY ss.id, ss.name, ss.security_status
             ORDER BY kills DESC
             LIMIT 10
-        ", [$charId]);
-
-        $loss = DB::selectOne("
-            SELECT COUNT(*) AS losses, COALESCE(SUM(k.total_value), 0) AS isk_lost
-            FROM _war_kms wk
-            JOIN killmails k ON k.killmail_id = wk.killmail_id
-            WHERE k.victim_character_id = ?
         ", [$charId]);
 
         // Total battles in this conflict across all participants —
