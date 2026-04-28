@@ -63,6 +63,7 @@ final class WarEffortController extends Controller
             'badges' => $badges,
             'buddy_title' => self::buddyTitle(),
             'enemy_title' => self::enemyTitle(),
+            'footprint_title' => self::footprintTitle(),
             'page_class' => $conflict,
             'display_label' => WarReport::displayLabel($conflict),
         ]);
@@ -265,6 +266,25 @@ final class WarEffortController extends Controller
      *
      * @return list<string>
      */
+    /** @var list<string> */
+    public const array FOOTPRINT_TITLES = [
+        'Your War Footprint',
+        'Where The Bodies Lie',
+        'Crime Scenes',
+        'Systems You Have Personally Ruined',
+        'Local Spike Locations',
+        'My Yard',
+        'The Roam Diaries',
+        'Wrecks Per Postcode',
+        'Where Did You Get Caught',
+        'The Streets You Run',
+    ];
+
+    public static function footprintTitle(): string
+    {
+        return self::FOOTPRINT_TITLES[array_rand(self::FOOTPRINT_TITLES)];
+    }
+
     /** @var list<string> */
     public const array BUDDY_TITLES = [
         'Your Crusty Crew',

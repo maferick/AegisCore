@@ -184,7 +184,7 @@
                     }
                     unset($_region);
                 @endphp
-                <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">Your war footprint</h2>
+                <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">{{ $footprint_title }}</h2>
                 <div style="margin-bottom:1.5rem; padding:0.7rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
                     @include('filament.portal.partials.activity-map', ['c' => $publicMap])
                 </div>
@@ -194,8 +194,7 @@
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:0.7rem; margin-bottom:1.5rem;">
                 @if (! empty($stats['top_buddies']))
                     <div style="padding:0.85rem 1rem; border:1px solid rgba(134,239,172,0.20); border-radius:8px; background:rgba(0,0,0,0.30);">
-                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#86efac;">{{ $buddy_title }}</h3>
-                        <p style="margin:0 0 0.6rem 0; font-size:0.6rem; color:#7a7a82;">Top 10 pilots most often on the same killmail with you. Title rerolls every visit.</p>
+                        <h3 style="margin:0 0 0.6rem 0; font-size:0.95rem; color:#86efac;">{{ $buddy_title }}</h3>
                         @foreach ($stats['top_buddies'] as $i => $b)
                             <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.7rem;">
                                 <span style="flex:0 0 18px; color:#7a7a82; font-size:0.6rem;">#{{ $i + 1 }}</span>
@@ -217,8 +216,7 @@
 
                 @if (! empty($stats['top_enemies']))
                     <div style="padding:0.85rem 1rem; border:1px solid rgba(252,165,165,0.20); border-radius:8px; background:rgba(0,0,0,0.30);">
-                        <h3 style="margin:0 0 0.4rem 0; font-size:0.95rem; color:#fca5a5;">{{ $enemy_title }}</h3>
-                        <p style="margin:0 0 0.6rem 0; font-size:0.6rem; color:#7a7a82;">Top 10 opposing pilots you traded blows with the most. Title rerolls every visit.</p>
+                        <h3 style="margin:0 0 0.6rem 0; font-size:0.95rem; color:#fca5a5;">{{ $enemy_title }}</h3>
                         @foreach ($stats['top_enemies'] as $i => $e)
                             <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.7rem;">
                                 <span style="flex:0 0 18px; color:#7a7a82; font-size:0.6rem;">#{{ $i + 1 }}</span>
