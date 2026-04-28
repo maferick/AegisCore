@@ -82,8 +82,14 @@ class EveSsoController extends Controller
     private const FLOW_MARKET = 'market';
     /** Public-mirror war-effort flow — separate from the winterco
      *  login. Stashes character_id only in session, no user record
-     *  is created. publicData + (optional) esi-killmails.read v1. */
+     *  is created. publicData + (optional) esi-killmails.read v1.
+     *
+     *  STATE_PREFIX_WAR_STATS is stamped onto the OAuth `state`
+     *  parameter so the shared callback can identify this flow
+     *  even when the session cookie failed to round-trip across
+     *  subdomains. CCP echoes state verbatim, no session needed. */
     private const FLOW_WAR_STATS = 'war_stats';
+    private const STATE_PREFIX_WAR_STATS = 'ws.';
 
     // ---------------------------------------------------------------------
     // Login flow — anyone, publicData scope
@@ -286,12 +292,20 @@ class EveSsoController extends Controller
         // own DB anyway, the killmails scope was a future-feature
         // courtesy ask. Re-add once CCP accepts it.
         $scopes = 'publicData';
-        $redirect = $sso->authorize($scopes);
+        $redirect = $sso->authorize($scopes, self::STATE_PREFIX_WAR_STATS);
 
         $request->session()->put(self::SESSION_STATE, $redirect->state);
         $request->session()->put(self::SESSION_VERIFIER, $redirect->codeVerifier);
         $request->session()->put(self::SESSION_FLOW, self::FLOW_WAR_STATS);
         $request->session()->put('war_stats.return_conflict', $conflict);
+        // Backup conflict in a 10-minute cache keyed by state — used
+        // by the callback if the session cookie didn't survive the
+        // cross-subdomain redirect.
+        \Illuminate\Support\Facades\Cache::put(
+            'war_stats.state.' . $redirect->state,
+            ['conflict' => $conflict, 'code_verifier' => $redirect->codeVerifier],
+            600,
+        );
 
         return redirect()->away($redirect->url);
     }
@@ -302,9 +316,35 @@ class EveSsoController extends Controller
 
     public function callback(Request $request): RedirectResponse
     {
-        $flow = $request->session()->pull(self::SESSION_FLOW, self::FLOW_LOGIN);
-        $expectedState = $request->session()->pull(self::SESSION_STATE);
-        $codeVerifier = $request->session()->pull(self::SESSION_VERIFIER);
+        // Detect war-stats flow from the `state` prefix BEFORE reading
+        // session — cross-subdomain redirects can lose the session
+        // cookie, and we must NEVER fall back to the login flow (which
+        // creates a User record + redirects to /admin) when the
+        // visitor only signed in for read-only war stats.
+        $rawState = (string) $request->query('state', '');
+        $isWarStats = $rawState !== '' && str_starts_with($rawState, self::STATE_PREFIX_WAR_STATS);
+
+        if ($isWarStats) {
+            $flow = self::FLOW_WAR_STATS;
+            $expectedState = $request->session()->pull(self::SESSION_STATE);
+            $codeVerifier = $request->session()->pull(self::SESSION_VERIFIER);
+            // Session-stash may be missing if the cookie didn't carry
+            // across the subdomain hop. Fall back to the cache that
+            // redirectAsWarStats wrote keyed by state.
+            if ($expectedState === null || $codeVerifier === null) {
+                $cached = \Illuminate\Support\Facades\Cache::pull('war_stats.state.' . $rawState);
+                if ($cached) {
+                    $expectedState = $rawState;
+                    $codeVerifier = (string) ($cached['code_verifier'] ?? '');
+                    $request->session()->put('war_stats.return_conflict', $cached['conflict'] ?? 'vs-imperium');
+                }
+            }
+            $request->session()->forget(self::SESSION_FLOW);
+        } else {
+            $flow = $request->session()->pull(self::SESSION_FLOW, self::FLOW_LOGIN);
+            $expectedState = $request->session()->pull(self::SESSION_STATE);
+            $codeVerifier = $request->session()->pull(self::SESSION_VERIFIER);
+        }
 
         // User declined consent, or CCP surfaced an upstream error. Both
         // arrive as ?error=<code>&error_description=<msg>. Log the CCP
@@ -386,7 +426,11 @@ class EveSsoController extends Controller
             'conflict' => $conflict,
         ]);
 
-        return redirect('/war-report/' . $conflict . '/me');
+        // ALWAYS absolute killsineve.online URL — this flow must never
+        // land on the winterco subdomain, even when CCP redirected
+        // there because of a stale callback registration. Operator
+        // explicitly drew this boundary.
+        return redirect('https://killsineve.online/war-report/' . $conflict . '/me');
     }
 
     // ---------------------------------------------------------------------

@@ -115,13 +115,18 @@ final class EveSsoClient
      *
      * @param string[]|string $scopes  space- or comma-separated list, or array.
      */
-    public function authorize(array|string $scopes): EveSsoAuthorizeRedirect
+    public function authorize(array|string $scopes, string $statePrefix = ''): EveSsoAuthorizeRedirect
     {
         $scopeList = is_array($scopes)
             ? $scopes
             : preg_split('/[\s,]+/', trim($scopes), -1, PREG_SPLIT_NO_EMPTY);
 
-        $state = Str::random(40);
+        // statePrefix lets the caller stamp a flow tag onto the OAuth
+        // state value. CCP returns state verbatim, so the callback can
+        // identify which flow this round-trip belongs to even when the
+        // session cookie didn't survive the redirect (e.g. cross-
+        // subdomain). Default empty = the original 40-char random.
+        $state = $statePrefix . Str::random(40);
         $codeVerifier = $this->generateCodeVerifier();
         $codeChallenge = $this->codeChallengeFrom($codeVerifier);
 
