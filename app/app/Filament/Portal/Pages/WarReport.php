@@ -48,10 +48,16 @@ class WarReport extends Page
         self::CONFLICT_IMPERIUM => [
             'opposing_label' => 'Imperium',
             'opposing_tint' => '#fca5a5',
+            'start' => '2026-04-02 00:00:00',
         ],
         self::CONFLICT_INITIATIVE => [
+            // Winter Coalition / Fraternity opened the offensive
+            // against The Initiative. in the first half of October
+            // 2025 — anchor the floor at 2025-10-01 so this report
+            // covers the full conflict, not just post-April action.
             'opposing_label' => 'Initiative',
             'opposing_tint' => '#fdba74',
+            'start' => '2025-10-01 00:00:00',
         ],
     ];
 
@@ -80,7 +86,7 @@ class WarReport extends Page
             : "{$opposing} vs WinterCo";
     }
 
-    /** Conflict floor — every query is bounded by this. */
+    /** Default conflict floor — overridable per-conflict via CONFLICTS. */
     private const string WAR_START = '2026-04-02 00:00:00';
 
     /** Bloc ids (coalition_blocs.id). Side membership is bloc-wide so
@@ -108,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v6';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v7';
 
     /**
      * @return array<string, mixed>
@@ -143,7 +149,7 @@ class WarReport extends Page
         if (! isset(self::CONFLICTS[$conflict])) {
             $conflict = self::CONFLICT_IMPERIUM;
         }
-        $start = self::WAR_START;
+        $start = self::CONFLICTS[$conflict]['start'] ?? self::WAR_START;
         $now = now();
         $totalDays = max(1, (int) Carbon::parse($start)->diffInDays($now));
 
@@ -469,16 +475,19 @@ class WarReport extends Page
         DB::statement("DROP TEMPORARY TABLE IF EXISTS _war_kms");
         DB::statement("DROP TEMPORARY TABLE IF EXISTS _war_attackers");
 
-        // ENGINE=MEMORY for the lookup speed; MariaDB falls back to
-        // MyISAM on overflow but with ~85k rows we stay well within
-        // tmp_table_size. PRIMARY KEY ensures O(1) JOIN lookups.
+        // ENGINE=InnoDB so the temp tables can spill to disk if they
+        // overflow tmp_table_size. The vs-initiative scope spans
+        // ~7 months and produces ~1M+ _war_attackers rows, which blew
+        // past the in-memory cap (16MB default) on MEMORY engine.
+        // InnoDB temp is slightly slower per row but bounded by
+        // disk, not RAM.
         DB::statement("
             CREATE TEMPORARY TABLE _war_kms (
                 killmail_id BIGINT UNSIGNED NOT NULL,
                 victim_side ENUM('wc','hostile') NOT NULL,
                 PRIMARY KEY (killmail_id),
                 KEY (victim_side)
-            ) ENGINE=MEMORY
+            ) ENGINE=InnoDB
         ");
         DB::statement("
             INSERT INTO _war_kms (killmail_id, victim_side)
@@ -507,7 +516,7 @@ class WarReport extends Page
                 KEY (character_id),
                 KEY (alliance_id),
                 KEY (killmail_id, character_id)
-            ) ENGINE=MEMORY
+            ) ENGINE=InnoDB
         ");
         DB::statement("
             INSERT INTO _war_attackers (killmail_id, character_id, alliance_id, is_final_blow, attacker_side)
