@@ -47,7 +47,12 @@ class WarReport extends Page
      *  pilot kills, not just the named lead alliance. */
     private const int WINTERCO_BLOC_ID = 1;
     private const int IMPERIUM_BLOC_ID = 3;
-    private const int INITIATIVE_BLOC_ID = 7;
+
+    /** The Initiative. anchor — bloc 7 has only the lead alliance,
+     *  so we infer the rest of the bloc dynamically from the rolling
+     *  alliance-pair behaviour table (aligned + loosely-coordinated
+     *  to this anchor). See inferInitiativeAlly(). */
+    private const int INITIATIVE_ANCHOR_ALLIANCE_ID = 1900696668;
 
     /** Cache TTL — buildViewData scans 26+ days of killmails +
      *  killmail_attackers and takes ~90s uncached, which trips nginx's
@@ -62,7 +67,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v5';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v6';
 
     /**
      * @return array<string, mixed>
@@ -99,7 +104,7 @@ class WarReport extends Page
         // attacker, not just the named lead alliance.
         $wcAlly = $this->blocAlliances(self::WINTERCO_BLOC_ID);
         $imperiumAlly = $this->blocAlliances(self::IMPERIUM_BLOC_ID);
-        $initiativeAlly = $this->blocAlliances(self::INITIATIVE_BLOC_ID);
+        $initiativeAlly = $this->inferInitiativeAlly();
         $hostile = array_values(array_unique(array_merge($imperiumAlly, $initiativeAlly)));
 
         // Materialise the war-attributable killmail set into a per-
@@ -168,6 +173,57 @@ class WarReport extends Page
             ->where('is_active', 1)
             ->pluck('entity_id')->all();
         return array_values(array_map('intval', $rows));
+    }
+
+    /**
+     * Inferred Initiative bloc — anchor alliance plus every alliance
+     * the rolling alliance-pair-behaviour signal labels as `aligned`
+     * or `loosely coordinated` (90d co-fight window). The dedicated
+     * Initiative coalition_bloc only has the anchor row, so this
+     * pulls the actual partner alliances from the rolling signal
+     * computed by python/bloc_intel/extractor.py.
+     *
+     * @return list<int>
+     */
+    private function inferInitiativeAlly(): array
+    {
+        $anchor = self::INITIATIVE_ANCHOR_ALLIANCE_ID;
+
+        // Candidates = every alliance with at least one rolling-pair
+        // row against the anchor. Fast: small ordered scan on the
+        // pair-behaviour index, no killmail join.
+        $rows = DB::table('alliance_pair_behavior_rolling')
+            ->where(function ($q) use ($anchor): void {
+                $q->where('alliance_a_id', $anchor)
+                  ->orWhere('alliance_b_id', $anchor);
+            })
+            ->orderByDesc('window_end_date')
+            ->get(['alliance_a_id', 'alliance_b_id', 'affinity_score', 'hostility_score', 'confidence', 'n_obs', 'window_end_date']);
+
+        // Keep the newest row per counterpart (rolling table can have
+        // multiple windows; we always want the freshest one).
+        $latest = [];
+        foreach ($rows as $row) {
+            $cid = (int) ($row->alliance_a_id === $anchor ? $row->alliance_b_id : $row->alliance_a_id);
+            if (! isset($latest[$cid])) {
+                $latest[$cid] = $row;
+            }
+        }
+
+        $svc = app(\App\Domains\BlocIntel\Services\BlocRelationshipService::class);
+        $allies = [$anchor];
+        foreach ($latest as $cid => $row) {
+            $label = $svc->deriveLabel(
+                (float) $row->affinity_score,
+                (float) $row->hostility_score,
+                (float) $row->confidence,
+                (int) $row->n_obs,
+            );
+            if ($label === 'aligned' || $label === 'loosely coordinated') {
+                $allies[] = $cid;
+            }
+        }
+        return array_values(array_unique($allies));
     }
 
     /**
