@@ -133,7 +133,23 @@
                 <img src="{{ $charPortrait }}" alt="" style="width:72px; height:72px; border-radius:50%;">
                 <div style="flex:1;">
                     <div style="font-size:0.6rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em;">Signed in as</div>
-                    <div style="font-size:1.15rem; font-weight:700; color:#e5e5e7;">{{ $character_name }}</div>
+                    <div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">
+                        <div style="font-size:1.15rem; font-weight:700; color:#e5e5e7;">{{ $character_name }}</div>
+                        @if (! empty($overall_badge))
+                            @php
+                                $ob = $overall_badge;
+                                $badgeColor = $ob['bucket'] <= 10 ? '#fde68a' : ($ob['bucket'] <= 20 ? '#cbd5e1' : '#fca5a5');
+                            @endphp
+                            <span title="bucket {{ $ob['bucket'] }}/30 · avg tier {{ $ob['avg_tier'] }}"
+                                  style="font-size:0.7rem; font-weight:700; color:{{ $badgeColor }};
+                                         padding:0.2rem 0.55rem; border-radius:4px;
+                                         background:rgba(0,0,0,0.30);
+                                         border:1px solid {{ $badgeColor }}33;
+                                         letter-spacing:0.04em;">
+                                « {{ $ob['name'] }} »
+                            </span>
+                        @endif
+                    </div>
                     <div style="font-size:0.65rem; color:#9ca3af;">scopes granted: {{ implode(', ', $scopes_granted ?: ['publicData']) }}</div>
                 </div>
                 <form method="post" action="/war-report/{{ $conflict }}/logout" style="margin:0;">
@@ -172,6 +188,56 @@
                 </div>
             </div>
 
+            {{-- Daily activity vs alliance — two-line SVG. Y-axis
+                 auto-scaled to the larger of the two series. --}}
+            @if (! empty($stats['daily_activity']['days']))
+                @php
+                    $da = $stats['daily_activity'];
+                    $maxY = max(array_merge([1], $da['self'], array_map(fn ($v) => (float) $v, $da['alliance_avg'])));
+                    $w = 1000; $h = 220; $pad = 32;
+                    $plotW = $w - 2 * $pad; $plotH = $h - 2 * $pad;
+                    $n = max(1, count($da['days']) - 1);
+                    $xAt = fn ($i) => $pad + ($i / $n) * $plotW;
+                    $yAt = fn ($v) => $h - $pad - ($v / $maxY) * $plotH;
+                    $selfPath = '';
+                    foreach ($da['self'] as $i => $v) {
+                        $selfPath .= ($i === 0 ? 'M' : ' L') . round($xAt($i), 1) . ' ' . round($yAt((float) $v), 1);
+                    }
+                    $allPath = '';
+                    foreach ($da['alliance_avg'] as $i => $v) {
+                        $allPath .= ($i === 0 ? 'M' : ' L') . round($xAt($i), 1) . ' ' . round($yAt((float) $v), 1);
+                    }
+                @endphp
+                <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">You vs {{ $da['alliance_name'] ?: 'your alliance' }} — daily kills</h2>
+                <div style="margin-bottom:1.5rem; padding:0.7rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.30);">
+                    <div style="display:flex; gap:1rem; margin-bottom:0.4rem; font-size:0.6rem; color:#9ca3af;">
+                        <span><span style="display:inline-block; width:10px; height:2px; background:#86efac; vertical-align:middle; margin-right:0.3rem;"></span>You</span>
+                        <span><span style="display:inline-block; width:10px; height:2px; background:#7dd3fc; vertical-align:middle; margin-right:0.3rem;"></span>{{ $da['alliance_name'] ?: 'Alliance' }} avg per pilot</span>
+                    </div>
+                    <svg viewBox="0 0 {{ $w }} {{ $h }}" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; display:block;">
+                        <rect x="0" y="0" width="{{ $w }}" height="{{ $h }}" fill="rgba(0,0,0,0.20)"/>
+                        {{-- Y axis baseline --}}
+                        <line x1="{{ $pad }}" y1="{{ $h - $pad }}" x2="{{ $w - $pad }}" y2="{{ $h - $pad }}"
+                              stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+                        {{-- Grid quartiles --}}
+                        @for ($q = 1; $q <= 3; $q++)
+                            @php $gy = $pad + ($plotH * $q / 4); @endphp
+                            <line x1="{{ $pad }}" y1="{{ $gy }}" x2="{{ $w - $pad }}" y2="{{ $gy }}"
+                                  stroke="rgba(255,255,255,0.04)" stroke-dasharray="2 4"/>
+                        @endfor
+                        {{-- Alliance avg --}}
+                        <path d="{{ $allPath }}" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linejoin="round" opacity="0.85"/>
+                        {{-- Self --}}
+                        <path d="{{ $selfPath }}" fill="none" stroke="#86efac" stroke-width="2.5" stroke-linejoin="round"/>
+                        {{-- Y-axis max label --}}
+                        <text x="{{ $pad + 4 }}" y="{{ $pad + 10 }}" font-size="9" fill="#7a7a82" font-family="monospace">{{ number_format((float) $maxY, 1) }} / day</text>
+                        {{-- X-axis labels (first + last) --}}
+                        <text x="{{ $pad }}" y="{{ $h - 8 }}" font-size="9" fill="#7a7a82" font-family="monospace">{{ $da['days'][0] }}</text>
+                        <text x="{{ $w - $pad - 60 }}" y="{{ $h - 8 }}" font-size="9" fill="#7a7a82" font-family="monospace">{{ end($da['days']) }}</text>
+                    </svg>
+                </div>
+            @endif
+
             {{-- Activity map — same SVG region map the portal uses,
                  scoped to this conflict's window. Ansiblex overlays
                  are operational intel; strip them before rendering on
@@ -186,7 +252,7 @@
                 @endphp
                 <h2 style="margin:0.5rem 0 0.6rem 0; font-size:0.95rem; color:#e5e5e7;">{{ $footprint_title }}</h2>
                 <div style="margin-bottom:1.5rem; padding:0.7rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(0,0,0,0.20);">
-                    @include('filament.portal.partials.activity-map', ['c' => $publicMap])
+                    @include('filament.portal.partials.activity-map', ['c' => $publicMap, 'mapLayout' => 'two-up'])
                 </div>
             @endif
 

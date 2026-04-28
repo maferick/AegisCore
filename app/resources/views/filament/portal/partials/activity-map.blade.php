@@ -12,13 +12,20 @@
         {{ $activeCount }} active · {{ $neighborCount }} neighbor systems · {{ count($regions) }} region(s)
     </div>
     @php
-        // Horizontal strip — regions sit next to each other and the
-        // strip scrolls horizontally if the total is wider than the
-        // container. Each panel stays ~380px wide so 3-4 fit on a
-        // laptop viewport without shrinking individually.
-        $colWidth = count($regions) === 1 ? 'minmax(780px, 1fr)' : 'repeat(' . count($regions) . ', minmax(570px, 1fr))';
+        // Layout knob: 'two-up' = 2-column wrapping grid that fits the
+        // viewport (public /me page). Default = horizontal strip
+        // (winterco portal) where regions sit next to each other and
+        // the row scrolls horizontally.
+        $mapLayout = $mapLayout ?? 'wide';
+        if ($mapLayout === 'two-up') {
+            $colWidth = 'repeat(2, minmax(0, 1fr))';
+            $overflow = 'visible';
+        } else {
+            $colWidth = count($regions) === 1 ? 'minmax(780px, 1fr)' : 'repeat(' . count($regions) . ', minmax(570px, 1fr))';
+            $overflow = 'auto';
+        }
     @endphp
-    <div style="display:grid; grid-template-columns: {{ $colWidth }}; gap:0.6rem; overflow-x:auto;">
+    <div style="display:grid; grid-template-columns: {{ $colWidth }}; gap:0.6rem; overflow-x:{{ $overflow }};">
         @foreach ($regions as $region)
             @php
                 $amActive = $region['active'];

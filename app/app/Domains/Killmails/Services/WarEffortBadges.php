@@ -72,6 +72,64 @@ final class WarEffortBadges
         return 10;
     }
 
+    /** 30-tier overall ladder. Lower index = better.
+     *  Top 1-10 EVE-flavored, 11-20 mid, 21-30 reddit-meme.
+     *
+     *  @var list<string>
+     */
+    public const array OVERALL_LADDER = [
+        1  => 'Capsuleer of the Era',
+        2  => 'Apex Operator',
+        3  => 'Bane of Their Bloc',
+        4  => 'Standing FC Material',
+        5  => 'Killmail Royalty',
+        6  => 'Veteran of Every Ping',
+        7  => 'Subcap Sovereign',
+        8  => 'Capital Hunter',
+        9  => 'Black Ops Aficionado',
+        10 => 'Frontline Anchor',
+        11 => 'Reliable Body',
+        12 => 'Solid Mid-Fleet',
+        13 => 'Logi Loved You Too',
+        14 => 'Could-Have-Done-Worse',
+        15 => 'Gets the Job Done-ish',
+        16 => 'Press F to Anchor',
+        17 => 'Showed Up With Pants On',
+        18 => 'Logged On Today',
+        19 => 'Standby Tackle',
+        20 => 'I Heard There Were Pings',
+        21 => 'It Is Wednesday My Dudes',
+        22 => 'Number Goes Up Sometimes',
+        23 => 'Such Battle. Very Loss.',
+        24 => 'Permabanned From Local',
+        25 => 'I Lost My Pod Goggles',
+        26 => 'Flew Into A Stargate Fast',
+        27 => 'Cargo Hold Full of Hopes',
+        28 => 'I Yelled In Comms Once',
+        29 => 'Touched Grass IRL',
+        30 => 'I Heard We Have A Discord',
+    ];
+
+    /**
+     * @param  array<string, array{tier:int}>  $perMetricTiers   metric → {tier}
+     * @return array{bucket:int, name:string, avg_tier:float}
+     */
+    public static function overallBadge(array $perMetricTiers): array
+    {
+        if ($perMetricTiers === []) {
+            return ['bucket' => 30, 'name' => self::OVERALL_LADDER[30], 'avg_tier' => 10.0];
+        }
+        $tiers = array_map(fn ($x) => (int) ($x['tier'] ?? 10), $perMetricTiers);
+        $avg = array_sum($tiers) / count($tiers);
+        // Map avg 1.0..10.0 onto bucket 1..30 (lower = better).
+        $bucket = (int) max(1, min(30, round((($avg - 1) * 29 / 9) + 1)));
+        return [
+            'bucket' => $bucket,
+            'name' => self::OVERALL_LADDER[$bucket] ?? self::OVERALL_LADDER[30],
+            'avg_tier' => round($avg, 2),
+        ];
+    }
+
     /**
      * @var array<string, array<int, array{name: string, sub: string}>>
      */

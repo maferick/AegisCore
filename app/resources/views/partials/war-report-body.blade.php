@@ -167,6 +167,63 @@
 
     {{-- Leaderboards: most-valuable single kills + pilot/alliance rankings --}}
     @php $lb = $leaderboards ?? []; @endphp
+    {{-- Per-badge podium — top 3 characters per metric, with reddit-
+         meme rank titles. Links to internal /kills detail not needed
+         here; portrait + name + alliance + metric value. --}}
+    @php
+        $podiumTitles = \App\Filament\Portal\Pages\WarReport::PODIUM_TITLES;
+        $metricLabels = [
+            'kills' => 'Kills you were on',
+            'final_blows' => 'Final blows landed',
+            'isk_destroyed' => 'ISK destroyed (FB)',
+            'battles_attended' => 'Battles attended',
+            'small_gang_kills' => 'Small-gang kills',
+        ];
+        $rankColor = [1 => '#fde68a', 2 => '#cbd5e1', 3 => '#fdba74'];
+    @endphp
+    @if (! empty($podiums ?? []))
+        <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
+            <div style="display:flex; align-items:baseline; gap:0.6rem; margin-bottom:0.6rem; flex-wrap:wrap;">
+                <h2 style="margin:0; font-size:0.85rem; color:#e5e5e7;">Top of every leaderboard</h2>
+                <span style="font-size:0.6rem; color:#7a7a82;">first three by each badge metric</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:0.6rem;">
+                @foreach ($podiums as $metric => $rows)
+                    @if (count($rows) === 0) @continue @endif
+                    <div style="padding:0.6rem 0.75rem; border:1px solid rgba(255,255,255,0.06); border-radius:6px; background:rgba(0,0,0,0.20);">
+                        <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.4rem;">{{ $metricLabels[$metric] ?? $metric }}</div>
+                        @foreach ($rows as $i => $r)
+                            @php
+                                $rank = $i + 1;
+                                $title = $podiumTitles[$rank] ?? '';
+                                $color = $rankColor[$rank] ?? '#9ca3af';
+                                $valFmt = $metric === 'isk_destroyed' ? $fmtIsk((float) $r->metric) : $fmtNum((int) $r->metric);
+                            @endphp
+                            <div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
+                                <div style="flex:0 0 28px; text-align:center;">
+                                    <div style="font-size:1rem; font-weight:700; color:{{ $color }};">#{{ $rank }}</div>
+                                </div>
+                                <img src="/img/character/{{ $r->id }}?size=64" loading="lazy" referrerpolicy="no-referrer" alt=""
+                                     class="aegis-icon aegis-icon-char-md" style="flex:0 0 28px;">
+                                <div style="flex:1; min-width:0;">
+                                    <div style="font-size:0.7rem; color:#e5e5e7; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ $r->name ?: '#'.$r->id }}</div>
+                                    <div style="font-size:0.55rem; color:{{ $color }}; font-style:italic;">{{ $title }}</div>
+                                    <div style="font-size:0.55rem; color:#7a7a82; display:flex; align-items:center; gap:0.2rem;">
+                                        @if ($r->alliance_id)
+                                            <img src="/img/alliance/{{ $r->alliance_id }}?size=32" loading="lazy" referrerpolicy="no-referrer" alt="" style="width:10px; height:10px;">
+                                        @endif
+                                        <span>{{ $r->alliance_name ?: '—' }}</span>
+                                    </div>
+                                </div>
+                                <div style="flex:0 0 64px; text-align:right; font-size:0.7rem; font-weight:700; color:{{ $color }};">{{ $valFmt }}</div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     @if (! empty($lb['most_valuable']))
         <div style="margin-bottom:1rem; padding:0.85rem 1rem; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
             <div style="display:flex; align-items:baseline; gap:0.6rem; margin-bottom:0.6rem; flex-wrap:wrap;">

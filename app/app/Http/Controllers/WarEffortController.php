@@ -50,6 +50,7 @@ final class WarEffortController extends Controller
 
         $stats = $this->computeStats($conflict, $charId);
         $badges = $this->resolveBadges($conflict, $stats);
+        $overallBadge = WarEffortBadges::overallBadge($badges);
 
         return view('public.war-effort', [
             'conflict' => $conflict,
@@ -61,6 +62,7 @@ final class WarEffortController extends Controller
             'scopes_granted' => $request->session()->get('war_stats.scopes_granted', []),
             'stats' => $stats,
             'badges' => $badges,
+            'overall_badge' => $overallBadge,
             'buddy_title' => self::buddyTitle(),
             'enemy_title' => self::enemyTitle(),
             'footprint_title' => self::footprintTitle(),
@@ -257,6 +259,76 @@ final class WarEffortController extends Controller
             'top_buddies' => $topBuddies,
             'top_enemies' => $topEnemies,
             'activity_map' => $activityMap,
+            'daily_activity' => $this->dailyActivityVsAlliance($charId, $sinceUtc),
+        ];
+    }
+
+    /**
+     * Daily kill count for the character vs the per-pilot average for
+     * their alliance. Two equal-length series indexed by date so the
+     * SVG line-chart in blade can iterate once.
+     *
+     * @return array{days: list<string>, self: list<int>, alliance_avg: list<float>, alliance_id: int|null, alliance_name: string|null}
+     */
+    private function dailyActivityVsAlliance(int $charId, ?string $sinceUtc): array
+    {
+        $allianceRow = DB::selectOne("
+            SELECT a.alliance_id AS id, en.name
+            FROM _war_attackers a
+            LEFT JOIN esi_entity_names en ON en.entity_id = a.alliance_id AND en.category = 'alliance'
+            WHERE a.character_id = ? AND a.alliance_id > 0
+            ORDER BY a.killmail_id DESC LIMIT 1
+        ", [$charId]);
+        $allianceId = $allianceRow ? (int) $allianceRow->id : null;
+        $allianceName = $allianceRow ? (string) ($allianceRow->name ?? '#'.$allianceRow->id) : null;
+
+        $self = DB::select("
+            SELECT DATE(k.killed_at) AS day, COUNT(DISTINCT a.killmail_id) AS kms
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
+            WHERE a.character_id = ? AND a.attacker_side <> wk.victim_side
+            GROUP BY DATE(k.killed_at) ORDER BY day ASC
+        ", [$charId]);
+
+        $alliance = [];
+        if ($allianceId !== null) {
+            $alliance = DB::select("
+                SELECT DATE(k.killed_at) AS day,
+                       COUNT(DISTINCT a.killmail_id) / GREATEST(COUNT(DISTINCT a.character_id), 1) AS avg_kms
+                FROM _war_attackers a
+                JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+                JOIN killmails k ON k.killmail_id = a.killmail_id
+                WHERE a.alliance_id = ? AND a.attacker_side <> wk.victim_side
+                GROUP BY DATE(k.killed_at) ORDER BY day ASC
+            ", [$allianceId]);
+        }
+
+        // Build day-aligned series. Walk every day from $sinceUtc to
+        // today; absent rows zero-fill so line-chart cells line up.
+        $start = $sinceUtc !== null ? new \DateTimeImmutable($sinceUtc) : (new \DateTimeImmutable())->modify('-30 days');
+        $end = new \DateTimeImmutable('today');
+        $selfMap = [];
+        foreach ($self as $r) $selfMap[(string) $r->day] = (int) $r->kms;
+        $allMap = [];
+        foreach ($alliance as $r) $allMap[(string) $r->day] = (float) $r->avg_kms;
+
+        $days = [];
+        $selfSeries = [];
+        $allSeries = [];
+        for ($d = $start; $d <= $end; $d = $d->modify('+1 day')) {
+            $key = $d->format('Y-m-d');
+            $days[] = $key;
+            $selfSeries[] = $selfMap[$key] ?? 0;
+            $allSeries[] = $allMap[$key] ?? 0.0;
+        }
+
+        return [
+            'days' => $days,
+            'self' => $selfSeries,
+            'alliance_avg' => $allSeries,
+            'alliance_id' => $allianceId,
+            'alliance_name' => $allianceName,
         ];
     }
 

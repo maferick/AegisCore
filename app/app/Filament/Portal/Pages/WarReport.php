@@ -114,7 +114,14 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v12';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v13';
+
+    /** Reddit-meme banners for the top-3 podium per badge metric. */
+    public const array PODIUM_TITLES = [
+        1 => 'King Shit of Fuck Mountain',
+        2 => 'Almost Touched Greatness',
+        3 => 'Bronze Tier Bestie',
+    ];
     public const string THEATER_IDS_CACHE_KEY = 'war_report.theater_ids.v1';
 
     /**
@@ -189,6 +196,7 @@ class WarReport extends Page
         $leaderboards = $this->leaderboards($start, $wcAlly, $opposingAlly);
         $liveBattles = $this->liveBattles($wcAlly, $opposingAlly);
         $tickerKills = $this->tickerKills(12, $wcAlly, $opposingAlly);
+        $podiums = $this->badgePodiums();
 
         $opposingLabel = self::CONFLICTS[$conflict]['opposing_label'];
         $opposingTint = self::CONFLICTS[$conflict]['opposing_tint'];
@@ -208,6 +216,46 @@ class WarReport extends Page
             'leaderboards' => $leaderboards,
             'live_battles' => $liveBattles,
             'ticker_kills' => $tickerKills,
+            'podiums' => $podiums,
+        ];
+    }
+
+    /**
+     * Top-3 character podium per badge metric (kills / final blows /
+     * isk destroyed / battles attended / small-gang kills). Joined
+     * to esi_entity_names for portrait + alliance label. Reads from
+     * the materialised _war_attackers + _war_kms tables that
+     * buildViewData has already populated.
+     *
+     * @return array<string, list<object>>
+     */
+    private function badgePodiums(): array
+    {
+        $base = "
+            FROM _war_attackers a
+            JOIN _war_kms wk ON wk.killmail_id = a.killmail_id
+            JOIN killmails k ON k.killmail_id = a.killmail_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = a.character_id AND en.category = 'character'
+            LEFT JOIN esi_entity_names an ON an.entity_id = a.alliance_id AND an.category = 'alliance'
+            LEFT JOIN battle_theater_killmails btk ON btk.killmail_id = a.killmail_id
+            WHERE a.character_id IS NOT NULL AND a.character_id > 0
+              AND a.attacker_side <> wk.victim_side
+            GROUP BY a.character_id, a.alliance_id, en.name, an.name
+        ";
+        $select = "SELECT a.character_id AS id, a.alliance_id, en.name AS name, an.name AS alliance_name";
+
+        $kills = DB::select("$select, COUNT(DISTINCT a.killmail_id) AS metric $base ORDER BY metric DESC LIMIT 3");
+        $finalBlows = DB::select("$select, SUM(CASE WHEN a.is_final_blow = 1 THEN 1 ELSE 0 END) AS metric $base ORDER BY metric DESC LIMIT 3");
+        $iskDestroyed = DB::select("$select, SUM(CASE WHEN a.is_final_blow = 1 THEN k.total_value ELSE 0 END) AS metric $base ORDER BY metric DESC LIMIT 3");
+        $battles = DB::select("$select, COUNT(DISTINCT btk.theater_id) AS metric $base ORDER BY metric DESC LIMIT 3");
+        $smallGang = DB::select("$select, COUNT(DISTINCT CASE WHEN k.attacker_count <= 5 THEN a.killmail_id END) AS metric $base ORDER BY metric DESC LIMIT 3");
+
+        return [
+            'kills' => $kills,
+            'final_blows' => $finalBlows,
+            'isk_destroyed' => $iskDestroyed,
+            'battles_attended' => $battles,
+            'small_gang_kills' => $smallGang,
         ];
     }
 
