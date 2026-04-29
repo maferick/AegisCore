@@ -6,14 +6,17 @@
 #   crontab: 0 */6 * * * /opt/AegisCore/scripts/backup-mariadb.sh
 #
 # Writes to /opt/AegisCore/backups/mariadb/ with daily rotation.
-# Keeps 7 days of backups.
+# Keeps 4 days of backups (16 dumps × ~13 GiB ≈ 200 GiB worst-case
+# steady-state; matches mariadb-dump cadence of one every 6 h).
+# Trimmed from 7 d to 4 d on 2026-04-29 after the 7 d window
+# accumulated 593 GiB while the post-cutover dump rate stabilised.
 
 set -eu
 
 BACKUP_DIR="/opt/AegisCore/backups/mariadb"
 COMPOSE_FILE="/opt/AegisCore/infra/docker-compose.yml"
 ENV_FILE="/opt/AegisCore/.env"
-RETENTION_DAYS=7
+RETENTION_DAYS=4
 
 # Parse .env for DB credentials (grep + cut, not source — .env has
 # values with parentheses that break bash).

@@ -48,6 +48,20 @@ innodb_flush_method            = O_DIRECT
 innodb_io_capacity             = 2000
 innodb_io_capacity_max         = 4000
 
+# ===== Undo tablespace auto-truncation =====
+# Without this, undo001/002/003 grow unbounded under big-transaction
+# workloads (the 2026-04-28 DROP TABLE market_orders_old + aggregator
+# INSERT…SELECT churn pushed them to 39 + 25 + 42 = 106 GiB) and never
+# shrink back. With ON, MariaDB marks any undo tablespace exceeding
+# `innodb_max_undo_log_size` for truncation as soon as no active
+# transaction references it; a background thread truncates it back
+# to the default ~10 MiB. This is a runtime behaviour toggle, NOT a
+# startup-time on-disk format change — safe to flip without the
+# 2026-04-16 incident class of risk (those were buffer_pool_size /
+# log_file_size, which DO rewrite InnoDB structures on startup).
+innodb_undo_log_truncate       = ON
+innodb_max_undo_log_size       = 1G
+
 # ===== Connections =====
 # 300 ceiling covers php-fpm pool + Horizon workers + scheduler +
 # Python pollers (market-poller, outbox-relay, neo4j-sync, sde-importer)

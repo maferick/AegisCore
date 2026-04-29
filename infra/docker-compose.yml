@@ -1,7 +1,21 @@
 name: aegiscore-stack
 
+# Default container log rotation. Without this, each service's
+# json-file log driver runs unbounded and a single chatty container
+# can fill the disk (neo4j hit 5.6 GiB in one run on 2026-04-28).
+# Cap each container's log file at 100 MiB and keep 3 rotations =
+# 300 MiB hard ceiling per container. Apply via `logging: *default-logging`
+# on each service. Existing containers don't pick this up until
+# recreated (`docker compose up -d <service>`).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "3"
+
 services:
   mariadb:
+    logging: *default-logging
     image: mariadb:lts
     container_name: mariadb
     restart: unless-stopped
@@ -121,6 +135,7 @@ services:
         ipv4_address: 172.16.238.13
 
   neo4j:
+    logging: *default-logging
     image: neo4j:2026.03-community
     container_name: neo4j
     restart: unless-stopped
@@ -185,6 +200,7 @@ services:
   # worker (future Horizon container, queue isolation, etc.) merges the same
   # anchor so env + volumes can't drift between planes by accident.
   php-fpm: &php-common
+    logging: *default-logging
     image: aegiscore/php-fpm:0.1.1
     build:
       context: ./php
@@ -497,6 +513,7 @@ services:
   # `docker compose run --rm`. For operator one-shots use
   # `make market-poll`.
   market_poller:
+    logging: *default-logging
     build:
       context: ../python
       dockerfile: market_poller.Dockerfile
@@ -727,6 +744,7 @@ services:
   # (separate transient container); useful for "process the backlog
   # now" or testing a projector change.
   outbox_relay:
+    logging: *default-logging
     build:
       context: ../python
       dockerfile: outbox_relay.Dockerfile
@@ -965,6 +983,7 @@ services:
   # zKillboard sequence endpoint for new killmails, minimum 6s between
   # requests. Auto-restarts on crash.
   killmail_stream:
+    logging: *default-logging
     build:
       context: ../python
       dockerfile: killmail_ingest.Dockerfile
