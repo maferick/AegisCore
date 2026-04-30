@@ -241,10 +241,17 @@ final class CharacterGraphInsightService
             // produce zero qualifying pairs for real fleet commanders,
             // leaving the panel with 1 result despite hundreds of
             // enemy alliance kills.
+            // Group by victim character only — DO NOT group by
+            // k.victim_alliance_id. That column is the alliance
+            // snapshot at kill time, which would split a single peer
+            // into N rows whenever they switched alliance during the
+            // 90-day window AND would surface a historical label
+            // long after the peer defected. Current alliance is
+            // resolved below via character_corporation_history so the
+            // panel reflects "where the peer is now".
             $rows = \Illuminate\Support\Facades\DB::select(<<<'SQL'
                 SELECT k.victim_character_id AS cid,
                        en.name AS name,
-                       k.victim_alliance_id AS aid,
                        COUNT(*) AS n_kms,
                        MAX(k.killed_at) AS last
                   FROM killmail_attackers ka
@@ -254,16 +261,25 @@ final class CharacterGraphInsightService
                    AND k.victim_character_id IS NOT NULL
                    AND k.victim_character_id <> ka.character_id
                    AND k.killed_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-                 GROUP BY k.victim_character_id, en.name, k.victim_alliance_id
+                 GROUP BY k.victim_character_id, en.name
                  ORDER BY n_kms DESC
                  LIMIT ?
             SQL, [$cid, $limit]);
+
+            // Resolve current alliance per peer character from the
+            // affiliation cache. Falls back to NULL when we don't
+            // have a tracked corp/alliance for the peer; downstream
+            // tagRelationship() handles the unlabeled case.
+            $peerCids = array_values(array_unique(array_map(static fn ($r) => (int) $r->cid, $rows)));
+            $currentAllianceByCid = $this->resolveCurrentAllianceMap($peerCids);
+
             $out = [];
             foreach ($rows as $r) {
+                $peerCid = (int) $r->cid;
                 $out[] = [
-                    'character_id' => (int) $r->cid,
+                    'character_id' => $peerCid,
                     'name' => $r->name ? (string) $r->name : null,
-                    'alliance_id' => $r->aid ? (int) $r->aid : null,
+                    'alliance_id' => $currentAllianceByCid[$peerCid] ?? null,
                     'total_weight' => 0.0,
                     'distinct_interactions' => (int) $r->n_kms,
                     'last_seen_at' => $r->last ? (string) $r->last : null,
@@ -338,6 +354,70 @@ final class CharacterGraphInsightService
                 'distinct_interactions' => (int) ($row->get('di') ?? 0),
                 'last_seen_at' => $last ? (string) $last : null,
             ];
+        }
+        return $out;
+    }
+
+    /**
+     * Map character_id → current alliance_id derived from the live
+     * affiliation cache (character_corporation_history → corporation
+     * _alliance_history, latest non-deleted active row). Used by the
+     * arch-enemies panel so the rendered label reflects where the
+     * peer is *now*, not where they were when the killmail fired.
+     *
+     * @param  list<int>  $cids
+     * @return array<int, int>
+     */
+    private function resolveCurrentAllianceMap(array $cids): array
+    {
+        if ($cids === []) return [];
+
+        // Active corporation per character — newest start_date row
+        // with end_date IS NULL.
+        $corpRows = \Illuminate\Support\Facades\DB::table('character_corporation_history')
+            ->whereIn('character_id', $cids)
+            ->where('is_deleted', 0)
+            ->whereNull('end_date')
+            ->select('character_id', 'corporation_id', 'start_date')
+            ->orderBy('character_id')
+            ->orderByDesc('start_date')
+            ->get();
+
+        $corpByCid = [];
+        foreach ($corpRows as $r) {
+            $cid = (int) $r->character_id;
+            // Keep the first occurrence per character — the orderByDesc
+            // start_date above guarantees that's the latest active row.
+            if (! isset($corpByCid[$cid])) {
+                $corpByCid[$cid] = (int) $r->corporation_id;
+            }
+        }
+        if ($corpByCid === []) return [];
+
+        // Active alliance per corporation.
+        $corpIds = array_values(array_unique(array_values($corpByCid)));
+        $allianceRows = \Illuminate\Support\Facades\DB::table('corporation_alliance_history')
+            ->whereIn('corporation_id', $corpIds)
+            ->whereNull('end_date')
+            ->select('corporation_id', 'alliance_id', 'start_date')
+            ->orderBy('corporation_id')
+            ->orderByDesc('start_date')
+            ->get();
+
+        $aidByCorp = [];
+        foreach ($allianceRows as $r) {
+            $corp = (int) $r->corporation_id;
+            if (isset($aidByCorp[$corp])) continue;
+            if ($r->alliance_id) {
+                $aidByCorp[$corp] = (int) $r->alliance_id;
+            }
+        }
+
+        $out = [];
+        foreach ($corpByCid as $cid => $corp) {
+            if (isset($aidByCorp[$corp])) {
+                $out[$cid] = $aidByCorp[$corp];
+            }
         }
         return $out;
     }
