@@ -320,6 +320,83 @@ WHERE surface = 'ai_hypothesis' AND surface_ref_id = ?
 ORDER BY id DESC LIMIT 1;
 ```
 
+## Staleness incident (2026-04-30) — root-causes + fix
+
+Operator reported the Counter-Intel surface still labelled
+post-defection pilots (Bakkanta one + Aviai Odunen + shi + to)
+under their *prior* alliance (`Dracarys.`) days after they had
+moved to `Insidious.` (corp 98805140 since 2026-04-12).
+
+### Layers traced
+
+| Layer | State on 2026-04-30 | Authoritative? |
+|---|---|---|
+| ESI affiliation cache (`character_corporation_history`) | fresh — corp 98805140 since 2026-04-12 | ✓ |
+| `ci_character_features_rolling` (window_end_date) | **stale** — 2026-04-20 | derived |
+| Phase 18 fusion (MariaDB) | reads features rolling + corp history live; correct after re-run | ✓ |
+| Neo4j `CICharacter.current_alliance_id` | **stale** — frozen at last projection run | derived |
+| Character-lookup graph insights (Arch-enemies / Flight-crew) | reads stale Neo4j | downstream |
+
+### Root cause
+
+Neither `make ci-features` (advances the rolling features
+window) nor `make ci-projection` (pushes characters + edges to
+Neo4j) was on cron. Both were on-demand only. Without scheduled
+runs, the rolling window stuck at whatever date the last manual
+sweep ended on, and Neo4j character nodes never picked up
+post-window alliance changes.
+
+### Secondary issue
+
+The first manual `make ci-projection` after the window advance
+hit `Neo.TransientError.General.MemoryPoolOutOfMemoryError` on
+the CO_OCCURS edge wipe. Cause: the wipe MATCHed 5000 character
+ids per tx, each character pulling hundreds of fight-history
+edges; cumulative property + index payload exceeded Neo4j's
+1 GiB single-tx memory cap.
+
+### Fixes shipped (2026-04-30 / commit 6486698 + follow-up)
+
+1. **`app/routes/console.php`** — daily 05:30 UTC
+   `counter-intel:refresh-affiliations` (medium-band cohort,
+   limit 500). ESI now refetches before phase18 reads the cache.
+2. **`python/counter_intel/projection.py`** — CICharacter upsert
+   batch lowered 1000 → 200; CO_OCCURS + MEMBER_OF wipe batches
+   lowered 5000 → 500. Stays under the 1 GiB tx cap.
+3. **`scripts/install-ci-projection-crons.sh`** — operator-side
+   installer that appends two daily host cron lines (the Laravel
+   scheduler container can't run `make ci-*` because those
+   `docker compose run --profile tools` invocations require the
+   docker socket on the host):
+   ```
+   35 4 * * * cd /opt/AegisCore && CI_ARGS="--window-end $(date -u +%Y-%m-%d)" make ci-features
+   55 4 * * * cd /opt/AegisCore && make ci-projection
+   ```
+   Run `bash scripts/install-ci-projection-crons.sh` once on the
+   host to land them; idempotent.
+
+### Verification (post-fix, 2026-04-30 22:02 UTC)
+
+```
+$ make ci-features
+features pass complete: candidates=207291 written=207291
+
+$ make ci-projection   # batch=200 / 500
+projection pass complete: characters=207291 alliances=8198
+                         member_edges=974355 co_occurs_edges=2515769
+
+$ # Neo4j Bakkanta nodes — alliance 99013537 = "Insidious."
+2119611435  Bakkanta Aviai Odunen   corp 98805140  alliance 99013537
+2124244672  Bakkanta one            corp 98805140  alliance 99013537
+2119647488  Bakkanta shi            corp 98805140  alliance 99013537
+2124244731  Bakkanta to             corp 98805140  alliance 99013537
+2122471373  Bakkanta Mabata         corp 98820420  alliance 99013719   # Keys Network — dormant since 2025-12, expected
+```
+
+CharacterGraphInsightService caches results for 600 s; the new
+labels surface on the next cache miss (≤ 10 min after the
+projection run).
+
 ## Re-run procedure
 
 ```

@@ -351,14 +351,15 @@ def _upsert_member_edges(conn, driver: Driver, cfg: Config) -> int:
         # Wipe stale CI_MEMBER_OF for covered characters so reruns stay
         # clean (history can shift if is_deleted flips).
         char_ids = sorted({r["character_id"] for r in rows})
-        for i in range(0, len(char_ids), 5000):
+        # Batch lowered to 500 — same reasoning as the CO_OCCURS wipe.
+        for i in range(0, len(char_ids), 500):
             sess.run(
                 """
                 UNWIND $ids AS cid
                 MATCH (c:CICharacter {character_id: cid})-[m:CI_MEMBER_OF]->(:CIAlliance)
                 DELETE m
                 """,
-                ids=char_ids[i:i + 5000],
+                ids=char_ids[i:i + 500],
             )
         for i in range(0, len(rows), 1000):
             b = rows[i:i + 1000]
@@ -422,15 +423,20 @@ def _upsert_co_occurs(conn, driver: Driver, cfg: Config, ws: datetime, we: datet
     large_theater_threshold = cfg.large_theater_threshold_participants
 
     # 1) Wipe stale edges for covered characters.
+    # Batch lowered 5000 → 500 to stay under Neo4j's 1 GiB single-tx
+    # memory cap. With ~110k characters × hundreds of edges each, the
+    # 5000-id MATCH+DELETE tripped TransientError.MemoryPoolOutOfMemoryError
+    # (2026-04-30 incident). Smaller batches add a few seconds of
+    # round-trip overhead but stay within the per-tx memory budget.
     with neo_session(driver, cfg) as sess:
-        for i in range(0, len(scored_ids), 5000):
+        for i in range(0, len(scored_ids), 500):
             sess.run(
                 """
                 UNWIND $ids AS cid
                 MATCH (c:CICharacter {character_id: cid})-[e:CI_CO_OCCURS_WITH|CI_FOUGHT_AGAINST]-()
                 DELETE e
                 """,
-                ids=scored_ids[i:i + 5000],
+                ids=scored_ids[i:i + 500],
             )
     log.info("stale edges cleared")
 
