@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Filament\Portal\Pages;
 
+use App\Domains\CounterIntel\Jobs\RefineHypothesisJob;
 use BackedEnum;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -89,6 +91,9 @@ class CounterIntelCommand extends Page
             ->limit(25)
             ->get();
 
+        $hypothesisIds = $rows->pluck('id')->map(fn ($v) => (int) $v)->all();
+        $aiStatusByRefId = $hypothesisIds === [] ? [] : $this->loadAiStatusForHypotheses($hypothesisIds);
+
         $cards = [];
         foreach ($rows as $r) {
             $signals = $this->safeJson($r->evidence_summary_json) ?? [];
@@ -99,6 +104,7 @@ class CounterIntelCommand extends Page
                 ->where('entity_id', $r->primary_character_id)
                 ->where('category', 'character')
                 ->value('name');
+            $aiStatus = $aiStatusByRefId[(int) $r->id] ?? null;
             $cards[] = [
                 'id' => (int) $r->id,
                 'character_id' => (int) $r->primary_character_id,
@@ -118,6 +124,7 @@ class CounterIntelCommand extends Page
                 'caveats' => is_array($caveats) ? $caveats : [],
                 'why_strengthened' => is_array($why) ? $why : [],
                 'ai_model' => $r->ai_model,
+                'ai_status' => $aiStatus,
             ];
         }
 
@@ -195,6 +202,95 @@ class CounterIntelCommand extends Page
     {
         if ($raw === null || $raw === '') return null;
         return json_decode($raw, true);
+    }
+
+    /**
+     * Latest ai_hypothesis audit row per hypothesis id, indexed by
+     * surface_ref_id. One subquery picks MAX(id) per ref so the
+     * payload reflects the most recent synthesis (fast or heavy).
+     *
+     * @param  array<int, int>  $hypothesisIds
+     * @return array<int, array{tier:string, model_used:?string, generated_at:?string, latency_ms:int, evidence_count:int, hallucination_drops:int, fell_back:bool}>
+     */
+    private function loadAiStatusForHypotheses(array $hypothesisIds): array
+    {
+        $latestIds = DB::table('intel_audit_log')
+            ->where('surface', 'ai_hypothesis')
+            ->whereIn('surface_ref_id', $hypothesisIds)
+            ->selectRaw('MAX(id) AS max_id')
+            ->groupBy('surface_ref_id')
+            ->pluck('max_id')
+            ->all();
+
+        if ($latestIds === []) {
+            return [];
+        }
+
+        $rows = DB::table('intel_audit_log')
+            ->whereIn('id', $latestIds)
+            ->get(['id', 'surface_ref_id', 'metadata_json', 'new_state_json', 'created_at']);
+
+        $out = [];
+        foreach ($rows as $row) {
+            $meta = json_decode((string) ($row->metadata_json ?? ''), true);
+            if (! is_array($meta)) {
+                $meta = [];
+            }
+            $newState = json_decode((string) ($row->new_state_json ?? ''), true);
+            $aiOutput = is_array($newState) ? ($newState['ai_output'] ?? []) : [];
+            $evidence = is_array($aiOutput) ? ($aiOutput['key_evidence'] ?? []) : [];
+
+            $out[(int) $row->surface_ref_id] = [
+                'tier' => (string) ($meta['tier'] ?? 'fast'),
+                'model_used' => isset($meta['model_used']) ? (string) $meta['model_used'] : null,
+                'generated_at' => (string) ($row->created_at ?? ''),
+                'latency_ms' => (int) ($meta['latency_ms'] ?? 0),
+                'evidence_count' => is_array($evidence) ? count($evidence) : 0,
+                'hallucination_drops' => (int) ($meta['evidence_dropped_for_hallucinated_source'] ?? 0),
+                'fell_back' => (bool) ($meta['fell_back'] ?? false),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Operator-triggered "Refine with heavy model" action. Dispatches
+     * a queued RefineHypothesisJob (timeout=240, ShouldBeUnique on
+     * hypothesis id). Operator gets a toast + refreshes the surface
+     * once the job lands. Heavy tier never auto-batches: one row per
+     * click.
+     */
+    public function refineHeavy(int $hypothesisId): void
+    {
+        $row = DB::table('counter_intel_hypotheses')
+            ->where('id', $hypothesisId)
+            ->first(['id', 'viewer_bloc_id']);
+
+        if ($row === null) {
+            Notification::make()
+                ->title('Hypothesis not found')
+                ->danger()
+                ->send();
+            return;
+        }
+
+        $blocId = $this->resolveViewerBlocId();
+        if ($blocId === null || (int) $row->viewer_bloc_id !== $blocId) {
+            Notification::make()
+                ->title('Out-of-bloc hypothesis — refresh and try again')
+                ->danger()
+                ->send();
+            return;
+        }
+
+        RefineHypothesisJob::dispatch($hypothesisId);
+
+        Notification::make()
+            ->title('Heavy refinement queued')
+            ->body('mistral-large-3 takes ~30–180s. Refresh in a minute to see the updated summary.')
+            ->success()
+            ->send();
     }
 
     private function resolveViewerBlocId(): ?int

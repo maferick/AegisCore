@@ -163,6 +163,34 @@
                             </details>
                         @endif
 
+                        @if (! empty($c['ai_status']))
+                            @php $ai = $c['ai_status']; @endphp
+                            <div style="display:flex; gap:0.35rem; align-items:center; margin-top:0.4rem; flex-wrap:wrap; font-size:0.55rem; color:#9ca3af;">
+                                <span style="padding:2px 8px; border-radius:3px; background:rgba(165,180,252,0.10); color:#a5b4fc; text-transform:uppercase; letter-spacing:0.06em;"
+                                      title="Tier used for the most recent synthesis. fast = stepfun-ai/step-3.5-flash. heavy = mistral-large-3.">
+                                    AI {{ $ai['tier'] }}
+                                </span>
+                                <span title="Model that produced the active summary">
+                                    <code>{{ $ai['model_used'] ?? '?' }}</code>
+                                </span>
+                                <span title="evidence rows kept after no-hallucinate validator">
+                                    · {{ $ai['evidence_count'] }} evidence
+                                </span>
+                                @if ($ai['hallucination_drops'] > 0)
+                                    <span style="color:#fb7185;" title="Evidence rows dropped because the AI cited a source_table not present in the input prompt">
+                                        · {{ $ai['hallucination_drops'] }} drop{{ $ai['hallucination_drops'] === 1 ? '' : 's' }}
+                                    </span>
+                                @endif
+                                @if ($ai['fell_back'])
+                                    <span style="color:#fdba74;" title="Primary model failed and the JSON-safety-net fallback model produced this summary">
+                                        · fellback
+                                    </span>
+                                @endif
+                                <span title="Latency of the synthesis call">· {{ $ai['latency_ms'] }} ms</span>
+                                <span style="color:#7a7a82;">· generated <x-relative-time :ts="$ai['generated_at']" /></span>
+                            </div>
+                        @endif
+
                         <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem; flex-wrap:wrap;">
                             <a href="/portal/characters/lookup?cid={{ $c['character_id'] }}"
                                style="text-decoration:none; padding:5px 12px; background:rgba(125,211,252,0.12); color:#7dd3fc; border:1px solid rgba(125,211,252,0.25); border-radius:5px; font-size:0.72rem; font-weight:600;">
@@ -172,6 +200,15 @@
                                style="text-decoration:none; padding:5px 12px; background:rgba(255,255,255,0.04); color:#cbd5e1; border:1px solid rgba(255,255,255,0.10); border-radius:5px; font-size:0.72rem;">
                                 Add to watchlist
                             </a>
+                            <button type="button"
+                                    wire:click="refineHeavy({{ $c['id'] }})"
+                                    wire:loading.attr="disabled"
+                                    wire:target="refineHeavy({{ $c['id'] }})"
+                                    style="cursor:pointer; padding:5px 12px; background:rgba(168,85,247,0.10); color:#c4b5fd; border:1px solid rgba(168,85,247,0.30); border-radius:5px; font-size:0.72rem;"
+                                    title="Queues a heavy-tier (mistral-large-3) refinement. Single row per click, ~30–180s. ADR 0013 — band can lower or hold, never raise.">
+                                <span wire:loading.remove wire:target="refineHeavy({{ $c['id'] }})">Refine with heavy model</span>
+                                <span wire:loading wire:target="refineHeavy({{ $c['id'] }})">Queueing…</span>
+                            </button>
                             <span style="margin-left:auto; font-size:0.55rem; color:#7a7a82;">
                                 first seen <x-relative-time :ts="$c['first_seen_at']" /> ·
                                 model <code>{{ $c['ai_model'] ?? 'rule_based_v1' }}</code>
