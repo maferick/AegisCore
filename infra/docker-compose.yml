@@ -326,6 +326,32 @@ services:
       ESI_TIMEOUT_SECONDS: "${ESI_TIMEOUT_SECONDS:-10}"
       ESI_RATE_LIMIT_SAFETY_MARGIN: "${ESI_RATE_LIMIT_SAFETY_MARGIN:-5}"
       ESI_RATE_LIMIT_MAX_WAIT_SECONDS: "${ESI_RATE_LIMIT_MAX_WAIT_SECONDS:-5}"
+
+      # ---------------------------------------------------------------
+      # NVIDIA NIM — optional safe-AI backend (ADR 0012 / ADR 0013)
+      # ---------------------------------------------------------------
+      # Read by config/services.php → consumed by App\Services\Ai\NvidiaNimClient.
+      # Empty NVIDIA_NIM_API_KEY disables the client (isConfigured() = false);
+      # downstream artisan commands degrade gracefully and CI never blocks.
+      # See calibration_proposals row 2026-04-30 (kind=dependency_addition).
+      NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY:-}"
+      NVIDIA_NIM_BASE_URL: "${NVIDIA_NIM_BASE_URL:-https://integrate.api.nvidia.com/v1}"
+      # Tiered models: primary=fast loop, fallback=JSON safety net,
+      # heavy=final summary, safety=optional content-safety pass.
+      NVIDIA_NIM_PRIMARY_MODEL: "${NVIDIA_NIM_PRIMARY_MODEL:-stepfun-ai/step-3.5-flash}"
+      NVIDIA_NIM_FALLBACK_MODEL: "${NVIDIA_NIM_FALLBACK_MODEL:-z-ai/glm4.7}"
+      NVIDIA_NIM_HEAVY_MODEL: "${NVIDIA_NIM_HEAVY_MODEL:-mistralai/mistral-large-3-675b-instruct-2512}"
+      NVIDIA_NIM_SAFETY_MODEL: "${NVIDIA_NIM_SAFETY_MODEL:-nvidia/nemotron-content-safety-reasoning}"
+      NVIDIA_NIM_TIMEOUT: "${NVIDIA_NIM_TIMEOUT:-30}"
+      NVIDIA_NIM_HEAVY_TIMEOUT: "${NVIDIA_NIM_HEAVY_TIMEOUT:-180}"
+      NVIDIA_NIM_CONNECT_TIMEOUT: "${NVIDIA_NIM_CONNECT_TIMEOUT:-5}"
+      NVIDIA_NIM_MAX_RETRIES: "${NVIDIA_NIM_MAX_RETRIES:-2}"
+      NVIDIA_NIM_RETRY_BASE_MS: "${NVIDIA_NIM_RETRY_BASE_MS:-500}"
+      NVIDIA_NIM_TEMPERATURE: "${NVIDIA_NIM_TEMPERATURE:-0.2}"
+      NVIDIA_NIM_HEAVY_TEMPERATURE: "${NVIDIA_NIM_HEAVY_TEMPERATURE:-0.15}"
+      NVIDIA_NIM_MAX_TOKENS: "${NVIDIA_NIM_MAX_TOKENS:-1500}"
+      NVIDIA_NIM_HEAVY_MAX_TOKENS: "${NVIDIA_NIM_HEAVY_MAX_TOKENS:-4096}"
+      NVIDIA_NIM_JSON_MODE: "${NVIDIA_NIM_JSON_MODE:-true}"
     volumes:
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/app:/var/www/html
       - ${AEGISCORE_ROOT:-/opt/aegiscore}/php/conf.d/aegiscore.ini:/usr/local/etc/php/conf.d/zz-aegiscore.ini:ro
