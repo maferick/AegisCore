@@ -207,10 +207,54 @@ final class HypothesisSynthesisService
                 $dropped++;
                 continue;
             }
+            // Server-side source_link generation — never trust the AI
+            // to invent URLs. Whatever the model emitted is overwritten
+            // with the canonical portal route for the cited table+ids,
+            // or dropped entirely when no canonical mapping exists.
+            $ev['source_link'] = $this->canonicalSourceLink(
+                $tbl,
+                is_array($ev['source_ids'] ?? null) ? $ev['source_ids'] : [],
+            );
             $kept[] = $ev;
         }
         $validated['key_evidence'] = $kept;
         return ['data' => $validated, 'dropped_count' => $dropped];
+    }
+
+    /**
+     * Map (source_table, source_ids) → canonical portal URL. Returns
+     * null when no mapping is known for the table — caller renders the
+     * citation without a clickable link rather than risk a 404.
+     *
+     * @param  array<int, mixed>  $sourceIds
+     */
+    private function canonicalSourceLink(string $sourceTable, array $sourceIds): ?string
+    {
+        $firstId = null;
+        foreach ($sourceIds as $id) {
+            if (is_int($id) || (is_string($id) && ctype_digit($id))) {
+                $firstId = (int) $id;
+                break;
+            }
+        }
+        if ($firstId === null) {
+            return null;
+        }
+
+        return match ($sourceTable) {
+            'ci_character_features_rolling',
+            'ci_character_anomalies_rolling',
+            'ci_combat_anomalies',
+            'ci_character_ground_truth',
+            'character_corporation_history',
+            'esi_entity_names'
+                => '/portal/characters/lookup?cid='.$firstId,
+            'killmails', 'killmail_attackers', 'killmail_victims'
+                => '/portal/killmails/'.$firstId,
+            'counter_intel_hypotheses'
+                => '/portal/counter-intel/command#hypothesis-'.$firstId,
+            default => null,
+        };
     }
 
     /**
@@ -270,8 +314,10 @@ Strict rules (ADR 0013):
    it (with reasoning), but DO NOT raise it.
 4. Each item in key_evidence MUST be an object with keys: claim
    (short string), source_table (string), source_ids (array of
-   integers/strings), and optional source_link (string). Cite the
-   actual table + ids you saw in the input — never invent.
+   integers/strings). Cite the actual table + ids you saw in the
+   input — never invent. DO NOT emit source_link — the platform
+   generates canonical URLs server-side; any URL you write is
+   discarded.
 5. caveats MUST list what could weaken the hypothesis (sample size,
    freshness, contamination, alternative explanations).
 6. freshness MUST be an object with: oldest_signal_at, newest_signal_at,
