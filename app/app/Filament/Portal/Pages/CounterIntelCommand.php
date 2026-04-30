@@ -248,6 +248,7 @@ class CounterIntelCommand extends Page
                 'evidence_count' => is_array($evidence) ? count($evidence) : 0,
                 'hallucination_drops' => (int) ($meta['evidence_dropped_for_hallucinated_source'] ?? 0),
                 'fell_back' => (bool) ($meta['fell_back'] ?? false),
+                'ai_output' => is_array($aiOutput) ? $aiOutput : [],
             ];
         }
 

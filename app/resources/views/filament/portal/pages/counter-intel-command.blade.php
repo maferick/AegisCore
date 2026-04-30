@@ -164,7 +164,10 @@
                         @endif
 
                         @if (! empty($c['ai_status']))
-                            @php $ai = $c['ai_status']; @endphp
+                            @php
+                                $ai = $c['ai_status'];
+                                $aiOut = $ai['ai_output'] ?? [];
+                            @endphp
                             <div style="display:flex; gap:0.35rem; align-items:center; margin-top:0.4rem; flex-wrap:wrap; font-size:0.55rem; color:#9ca3af;">
                                 <span style="padding:2px 8px; border-radius:3px; background:rgba(165,180,252,0.10); color:#a5b4fc; text-transform:uppercase; letter-spacing:0.06em;"
                                       title="Tier used for the most recent synthesis. fast = stepfun-ai/step-3.5-flash. heavy = mistral-large-3.">
@@ -189,6 +192,75 @@
                                 <span title="Latency of the synthesis call">· {{ $ai['latency_ms'] }} ms</span>
                                 <span style="color:#7a7a82;">· generated <x-relative-time :ts="$ai['generated_at']" /></span>
                             </div>
+
+                            @if (! empty($aiOut))
+                                <details style="margin-top:0.4rem;" open>
+                                    <summary style="font-size:0.65rem; color:#a5b4fc; cursor:pointer; font-weight:600;">
+                                        AI synthesis ({{ $ai['tier'] }} tier)
+                                    </summary>
+                                    <div style="margin:0.4rem 0 0 0.2rem; padding:0.5rem 0.7rem; background:rgba(165,180,252,0.04); border-left:2px solid rgba(165,180,252,0.30); border-radius:4px;">
+                                        @if (! empty($aiOut['summary']))
+                                            <p style="font-size:0.78rem; color:#e2e8f0; margin:0 0 0.4rem; line-height:1.55;">
+                                                {{ $aiOut['summary'] }}
+                                            </p>
+                                        @endif
+                                        @if (! empty($aiOut['confidence_reasoning']))
+                                            <p style="font-size:0.7rem; color:#cbd5e1; margin:0 0 0.4rem; line-height:1.55;">
+                                                <strong style="color:#a5b4fc;">Confidence reasoning:</strong>
+                                                {{ $aiOut['confidence_reasoning'] }}
+                                            </p>
+                                        @endif
+                                        @if (is_array($aiOut['key_evidence'] ?? null) && count($aiOut['key_evidence']) > 0)
+                                            <div style="margin:0.3rem 0;">
+                                                <div style="font-size:0.62rem; color:#7dd3fc; font-weight:600; margin-bottom:0.2rem;">key evidence ({{ count($aiOut['key_evidence']) }})</div>
+                                                <ul style="margin:0 0 0 1.2rem; font-size:0.72rem; color:#cbd5e1; line-height:1.55;">
+                                                    @foreach ($aiOut['key_evidence'] as $ev)
+                                                        <li>
+                                                            {{ $ev['claim'] ?? '?' }}
+                                                            @if (! empty($ev['source_link']))
+                                                                <a href="{{ $ev['source_link'] }}" style="color:#7dd3fc; text-decoration:none; border-bottom:1px dotted rgba(125,211,252,0.4);" title="{{ $ev['source_table'] ?? '' }}">
+                                                                    [{{ $ev['source_table'] ?? '?' }}]
+                                                                </a>
+                                                            @elseif (! empty($ev['source_table']))
+                                                                <code style="font-size:0.62rem; color:#9ca3af;">[{{ $ev['source_table'] }}]</code>
+                                                            @endif
+                                                        </li>
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+                                        @if (is_array($aiOut['caveats'] ?? null) && count($aiOut['caveats']) > 0)
+                                            <div style="margin:0.3rem 0;">
+                                                <div style="font-size:0.62rem; color:#fdba74; font-weight:600; margin-bottom:0.2rem;">caveats ({{ count($aiOut['caveats']) }})</div>
+                                                <ul style="margin:0 0 0 1.2rem; font-size:0.72rem; color:#cbd5e1; line-height:1.55;">
+                                                    @foreach ($aiOut['caveats'] as $cv)
+                                                        <li>{{ is_string($cv) ? $cv : json_encode($cv) }}</li>
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+                                        @if (is_array($aiOut['next_investigation_steps'] ?? null) && count($aiOut['next_investigation_steps']) > 0)
+                                            <div style="margin:0.3rem 0;">
+                                                <div style="font-size:0.62rem; color:#86efac; font-weight:600; margin-bottom:0.2rem;">next investigation steps</div>
+                                                <ul style="margin:0 0 0 1.2rem; font-size:0.72rem; color:#cbd5e1; line-height:1.55;">
+                                                    @foreach ($aiOut['next_investigation_steps'] as $step)
+                                                        @if (is_array($step))
+                                                            <li>
+                                                                {{ $step['query'] ?? json_encode($step) }}
+                                                                @if (! empty($step['rationale']))
+                                                                    <span style="color:#7a7a82;"> — {{ $step['rationale'] }}</span>
+                                                                @endif
+                                                            </li>
+                                                        @else
+                                                            <li>{{ $step }}</li>
+                                                        @endif
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+                                    </div>
+                                </details>
+                            @endif
                         @endif
 
                         <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem; flex-wrap:wrap;">

@@ -158,6 +158,19 @@ Schedule::command('classification:sweep-stale --dispatch')
     ->withoutOverlapping(30)
     ->name('classification-sweep-stale');
 
+// Sovereignty refresh + daily history snapshot. Pulls /sovereignty/map/,
+// mirrors into system_sovereignty (current state), and writes a
+// per-day snapshot into system_sovereignty_history for sov-flip
+// diffing on the war report. Sov flips happen at the end of EVE
+// "downtime" (~11:00 UTC), so we capture at 11:30 UTC to record
+// the post-flip day's state.
+Schedule::command('sov:sync')
+    ->dailyAt('11:30')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(15)
+    ->name('sov-sync-daily');
+
 // Killmail enrichment — drain the unenriched backlog in parallel.
 //
 // Dispatches one enrichment job per unenriched month every 5 minutes.
@@ -444,3 +457,16 @@ Schedule::call(function (): void {
     ->timezone('UTC')
     ->onOneServer()
     ->withoutOverlapping(10);
+
+// Counter-Intel AI auto-refresh — hourly, fast tier only.
+// Eligibility: top-20 OR strengthened OR stale-summary OR never-
+// synthesised. Built-in daily cap (60) + 30-min circuit breaker.
+// Heavy tier remains operator-button only (mistral-large-3 is
+// intermittently 502 today). Graceful skip on every error path —
+// never blocks the hourly tick. ADR 0012 + ADR 0013 governance.
+Schedule::command('counter-intel:ai-refresh-stale --viewer-bloc=1 --limit=10')
+    ->hourly()
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(50)
+    ->name('counter-intel-ai-refresh-stale');

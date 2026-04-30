@@ -214,6 +214,112 @@ Plus action button **"Refine with heavy model"**:
   rolling success rate ≥ 95%; only then enable scheduled
   heavy-tier batches.
 
+## Auto-refresh (hourly cron, fast tier only)
+
+Shipped 2026-04-30 as `counter-intel:ai-refresh-stale`. Hourly via
+`Schedule::command(...)->hourly()` in `routes/console.php`.
+
+### Eligibility (any of)
+
+- top 20 active by score (active, not archived)
+- `last_strengthened_at > ai_summary_generated_at` (signals
+  strengthened since last AI run)
+- `ai_summary_freshness_state` ∈ {stale, expired}
+- `ai_summary_generated_at IS NULL` (never synthesised)
+
+### Skip rules (defence-in-depth)
+
+- NIM not configured / provider unavailable → skip + record
+  `failure_reason='nim_not_configured'`
+- evidence_hash unchanged AND ai_summary_generated_at < 24h →
+  skip silently (service-layer gate)
+- circuit breaker open (≥3 `synthesize_failed` audit rows in
+  trailing 30 min) → abort run
+- daily cap reached (60 successes today) → abort run
+
+### Schema (added 2026-04-30, migration
+`2026_04_30_180000_add_ai_summary_state_to_counter_intel_hypotheses.php`)
+
+| column | role |
+|---|---|
+| `ai_summary_generated_at` | timestamp of last successful synthesis |
+| `ai_summary_freshness_state` | fresh/aging/stale/expired band |
+| `ai_summary_evidence_hash` | sha256 over evidence + signals + score + bands |
+| `ai_summary_model` | model id that produced the summary |
+| `ai_summary_tier` | fast / heavy |
+| `ai_summary_latency_ms` | wall time of the call |
+| `ai_summary_attempt_count` | total attempts (incl. failed) |
+| `ai_summary_last_attempt_at` | last attempt regardless of outcome |
+| `ai_summary_failure_reason` | nullable; populated on failed attempts |
+
+Indexes:
+- `idx_ai_summary_freshness (viewer_bloc_id, ai_summary_freshness_state)`
+- `idx_ai_summary_eligibility (viewer_bloc_id, ai_summary_generated_at)`
+
+### Verification runs (2026-04-30)
+
+```
+$ counter-intel:ai-refresh-stale --viewer-bloc=1 --limit=3 --dry-run
+auto-refresh viewer_bloc=1 eligible=3 limit=3 daily_used=44/60 circuit_failures_30m=0 (dry-run)
+plan #33655 band=high sev=elevated score=8.38 reason=never_synthesised
+plan #33656 band=high sev=elevated score=7.95 reason=never_synthesised
+plan #33644 band=high sev=elevated score=6.14 reason=never_synthesised
+done ok=0 skipped=3 failed=0 total_latency_ms=0
+
+$ counter-intel:ai-refresh-stale --viewer-bloc=1 --limit=3
+auto-refresh viewer_bloc=1 eligible=3 limit=3 daily_used=44/60 circuit_failures_30m=0
+ok  #33655 :: model=stepfun-ai/step-3.5-flash latency_ms=10384 evidence=6
+ok  #33656 :: model=stepfun-ai/step-3.5-flash latency_ms=7287  evidence=6
+ok  #33644 :: model=stepfun-ai/step-3.5-flash latency_ms=10554 evidence=5
+done ok=3 skipped=0 failed=0 total_latency_ms=28225
+
+$ counter-intel:ai-refresh-stale --viewer-bloc=1 --limit=3   # immediately after
+auto-refresh viewer_bloc=1 eligible=3 limit=3 daily_used=47/60 circuit_failures_30m=0
+ok  #33648 :: latency_ms=8084 evidence=4
+ok  #33649 :: latency_ms=4949 evidence=4
+ok  #33643 :: latency_ms=8103 evidence=4
+done ok=3 skipped=0 failed=0 total_latency_ms=21136
+```
+
+The third run picks **different** rows — the just-synthesised
+33655/33656/33644 are correctly excluded by the SQL eligibility
+filter (NULL-or-stale-or-strengthened predicate). Skip-if-fresh
+gate verified.
+
+After all three runs, sample column state for hypothesis #33655:
+
+```
+gen=2026-04-30 19:35:32 state=fresh hash=cb13977cf96d…
+model=stepfun-ai/step-3.5-flash tier=fast ms=10384
+attempts=1 failure_reason=null
+```
+
+## Visibility — where to read AI output
+
+The CI Command page (`/portal/counter-intel/command`) now renders
+an inline **"AI synthesis"** section per card (open by default)
+showing:
+
+- the AI's summary body (`summary` field)
+- confidence reasoning
+- key evidence list with claim text + canonical source link
+- caveats list
+- next investigation steps (query + rationale per row)
+
+Plus the existing status strip (tier · model · evidence count ·
+hallucinate drops · fellback · latency · generated time).
+
+The full AI JSON output (including the field-level structure)
+is also persisted on every synthesis in
+`intel_audit_log.new_state_json.ai_output` — queryable with:
+
+```sql
+SELECT JSON_EXTRACT(new_state_json, '$.ai_output')
+FROM intel_audit_log
+WHERE surface = 'ai_hypothesis' AND surface_ref_id = ?
+ORDER BY id DESC LIMIT 1;
+```
+
 ## Re-run procedure
 
 ```

@@ -49,6 +49,11 @@ final class HypothesisSynthesisService
 
     private const ALLOWED_BANDS = ['low', 'medium', 'high', 'confirmed'];
 
+    /** Auto-refresh freshness windows (hours). */
+    public const FRESH_HOURS = 24;
+    public const AGING_HOURS = 72;
+    public const STALE_HOURS = 168; // 7 days
+
     public function __construct(private readonly NvidiaNimClient $nim)
     {
     }
@@ -82,9 +87,15 @@ final class HypothesisSynthesisService
      *   - heavy: heavy summary model, larger budget, no auto-fallback.
      *     For final-output / "what changed" / CI command surface.
      */
-    public function synthesizeRow(stdClass $row, string $tier = NvidiaNimClient::TIER_FAST): ?array
+    public function synthesizeRow(stdClass $row, string $tier = NvidiaNimClient::TIER_FAST, bool $skipIfFresh = false): ?array
     {
         if (! $this->nim->isConfigured()) {
+            $this->recordFailedAttempt((int) $row->id, $tier, 'nim_not_configured');
+            return null;
+        }
+
+        $evidenceHash = self::evidenceHash($row);
+        if ($skipIfFresh && $this->isFreshAndUnchanged($row, $evidenceHash)) {
             return null;
         }
 
@@ -99,6 +110,7 @@ final class HypothesisSynthesisService
             ]);
 
         if ($result === null) {
+            $this->recordFailedAttempt((int) $row->id, $tier, 'provider_failure');
             return null;
         }
 
@@ -110,6 +122,7 @@ final class HypothesisSynthesisService
                 'prompt_hash' => $result['meta']['prompt_hash'] ?? null,
                 'missing_or_bad_fields' => $this->describeValidationFailure($result['data']),
             ]);
+            $this->recordFailedAttempt((int) $row->id, $tier, 'validation_failed');
             return null;
         }
 
@@ -127,12 +140,14 @@ final class HypothesisSynthesisService
                 'allowed_tables' => $allowedTables,
                 'dropped_count' => $cleaned['dropped_count'],
             ]);
+            $this->recordFailedAttempt((int) $row->id, $tier, 'all_evidence_hallucinated');
             return null;
         }
         $validated = $cleaned['data'];
         $meta = $result['meta'];
         $meta['evidence_dropped_for_hallucinated_source'] = $cleaned['dropped_count'];
         $meta['tier'] = $tier;
+        $meta['evidence_hash'] = $evidenceHash;
 
         $this->persist((int) $row->id, $row, $validated, $meta);
 
@@ -416,6 +431,9 @@ SYS;
     private function persist(int $hypothesisId, stdClass $priorRow, array $validated, array $meta): void
     {
         $newSummary = mb_substr((string) $validated['title'], 0, 500);
+        $now = now();
+        $modelUsed = mb_substr((string) ($meta['model_used'] ?? ''), 0, 120);
+        $tier = mb_substr((string) ($meta['tier'] ?? NvidiaNimClient::TIER_FAST), 0, 20);
 
         $prior = [
             'hypothesis_summary' => (string) $priorRow->hypothesis_summary,
@@ -425,13 +443,22 @@ SYS;
 
         $newState = [
             'hypothesis_summary' => $newSummary,
-            'ai_model' => mb_substr((string) ($meta['model_used'] ?? ''), 0, 120),
+            'ai_model' => $modelUsed,
             'ai_prompt_hash' => mb_substr((string) ($meta['prompt_hash'] ?? ''), 0, 64),
+            'ai_summary_generated_at' => $now,
+            'ai_summary_freshness_state' => 'fresh',
+            'ai_summary_evidence_hash' => mb_substr((string) ($meta['evidence_hash'] ?? ''), 0, 64),
+            'ai_summary_model' => $modelUsed,
+            'ai_summary_tier' => $tier,
+            'ai_summary_latency_ms' => (int) ($meta['latency_ms'] ?? 0),
+            'ai_summary_attempt_count' => (int) ($priorRow->ai_summary_attempt_count ?? 0) + 1,
+            'ai_summary_last_attempt_at' => $now,
+            'ai_summary_failure_reason' => null,
         ];
 
         DB::table('counter_intel_hypotheses')
             ->where('id', $hypothesisId)
-            ->update($newState + ['updated_at' => now()]);
+            ->update($newState + ['updated_at' => $now]);
 
         IntelAuditLog::recordAi(
             IntelAuditLog::SURFACE_AI_HYPOTHESIS,
@@ -460,5 +487,84 @@ SYS;
         }
         $decoded = json_decode($raw, true);
         return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * Stable hash of the fusion evidence payload — used by the auto-
+     * refresh command to detect whether the row's signals changed
+     * since the last AI synthesis. Unchanged hash + fresh summary =
+     * skip.
+     */
+    public static function evidenceHash(stdClass $row): string
+    {
+        $payload = (string) ($row->evidence_summary_json ?? '')
+            .'|'.(string) ($row->source_signal_refs_json ?? '')
+            .'|'.(string) ($row->confidence ?? '')
+            .'|'.(string) ($row->severity ?? '')
+            .'|'.(string) ($row->suspicion_score ?? '');
+        return hash('sha256', $payload);
+    }
+
+    /**
+     * Map an `ai_summary_generated_at` timestamp into the four-band
+     * freshness state used by the auto-refresh eligibility logic.
+     */
+    public static function freshnessState(?string $generatedAt): ?string
+    {
+        if ($generatedAt === null || $generatedAt === '') {
+            return null;
+        }
+        $hours = now()->diffInHours($generatedAt, true);
+        if ($hours < self::FRESH_HOURS) return 'fresh';
+        if ($hours < self::AGING_HOURS) return 'aging';
+        if ($hours < self::STALE_HOURS) return 'stale';
+        return 'expired';
+    }
+
+    /**
+     * Skip predicate for the auto-refresh path. Skip when the existing
+     * summary is < 24h old AND derived from the same evidence hash.
+     * Manual operator-triggered refreshes ignore this gate.
+     */
+    private function isFreshAndUnchanged(stdClass $row, string $newHash): bool
+    {
+        $existing = $row->ai_summary_evidence_hash ?? null;
+        $generatedAt = $row->ai_summary_generated_at ?? null;
+        if ($existing === null || $generatedAt === null) {
+            return false;
+        }
+        if ($existing !== $newHash) {
+            return false;
+        }
+        return self::freshnessState((string) $generatedAt) === 'fresh';
+    }
+
+    /**
+     * Recovery-side bookkeeping when a synthesis attempt fails. Bumps
+     * the attempt counter, stamps the reason + last_attempt_at, leaves
+     * the prior summary visible, and writes a `synthesize_failed`
+     * audit row so the failure is queryable from intel_audit_log.
+     */
+    private function recordFailedAttempt(int $hypothesisId, string $tier, string $reason): void
+    {
+        $now = now();
+        DB::table('counter_intel_hypotheses')
+            ->where('id', $hypothesisId)
+            ->update([
+                'ai_summary_attempt_count' => DB::raw('ai_summary_attempt_count + 1'),
+                'ai_summary_last_attempt_at' => $now,
+                'ai_summary_failure_reason' => mb_substr($reason, 0, 120),
+                'ai_summary_tier' => mb_substr($tier, 0, 20),
+                'updated_at' => $now,
+            ]);
+
+        IntelAuditLog::recordAi(
+            IntelAuditLog::SURFACE_AI_HYPOTHESIS,
+            $hypothesisId,
+            'synthesize_failed',
+            null,
+            ['failure_reason' => $reason, 'tier' => $tier],
+            ['adr_basis' => ['0012', '0013']],
+        );
     }
 }
