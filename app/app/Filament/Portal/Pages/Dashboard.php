@@ -334,23 +334,44 @@ class Dashboard extends BaseDashboard
         // pilot on the same killmails (attacker-side co-occurrence).
         // Excludes the pilot's own alliance so the result reads as
         // "you flew with these" not "you're in this alliance".
-        $foughtWith = DB::select(<<<'SQL'
-            SELECT ka2.alliance_id, COUNT(DISTINCT ka.killmail_id) AS n
+        // Two-stage: aggregate by PEER CHARACTER, then map each peer
+        // to their CURRENT alliance via character_corporation_history.
+        // The legacy single-query version grouped by ka2.alliance_id
+        // (kill-time snapshot), which surfaced the peer's old alliance
+        // long after they defected (2026-04-30 incident: Bakkanta
+        // pilots showed Dracarys after their move to Insidious).
+        // Non-character co-attackers (NPCs, structures) keep the
+        // kill-time alliance because they have no current to look up.
+        $foughtWithRaw = DB::select(<<<'SQL'
+            SELECT ka2.character_id AS peer_cid,
+                   ka2.alliance_id AS peer_aid_at_kill,
+                   COUNT(DISTINCT ka.killmail_id) AS n
               FROM killmail_attackers ka
-              JOIN killmail_attackers ka2 ON ka2.killmail_id=ka.killmail_id AND ka2.alliance_id IS NOT NULL
-             WHERE ka.character_id=? AND ka2.character_id <> ? AND (ka2.alliance_id <> ? OR ? = 0)
-             GROUP BY ka2.alliance_id ORDER BY n DESC LIMIT 3
-        SQL, [$cid, $cid, $currentAllyId ?? 0, $currentAllyId ?? 0]);
+              JOIN killmail_attackers ka2
+                ON ka2.killmail_id = ka.killmail_id
+               AND ka2.alliance_id IS NOT NULL
+             WHERE ka.character_id = ?
+               AND (ka2.character_id IS NULL OR ka2.character_id <> ?)
+             GROUP BY ka2.character_id, ka2.alliance_id
+        SQL, [$cid, $cid]);
+        $foughtWith = $this->aggregateByCurrentAlliance($foughtWithRaw, $currentAllyId);
 
         // Most fought AGAINST — victim alliance on kills the pilot
-        // participated in.
-        $foughtAgainst = DB::select(<<<'SQL'
-            SELECT k.victim_alliance_id AS alliance_id, COUNT(*) AS n
-              FROM killmail_attackers ka JOIN killmails k ON k.killmail_id=ka.killmail_id
-             WHERE ka.character_id=? AND k.victim_alliance_id IS NOT NULL
-               AND (k.victim_alliance_id <> ? OR ? = 0)
-             GROUP BY k.victim_alliance_id ORDER BY n DESC LIMIT 3
-        SQL, [$cid, $currentAllyId ?? 0, $currentAllyId ?? 0]);
+        // participated in. Same two-stage rewrite: aggregate by
+        // VICTIM CHARACTER (or fall back to victim_alliance_id when
+        // the victim wasn't a character — structures), then resolve
+        // current alliance per peer.
+        $foughtAgainstRaw = DB::select(<<<'SQL'
+            SELECT k.victim_character_id AS peer_cid,
+                   k.victim_alliance_id  AS peer_aid_at_kill,
+                   COUNT(*) AS n
+              FROM killmail_attackers ka
+              JOIN killmails k ON k.killmail_id = ka.killmail_id
+             WHERE ka.character_id = ?
+               AND k.victim_alliance_id IS NOT NULL
+             GROUP BY k.victim_character_id, k.victim_alliance_id
+        SQL, [$cid]);
+        $foughtAgainst = $this->aggregateByCurrentAlliance($foughtAgainstRaw, $currentAllyId);
 
         // Neo4j insights — best-effort, null-safe if Neo4j is down.
         $insights = app(CharacterGraphInsightService::class);
@@ -464,6 +485,114 @@ class Dashboard extends BaseDashboard
             'counter_intel' => $counterIntel,
             'viewer_bloc_id' => $viewerBlocId,
         ];
+    }
+
+    /**
+     * Re-aggregate raw (peer_cid, peer_aid_at_kill, n) rows so the
+     * grouping key becomes the peer's CURRENT alliance instead of
+     * the kill-time snapshot. Caller already excluded the viewer's
+     * own character; we filter the viewer's *current* alliance here
+     * because the kill-time row may have a peer-now-ally entry that
+     * wouldn't have been excluded by the original SQL filter.
+     *
+     * @param  list<object>  $rows
+     * @return list<array{alliance_id: int, n: int}>
+     */
+    private function aggregateByCurrentAlliance(array $rows, ?int $excludeAllianceId): array
+    {
+        if ($rows === []) return [];
+
+        $peerCids = array_values(array_unique(array_filter(
+            array_map(static fn ($r) => isset($r->peer_cid) ? (int) $r->peer_cid : 0, $rows),
+        )));
+
+        $currentByCid = $peerCids === []
+            ? []
+            : $this->resolveCurrentAllianceMap($peerCids);
+
+        $tally = [];
+        foreach ($rows as $r) {
+            $peerCid = isset($r->peer_cid) ? (int) $r->peer_cid : 0;
+            // Prefer current alliance from the live affiliation cache.
+            // Fall back to kill-time snapshot when the peer is non-
+            // character (structure / NPC) or when we have no tracked
+            // history for them.
+            $aid = $peerCid > 0 && isset($currentByCid[$peerCid])
+                ? $currentByCid[$peerCid]
+                : (int) ($r->peer_aid_at_kill ?? 0);
+            if ($aid <= 0) continue;
+            if ($excludeAllianceId !== null && $aid === $excludeAllianceId) continue;
+            $tally[$aid] = ($tally[$aid] ?? 0) + (int) $r->n;
+        }
+
+        arsort($tally, SORT_NUMERIC);
+
+        $out = [];
+        foreach ($tally as $aid => $n) {
+            $out[] = ['alliance_id' => (int) $aid, 'n' => (int) $n];
+            if (count($out) >= 3) break;
+        }
+
+        return array_map(static fn (array $row) => (object) $row, $out);
+    }
+
+    /**
+     * Map character_id → current alliance_id from
+     * character_corporation_history → corporation_alliance_history
+     * (live affiliation cache). Mirrors the helper on
+     * CharacterGraphInsightService so both surfaces resolve the
+     * same way.
+     *
+     * @param  list<int>  $cids
+     * @return array<int, int>
+     */
+    private function resolveCurrentAllianceMap(array $cids): array
+    {
+        if ($cids === []) return [];
+
+        $corpRows = DB::table('character_corporation_history')
+            ->whereIn('character_id', $cids)
+            ->where('is_deleted', 0)
+            ->whereNull('end_date')
+            ->select('character_id', 'corporation_id', 'start_date')
+            ->orderBy('character_id')
+            ->orderByDesc('start_date')
+            ->get();
+
+        $corpByCid = [];
+        foreach ($corpRows as $r) {
+            $cid = (int) $r->character_id;
+            if (! isset($corpByCid[$cid])) {
+                $corpByCid[$cid] = (int) $r->corporation_id;
+            }
+        }
+        if ($corpByCid === []) return [];
+
+        $corpIds = array_values(array_unique(array_values($corpByCid)));
+        $allianceRows = DB::table('corporation_alliance_history')
+            ->whereIn('corporation_id', $corpIds)
+            ->whereNull('end_date')
+            ->select('corporation_id', 'alliance_id', 'start_date')
+            ->orderBy('corporation_id')
+            ->orderByDesc('start_date')
+            ->get();
+
+        $aidByCorp = [];
+        foreach ($allianceRows as $r) {
+            $corp = (int) $r->corporation_id;
+            if (isset($aidByCorp[$corp])) continue;
+            if ($r->alliance_id) {
+                $aidByCorp[$corp] = (int) $r->alliance_id;
+            }
+        }
+
+        $out = [];
+        foreach ($corpByCid as $cid => $corp) {
+            if (isset($aidByCorp[$corp])) {
+                $out[$cid] = $aidByCorp[$corp];
+            }
+        }
+        return $out;
     }
 
     /**

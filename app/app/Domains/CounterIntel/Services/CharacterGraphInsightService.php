@@ -233,7 +233,7 @@ final class CharacterGraphInsightService
      */
     public function archEnemies(int $cid, int $limit = 8): array
     {
-        $r = $this->safeCache("ci.insight.ae.{$cid}.v3.{$limit}", function () use ($cid, $limit): array {
+        $r = $this->safeCache("ci.insight.ae.{$cid}.v4.{$limit}", function () use ($cid, $limit): array {
             // Killmail-level top victims is the primary signal here —
             // more consistent than Neo4j CI_FOUGHT_AGAINST, which only
             // fires when the same pair repeats across 2+ sessions at
