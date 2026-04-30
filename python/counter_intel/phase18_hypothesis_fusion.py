@@ -517,6 +517,43 @@ def run_hypothesis_fusion(
                     {"viewer_bloc_id": viewer_bloc_id})
         return {"hypotheses_written": 0, "candidates": 0}
 
+    # Skip when the source anomaly snapshot has not advanced since the
+    # last fusion run. The phase1/phase2 anomaly tables refresh daily
+    # but phase18 ticks hourly, so 23 of 24 runs would re-compute on
+    # identical input. Compare MAX(computed_at) on the source anomaly
+    # rolling table to MAX(last_recomputed_at) on counter_intel_
+    # hypotheses for the same bloc; skip when the destination is at
+    # least as fresh. Manual re-runs that need to ignore the gate
+    # should pass FORCE_FUSION=1 (read below).
+    import os as _os
+    if not _os.environ.get("FORCE_FUSION"):
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT MAX(computed_at) AS src "
+                "FROM ci_character_anomalies_rolling WHERE viewer_bloc_id=%s",
+                (viewer_bloc_id,),
+            )
+            src_row = cur.fetchone() or {}
+            cur.execute(
+                "SELECT MAX(last_recomputed_at) AS dst "
+                "FROM counter_intel_hypotheses WHERE viewer_bloc_id=%s",
+                (viewer_bloc_id,),
+            )
+            dst_row = cur.fetchone() or {}
+        src_max = src_row.get("src")
+        dst_max = dst_row.get("dst")
+        if src_max is not None and dst_max is not None and dst_max >= src_max:
+            log.info("phase18 source snapshot unchanged — skipping",
+                     {"viewer_bloc_id": viewer_bloc_id,
+                      "src_max": str(src_max), "dst_max": str(dst_max)})
+            return {
+                "candidates": 0,
+                "hypotheses_written": 0,
+                "skipped_below_threshold": 0,
+                "archived_stale": 0,
+                "skipped_no_change": True,
+            }
+
     bundles = _gather_signals(conn, viewer_bloc_id, window_end)
     log.info("phase18 candidates gathered",
              {"candidates": len(bundles), "window_end": str(window_end)})

@@ -453,7 +453,12 @@ Schedule::call(function (): void {
     }
 })
     ->name('war-report-warm')
-    ->cron('*/2 * * * *')
+    // Cadence */5 = TTL/2 (TTL is 600 s). Previous */2 over-warmed
+    // by 5×; warmer ran 30×/hour for a 10-min cache. Halving the
+    // TTL gives the scheduler enough headroom for the occasional
+    // hiccup without spending compute on the same view five times
+    // before its prior warm-up has even expired.
+    ->cron('*/5 * * * *')
     ->timezone('UTC')
     ->onOneServer()
     ->withoutOverlapping(10);

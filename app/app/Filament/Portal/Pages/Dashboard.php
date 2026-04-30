@@ -9,6 +9,7 @@ use App\Domains\CounterIntel\Services\CounterIntelDossierService;
 use BackedEnum;
 use Filament\Pages\Dashboard as BaseDashboard;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use UnitEnum;
 
@@ -54,6 +55,28 @@ class Dashboard extends BaseDashboard
     public function buildCharacterCard(object $char): array
     {
         $cid = (int) $char->character_id;
+
+        // 5-minute card cache. buildCharacterCard executes 12+ heavy
+        // queries (history scans, hour histogram, top systems, fought
+        // with/against, neo4j cypher) per render. Same character is
+        // re-rendered hundreds of times per day across the operator's
+        // /me view + every char-lookup hit + every CI command card.
+        // 300s freshness is well within the daily fusion / projection
+        // cadence and any signal that needs faster propagation has
+        // its own surface (CI command auto-refresh is hourly).
+        // Bust by appending the bloc/corp/alliance hash so a
+        // mid-window defection invalidates the cached card the next
+        // time the live affiliation flips.
+        $cacheKey = sprintf(
+            'dashboard.char.%d.v1.%d.%d',
+            $cid,
+            (int) ($char->corporation_id ?? 0),
+            (int) ($char->alliance_id ?? 0),
+        );
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
 
         $currentCorpId = (int) ($char->corporation_id ?? 0) ?: null;
         $currentAllyId = (int) ($char->alliance_id ?? 0) ?: null;
@@ -447,7 +470,7 @@ class Dashboard extends BaseDashboard
             }
         }
 
-        return [
+        $card = [
             'character_id' => $cid,
             'character_name' => $names[$cid] ?? $char->character_name ?? "Pilot #{$cid}",
             'corporation_id' => $currentCorpId,
@@ -485,6 +508,9 @@ class Dashboard extends BaseDashboard
             'counter_intel' => $counterIntel,
             'viewer_bloc_id' => $viewerBlocId,
         ];
+
+        Cache::put($cacheKey, $card, 300);
+        return $card;
     }
 
     /**

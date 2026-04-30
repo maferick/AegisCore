@@ -25,7 +25,13 @@ use Throwable;
  */
 final class CharacterGraphInsightService
 {
-    private const CACHE_TTL_SECONDS = 900;  // 15 min — graph refreshes daily.
+    // 6 hours. Source data refreshes daily (ci-projection cron is
+    // 04:55 UTC). The previous 15-min TTL was 16× shorter than the
+    // upstream cadence and re-ran the cypher 60+ times/day per
+    // popular cid for no fresher answer. 6h still gives ~4 cache
+    // misses per day — leaves headroom for ad-hoc projection runs
+    // without burning Neo4j read traffic.
+    private const CACHE_TTL_SECONDS = 21600;
     private const QUERY_TIMEOUT_SECONDS = 4;
 
     public function __construct(private readonly ?ClientInterface $client = null) {}
