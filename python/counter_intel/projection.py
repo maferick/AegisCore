@@ -151,7 +151,11 @@ def _upsert_characters(conn, driver: Driver, cfg: Config, window_end: date) -> i
         r["current_alliance_id"] = corp_alliance.get(int(cid_corp)) if cid_corp else None
 
     total = 0
-    batch_size = 1000
+    # Lowered from 1000 → 200 to stay under Neo4j's 1 GiB single-tx
+    # memory cap. CICharacter has ~30 properties; at 1000/batch the
+    # MERGE … SET payload tripped TransientError.MemoryPoolOutOfMemoryError
+    # on the full 207k-row sweep (2026-04-30 incident).
+    batch_size = 200
     with neo_session(driver, cfg) as sess:
         for i in range(0, len(rows), batch_size):
             batch = rows[i:i + batch_size]

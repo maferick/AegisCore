@@ -458,6 +458,19 @@ Schedule::call(function (): void {
     ->onOneServer()
     ->withoutOverlapping(10);
 
+// Counter-Intel affiliation refresh — daily ESI refetch for the
+// active hypothesis cohort. Phase18 fusion reads current_alliance
+// from the cached affiliation history; without a refresh, defector
+// / recruit transitions (e.g. Dracarys → Insidious) lag in the
+// surface for weeks. Rate-limited inside the job so dispatch is
+// cheap; runs before phase18's 27-past-the-hour tick.
+Schedule::command('counter-intel:refresh-affiliations --bloc-id=1 --min-band=medium --limit=500')
+    ->dailyAt('05:30')
+    ->timezone('UTC')
+    ->onOneServer()
+    ->withoutOverlapping(120)
+    ->name('counter-intel-refresh-affiliations');
+
 // Counter-Intel AI auto-refresh — hourly, fast tier only.
 // Eligibility: top-20 OR strengthened OR stale-summary OR never-
 // synthesised. Built-in daily cap (60) + 30-min circuit breaker.
