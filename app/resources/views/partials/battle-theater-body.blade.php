@@ -295,6 +295,229 @@
 
     .km-final-blow { border-left: 2px solid #ff3838; padding-left: 0.5rem; }
 
+    /* Pilot card — 3-column horizontal: identity | timeline | outcome.
+       Death events render as a numbered timeline so the operator reads
+       "lost Muninn → podded → reshipped Ares → podded again" naturally
+       instead of guessing from a flat icon list. */
+    .bt-pilot-card {
+        display: grid;
+        grid-template-columns: minmax(180px, 230px) 1fr minmax(110px, 140px);
+        gap: 0.75rem;
+        align-items: center;
+        padding: 0.55rem 0.7rem;
+        border-bottom: 1px solid #1a1a1e;
+        border-left: 3px solid transparent;
+    }
+    .bt-pilot-card:last-child { border-bottom: none; }
+    .bt-pilot-card.died { border-left-color: #ff3838; background: rgba(255,56,56,0.035); }
+    .bt-pilot-card.alive { border-left-color: rgba(74,222,128,0.35); }
+    @media (max-width: 700px) {
+        .bt-pilot-card { grid-template-columns: 1fr; gap: 0.4rem; }
+    }
+
+    .bt-pilot-id { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+    .bt-pilot-portrait { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; }
+    .bt-pilot-id-text { min-width: 0; flex: 1; }
+    .bt-pilot-name {
+        font-size: 0.84rem; font-weight: 700; color: #ffffff;
+        display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+        line-height: 1.25;
+    }
+    .bt-pilot-affil {
+        display: flex; align-items: center; gap: 5px; margin-top: 3px;
+        font-size: 0.72rem; color: #9a9aa2;
+    }
+    .bt-pilot-affil img { width: 16px; height: 16px; border-radius: 2px; flex-shrink: 0; background: #1a1a1e; }
+    .bt-pilot-affil .alli-name { color: #b8b8c0; font-weight: 500; }
+    .bt-pilot-affil .corp-name { color: #7a7a82; }
+
+    .bt-died-badge, .bt-survived-badge, .bt-fb-badge {
+        display: inline-flex; align-items: center;
+        padding: 0.1rem 0.4rem; border-radius: 3px;
+        font-size: 0.6rem; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .bt-died-badge { background: rgba(255,56,56,0.18); color: #ff7878; }
+    .bt-survived-badge { background: rgba(74,222,128,0.12); color: #4ade80; }
+    .bt-fb-badge { background: rgba(229,169,0,0.15); color: #e5a900; }
+
+    .bt-pilot-timeline { min-width: 0; }
+    .bt-pilot-survived-msg { font-size: 0.72rem; color: #7a7a82; font-style: italic; }
+
+    .bt-timeline {
+        list-style: none; padding: 0; margin: 0;
+        display: flex; flex-wrap: wrap; gap: 0.4rem 0.55rem;
+        align-items: center;
+    }
+    .bt-timeline-step {
+        display: flex; align-items: center; gap: 0.35rem;
+        position: relative;
+    }
+    .bt-timeline-step + .bt-timeline-step::before {
+        content: '→'; color: #ff3838; font-size: 0.85rem;
+        margin-right: 0.25rem; font-weight: 700;
+    }
+    .bt-timeline-node {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 18px; height: 18px; flex-shrink: 0;
+        border-radius: 50%;
+        background: rgba(255,56,56,0.18);
+        color: #ff7878;
+        font-size: 0.65rem; font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .bt-timeline-body {
+        display: inline-flex; align-items: center; gap: 0.3rem;
+        flex-wrap: wrap;
+    }
+    .bt-timeline-link {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 6px 2px 3px;
+        border-radius: 3px;
+        background: rgba(255,56,56,0.10);
+        border: 1px solid rgba(255,56,56,0.25);
+        color: #ffb0b0;
+        text-decoration: none;
+        font-size: 0.72rem; line-height: 1;
+        transition: background 0.1s ease;
+    }
+    .bt-timeline-link:hover { background: rgba(255,56,56,0.20); color: #ffffff; }
+    .bt-timeline-link img { width: 18px; height: 18px; border-radius: 2px; background: #1a1a1e; }
+    .bt-timeline-link.bt-timeline-pod { background: rgba(255,56,56,0.06); border-color: rgba(255,56,56,0.18); color: #ff9999; }
+    .bt-timeline-name { font-weight: 500; }
+    .bt-timeline-then { color: #ff3838; font-size: 0.75rem; font-weight: 700; }
+
+    /* Hotspot map — galaxy 2D projection of theater systems, bubble
+       sized by kill count, colored by security status. */
+    .bt-hotspot-map { width: 100%; height: auto; max-width: 760px; display: block; margin: 0.4rem auto 0; }
+    .bt-hotspot.primary circle:first-of-type { animation: bt-hotspot-pulse 2.4s ease-in-out infinite; }
+    @keyframes bt-hotspot-pulse {
+        0%, 100% { opacity: 0.10; }
+        50% { opacity: 0.22; }
+    }
+
+    /* Ship boxes: one per (pilot, hull). Red = was lost (with pod
+       chained inline), green = flown but survived. Replaces the
+       separate "Flew" line + numbered death timeline. */
+    .bt-shipboxes {
+        display: flex; flex-wrap: wrap; gap: 5px;
+        align-items: center;
+    }
+    .bt-shipbox {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 3px 7px 3px 4px;
+        border-radius: 3px;
+        font-size: 0.72rem; line-height: 1;
+        text-decoration: none;
+        transition: background 0.1s ease;
+    }
+    .bt-shipbox img { width: 18px; height: 18px; border-radius: 2px; background: #1a1a1e; flex-shrink: 0; }
+    .bt-shipbox-podicon { opacity: 0.85; }
+    .bt-shipbox-name { font-weight: 500; }
+    .bt-shipbox-count { color: rgba(255,255,255,0.65); font-size: 0.65rem; }
+    .bt-shipbox-then { color: #ff3838; font-weight: 700; font-size: 0.75rem; margin: 0 -1px; }
+
+    .bt-shipbox.lost {
+        background: rgba(255,56,56,0.10);
+        border: 1px solid rgba(255,56,56,0.30);
+        color: #ffb0b0;
+    }
+    .bt-shipbox.lost:hover { background: rgba(255,56,56,0.20); }
+    .bt-shipbox-link, .bt-shipbox-podlink {
+        display: inline-flex; align-items: center; gap: 4px;
+        text-decoration: none;
+        color: inherit;
+        border-radius: 2px;
+        padding: 1px 2px;
+        margin: -1px -2px;
+    }
+    .bt-shipbox-link:hover, .bt-shipbox-podlink:hover {
+        background: rgba(255,255,255,0.08);
+        color: #ffffff;
+    }
+    .bt-shipbox.alive {
+        background: rgba(74,222,128,0.10);
+        border: 1px solid rgba(74,222,128,0.30);
+        color: #b8e8c8;
+    }
+
+    .bt-roadblock-list {
+        display: flex; flex-wrap: wrap; gap: 4px;
+        align-items: center;
+        margin-top: 5px;
+        padding: 4px 6px;
+        border-radius: 3px;
+        background: rgba(255,56,56,0.04);
+        border: 1px dashed rgba(255,56,56,0.18);
+    }
+    .bt-roadblock-label { font-size: 0.6rem; color: #ff9999; text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; }
+    .bt-roadblock-item {
+        display: inline-flex; align-items: center; gap: 3px;
+        padding: 1px 6px 1px 2px;
+        border-radius: 3px;
+        background: rgba(255,56,56,0.08);
+        border: 1px solid rgba(255,56,56,0.18);
+        text-decoration: none;
+        font-size: 0.7rem; line-height: 1;
+        color: #ff9999;
+    }
+    .bt-roadblock-item:hover { background: rgba(255,56,56,0.16); color: #ffffff; }
+    .bt-roadblock-item img { width: 16px; height: 16px; border-radius: 2px; background: #1a1a1e; }
+    .bt-roadblock-count { color: #ffb0b0; font-weight: 700; }
+    .bt-roadblock-name { color: #ff9999; }
+
+    .bt-pilot-fblist {
+        display: flex; flex-wrap: wrap; gap: 4px;
+        align-items: center;
+        margin-top: 6px;
+        padding-top: 5px;
+        border-top: 1px dashed #2a2a30;
+    }
+    .bt-fblist-label { font-size: 0.65rem; color: #7a7a82; text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; }
+    .bt-fblink {
+        display: inline-flex;
+        padding: 2px;
+        border-radius: 3px;
+        background: rgba(74,222,128,0.10);
+        border: 1px solid rgba(74,222,128,0.25);
+    }
+    .bt-fblink:hover { background: rgba(74,222,128,0.20); }
+    .bt-fblink img { width: 18px; height: 18px; border-radius: 2px; background: #1a1a1e; display: block; }
+
+    .bt-pilot-outcome {
+        text-align: right;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.78rem;
+        line-height: 1.4;
+    }
+    .bt-outcome-kills { color: #4ade80; font-weight: 700; }
+    .bt-outcome-dmg { color: #b8b8c0; }
+    .bt-outcome-loss { color: #ff3838; font-weight: 700; }
+    .bt-outcome-suffix { font-size: 0.62rem; color: #7a7a82; font-weight: 400; }
+
+    @media (pointer: coarse) {
+        .bt-timeline-link, .bt-fblink { padding: 6px 8px 6px 5px; }
+        .bt-timeline-link img, .bt-fblink img { width: 22px; height: 22px; }
+        .bt-timeline-node { width: 22px; height: 22px; font-size: 0.72rem; }
+    }
+    .bt-pilot-more-link, .bt-pilot-more-note {
+        display: block;
+        margin-top: 0.7rem;
+        padding: 0.6rem 0.75rem;
+        border: 1px solid rgba(79,208,208,0.18);
+        border-radius: 4px;
+        font-size: 0.78rem;
+        color: #b8d8d8;
+        font-family: 'JetBrains Mono', monospace;
+        text-align: center;
+        text-decoration: none;
+        background: rgba(79,208,208,0.06);
+        min-height: 44px;
+        line-height: 1.6;
+    }
+    .bt-pilot-more-link:hover { background: rgba(79,208,208,0.12); color: #e5e5e7; }
+    .bt-pilot-more-note { color: #7a7a82; background: transparent; border-style: dashed; }
+
     .km-badge { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 3px; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; font-family: 'JetBrains Mono', monospace; }
     .km-badge-red { background: rgba(255,56,56,0.15); color: #ff3838; }
     .km-badge-green { background: rgba(74,222,128,0.15); color: #4ade80; }
@@ -467,8 +690,10 @@
     .bt-vs-info .bt-vs-sub { font-size: 0.68rem; color: #7a7a82; }
     .bt-vs-info .bt-vs-stats {
         font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
-        color: #7a7a82; margin-top: 0.2rem; font-variant-numeric: tabular-nums;
+        color: #cbd5e1; margin-top: 0.2rem; font-variant-numeric: tabular-nums;
+        line-height: 1.5;
     }
+    .bt-vs-info .bt-vs-unit { color: #7a7a82; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; margin-left: 1px; }
     .bt-vs-info .bt-vs-eff {
         font-family: 'JetBrains Mono', monospace; font-weight: 700;
         font-size: 1.05rem; margin-top: 0.1rem; font-variant-numeric: tabular-nums;
@@ -543,15 +768,21 @@
             <div class="bt-metric-value loss">
                 {{ $formatIsk((float) ($reconciled_total_isk_lost ?? $theater->total_isk_lost)) }}
                 @if (! empty($zkill_total_isk_lost) && (float) $zkill_total_isk_lost > 0)
-                    <span style="font-size:0.7em; color:#9ca3af; font-weight:500;" title="zKillboard's price source; differs from ours when faction / deadspace / capital modules aren't in our feed">
-                        ({{ $formatIsk((float) $zkill_total_isk_lost) }} zKill)
-                    </span>
+                    @if (($zkill_scope ?? null) === 'all_kms')
+                        <span style="font-size:0.7em; color:#9ca3af; font-weight:500;" title="Sum of zKill's per-killmail totalValue across all {{ ($zkill_coverage['total'] ?? 0) }} killmails in this theater ({{ $zkill_coverage['covered'] ?? 0 }} priced). Ours uses Jita sell, zKill uses Jita average — small drift expected.">
+                            (zKill all kms: {{ $formatIsk((float) $zkill_total_isk_lost) }})
+                        </span>
+                    @else
+                        <span style="font-size:0.7em; color:#9ca3af; font-weight:500;" title="Per-km zKill values not yet backfilled. Showing zKill /api/related/ which covers only 1 hour in the primary system. Run `php artisan app:backfill-zkill-capital-values --theater={{ $theater->id }}` to populate full per-km coverage.">
+                            (zKill 1h primary: {{ $formatIsk((float) $zkill_total_isk_lost) }})
+                        </span>
+                    @endif
                 @endif
             </div>
         </div>
         <div>
-            <div class="bt-metric-label">Ships lost</div>
-            <div class="bt-metric-value">{{ number_format($reconciled_total_kills ?? (int) $theater->total_kills) }}</div>
+            <div class="bt-metric-label">Killmails</div>
+            <div class="bt-metric-value">{{ number_format((int) ($theater->total_kills ?? $reconciled_total_kills)) }}</div>
         </div>
         <div>
             <div class="bt-metric-label">Damage dealt</div>
@@ -590,8 +821,9 @@
             @endif
             <div class="bt-vs-chip" style="--side-color: {{ $s['color'] }};">
                 @if ($_logo)
-                    <img src="https://images.evetech.net/alliances/{{ $_logo['alliance_id'] }}/logo?size=128"
-                         referrerpolicy="no-referrer" class="bt-vs-logo" alt="">
+                    <img src="https://images.evetech.net/alliances/{{ $_logo['alliance_id'] }}/logo?size=64"
+                         referrerpolicy="no-referrer" fetchpriority="high" decoding="async"
+                         width="72" height="72" class="bt-vs-logo" alt="">
                 @else
                     <div class="bt-vs-logo placeholder">{{ $s['key'] }}</div>
                 @endif
@@ -602,7 +834,9 @@
                         <div class="bt-vs-sub">{{ $s['sub'] }} bloc</div>
                     @endif
                     <div class="bt-vs-stats">
-                        {{ number_format($s['totals']['pilots']) }}p · {{ number_format($s['totals']['kills']) }}k · {{ $formatIsk((float) $s['totals']['isk_lost']) }} lost
+                        {{ number_format($s['totals']['pilots']) }} <span class="bt-vs-unit">pilots</span> ·
+                        {{ number_format($s['totals']['kills']) }} <span class="bt-vs-unit">kills</span> ·
+                        {{ $formatIsk((float) $s['totals']['isk_lost']) }} <span class="bt-vs-unit">ISK lost</span>
                     </div>
                     <div class="bt-vs-eff" style="color: {{ $s['color'] }};">
                         {{ $s['eff'] !== null ? $s['eff'].'% eff' : '—' }}
@@ -719,7 +953,7 @@
                 @foreach ($rows as $km)
                     <div class="km-attacker">
                         <img src="https://images.evetech.net/types/{{ $km['ship_type_id'] }}/render?size=64"
-                             referrerpolicy="no-referrer" class="bt-mvk-ship {{ $s['tone'] }}" style="border-color: {{ $s['color'] }}40;" alt="">
+                             referrerpolicy="no-referrer" loading="lazy" decoding="async" class="bt-mvk-ship {{ $s['tone'] }}" style="border-color: {{ $s['color'] }}40;" alt="">
                         <div class="km-attacker-info">
                             <div class="km-attacker-name">{{ $km['ship_name'] }}</div>
                             <div class="km-attacker-corp">
@@ -760,7 +994,7 @@
                     @php $pct = $max > 0 ? round($r['count'] / $max * 100) : 0; @endphp
                     <div class="km-item-row">
                         <img src="https://images.evetech.net/types/{{ $r['sample_type_id'] }}/icon?size=32"
-                             referrerpolicy="no-referrer" class="km-item-icon" alt="">
+                             referrerpolicy="no-referrer" loading="lazy" decoding="async" class="km-item-icon" alt="">
                         <div class="km-item-name">{{ $r['class'] }}</div>
                         <div class="bt-comp-bar" style="max-width:120px;">
                             <div style="width: {{ $pct }}%; background: {{ $s['color'] }};"></div>
@@ -790,7 +1024,7 @@
                 @foreach ($rows as $r)
                     <div class="km-attacker">
                         <img src="https://images.evetech.net/characters/{{ $r['character_id'] }}/portrait?size=64"
-                             referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
+                             referrerpolicy="no-referrer" loading="lazy" decoding="async" class="km-attacker-portrait" alt="">
                         <div class="km-attacker-info">
                             <div class="km-attacker-name">{{ $r['character_name'] }}{!! $roleBadge((int) $r['character_id']) !!}</div>
                             <div class="km-attacker-corp">
@@ -801,7 +1035,7 @@
                                     @foreach ($r['ships_flown'] as $s)
                                         <span style="display:inline-flex;align-items:center;gap:3px;" title="{{ $s['count'] }} killmails flying {{ $s['name'] }} · {{ number_format($s['damage']) }} dmg">
                                             <img src="https://images.evetech.net/types/{{ $s['type_id'] }}/icon?size=32"
-                                                 referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
+                                                 referrerpolicy="no-referrer" loading="lazy" decoding="async" style="width:16px;height:16px;border-radius:2px;" alt="">
                                             {{ $s['name'] }}@if ($s['count'] > 1)<span style="color:#7a7a82;font-size:0.7em;"> ×{{ $s['count'] }} km</span>@endif@if ($s['damage'] > 0)<span style="color:#9ca0a8;font-size:0.7em;"> ({{ number_format($s['damage']) }} dmg)</span>@endif
                                         </span>
                                     @endforeach
@@ -809,7 +1043,7 @@
                             @elseif ($r['ship_type_id'])
                                 <div class="km-attacker-ship">
                                     <img src="https://images.evetech.net/types/{{ $r['ship_type_id'] }}/icon?size=32"
-                                         referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
+                                         referrerpolicy="no-referrer" loading="lazy" decoding="async" style="width:16px;height:16px;border-radius:2px;" alt="">
                                     {{ $r['ship_name'] }}
                                 </div>
                             @endif
@@ -862,7 +1096,7 @@
                     <div class="km-attacker">
                         @if ($row['alliance_id'] > 0)
                             <img src="https://images.evetech.net/alliances/{{ $row['alliance_id'] }}/logo?size=64"
-                                 referrerpolicy="no-referrer" class="km-attacker-portrait" style="border-radius: 4px;" alt="">
+                                 referrerpolicy="no-referrer" loading="lazy" decoding="async" class="km-attacker-portrait" style="border-radius: 4px;" alt="">
                         @else
                             <div class="km-attacker-portrait" style="border-radius: 4px; background: #1a1a1e;"></div>
                         @endif
@@ -938,12 +1172,30 @@
      KILL FEED — narrative row per kill, ordered by time
      ================================================================ --}}
 <div class="km-card" style="margin-bottom: 1.5rem;">
+    @php
+        // Kill feed cap. 12k+ km on big fights tank the wire payload
+        // (every row carries 4 evetech img refs + sizes); cap at top
+        // 250 by ISK so the most narratively interesting losses still
+        // surface. Total label uses theater.total_kills (real distinct
+        // killmail_id count from the clusterer) so users see the true
+        // EVE-side number, not the post-pod-collapse feed entry count.
+        $killFeedCap = 250;
+        $killFeedTotal = (int) ($theater->total_kills ?? count($kill_feed));
+        $killFeedRender = $kill_feed;
+        if (count($killFeedRender) > $killFeedCap) {
+            usort($killFeedRender, fn ($a, $b) => $b['total_value'] <=> $a['total_value']);
+            $killFeedRender = array_slice($killFeedRender, 0, $killFeedCap);
+            // Re-sort visible window chronologically so feed reads
+            // top-to-bottom in time order.
+            usort($killFeedRender, fn ($a, $b) => strcmp((string) $a['killed_at'], (string) $b['killed_at']));
+        }
+    @endphp
     <details class="bt-killfeed">
         <summary>
-            <h3 style="margin:0;display:inline;">Kill feed <span class="muted">· {{ count($kill_feed) }} kills</span></h3>
-            <span class="bt-killfeed-hint">click to expand</span>
+            <h3 style="margin:0;display:inline;">Kill feed <span class="muted">· {{ number_format($killFeedTotal) }} killmails</span></h3>
+            <span class="bt-killfeed-hint">click to expand{{ $killFeedTotal > $killFeedCap ? ' — top '.$killFeedCap.' by ISK shown' : '' }}</span>
         </summary>
-    @foreach ($kill_feed as $km)
+    @foreach ($killFeedRender as $km)
         @php
             $vSide       = $km['victim_id'] ? ($sides->sideByCharacterId[(int) $km['victim_id']] ?? 'C') : 'C';
             $vSideColor  = $sideColorByKey[$vSide] ?? '#7a7a82';
@@ -958,12 +1210,12 @@
 
             @if ($km['victim_id'])
                 <img src="https://images.evetech.net/characters/{{ $km['victim_id'] }}/portrait?size=64"
-                     referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
+                     referrerpolicy="no-referrer" loading="lazy" decoding="async" class="km-attacker-portrait" alt="">
             @endif
 
             @if ($km['ship_type_id'] > 0)
                 <img src="https://images.evetech.net/types/{{ $km['ship_type_id'] }}/icon?size=32"
-                     referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:3px;flex-shrink:0;" alt="">
+                     referrerpolicy="no-referrer" loading="lazy" decoding="async" style="width:32px;height:32px;border-radius:3px;flex-shrink:0;" alt="">
             @endif
 
             <div class="km-attacker-info">
@@ -1012,14 +1264,138 @@
      PILOTS — grouped by side, km-attacker rows
      ================================================================ --}}
 @php
-    // Build character_id => killmail_id lookup from the kill feed so
-    // pilots with a loss in this theater get a clickable row.
-    $lossKmByChar = [];
-    foreach ($kill_feed as $km) {
-        if (! empty($km['victim_id'])) {
-            $lossKmByChar[(int) $km['victim_id']] = (int) $km['killmail_id'];
+    // Per-character loss + FB lookups. Use the theater's full
+    // killmail set (NOT kill_feed) — kill_feed collapses pod kms
+    // into their parent ship row for the visual feed; we need pods
+    // visible at the per-pilot level so pod-loss ISK can attach to
+    // the parent ship box.
+    $_kmIdsForLookup = \Illuminate\Support\Facades\DB::table('battle_theater_killmails')
+        ->where('theater_id', $theater->id)
+        ->pluck('killmail_id')
+        ->all();
+
+    $lossKmsByChar = [];   // cid => list<['km','ship','tid','gid','value','at']>
+    $fbKmsByChar = [];     // cid => list<['km','victim_ship','tid','at']>
+    if ($_kmIdsForLookup !== []) {
+        \Illuminate\Support\Facades\DB::table('killmails as k')
+            ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->leftJoin('ref_item_groups as ig', 'ig.id', '=', 't.group_id')
+            ->whereIn('k.killmail_id', $_kmIdsForLookup)
+            ->whereNotNull('k.victim_character_id')
+            ->select(['k.killmail_id', 'k.victim_character_id', 'k.victim_ship_type_id',
+                      'k.total_value', 'k.killed_at', 't.group_id', 'ig.category_id'])
+            ->get()
+            ->each(function ($r) use (&$lossKmsByChar, $ship_names): void {
+                $cid = (int) $r->victim_character_id;
+                $tid = (int) $r->victim_ship_type_id;
+                $lossKmsByChar[$cid][] = [
+                    'km' => (int) $r->killmail_id,
+                    'ship' => (string) ($ship_names[$tid] ?? '#'.$tid),
+                    'tid' => $tid,
+                    'gid' => (int) ($r->group_id ?? 0),
+                    'cat' => (int) ($r->category_id ?? 0),
+                    'value' => (float) $r->total_value,
+                    'at' => (string) $r->killed_at,
+                ];
+            });
+        // Sort each pilot's losses chronologically.
+        foreach ($lossKmsByChar as $cid => $rows) {
+            usort($lossKmsByChar[$cid], fn ($a, $b) => strcmp($a['at'], $b['at']));
+        }
+        \Illuminate\Support\Facades\DB::table('killmail_attackers as a')
+            ->join('killmails as k', 'k.killmail_id', '=', 'a.killmail_id')
+            ->whereIn('a.killmail_id', $_kmIdsForLookup)
+            ->where('a.is_final_blow', true)
+            ->whereNotNull('a.character_id')
+            ->select(['a.killmail_id', 'a.character_id', 'k.victim_ship_type_id', 'k.killed_at'])
+            ->get()
+            ->each(function ($r) use (&$fbKmsByChar, $ship_names): void {
+                $cid = (int) $r->character_id;
+                $tid = (int) $r->victim_ship_type_id;
+                $fbKmsByChar[$cid][] = [
+                    'km' => (int) $r->killmail_id,
+                    'victim_ship' => (string) ($ship_names[$tid] ?? '#'.$tid),
+                    'tid' => $tid,
+                    'at' => (string) $r->killed_at,
+                ];
+            });
+        foreach ($fbKmsByChar as $cid => $rows) {
+            usort($fbKmsByChar[$cid], fn ($a, $b) => strcmp($a['at'], $b['at']));
         }
     }
+
+    // Group consecutive ship + pod kms (same pilot, within 120s) into
+    // a single "death event" so the pilot timeline reads naturally:
+    //  Step 1 = lost Muninn → podded
+    //  Step 2 = reshipped to Ares → podded
+    // capsule group_id = 29.
+    // Group ship + capsule into one death event. Each event also
+    // carries 'is_real' = true when victim is an actual player ship
+    // (not a deployable / fighter / drone) — used by the row partial
+    // to compute the "Died × N" badge from real deaths only, even
+    // though all event rows still render in the timeline.
+    // Group losses into death events. Each ship loss = one event;
+    // each pod loss attaches to the chronologically most recent
+    // unmatched ship death before the pod. Pods with no preceding
+    // ship death in this theater are dropped (the pilot's "last
+    // ship" is in another cluster — attaching across theaters
+    // doesn't help the operator). Capsule (group 29) never gets its
+    // own death event.
+    $deathEventsByChar = [];   // cid => list<['ship','pod','at','is_real']>
+    $_nonKillCats = [22, 87, 18];
+    foreach ($lossKmsByChar as $cid => $events) {
+        $shipEvents = [];
+        $podEvents = [];
+        foreach ($events as $e) {
+            if ($e['gid'] === 29) {
+                $podEvents[] = $e;
+            } else {
+                $shipEvents[] = $e;
+            }
+        }
+        $out = [];
+        foreach ($shipEvents as $e) {
+            $isReal = ! in_array($e['cat'], $_nonKillCats, true);
+            $out[] = [
+                'ship' => ['tid' => $e['tid'], 'name' => $e['ship'], 'km' => $e['km'], 'value' => $e['value']],
+                'pod' => null,
+                'at' => $e['at'],
+                'is_real' => $isReal,
+            ];
+        }
+        // Attach each pod to the latest ship death event preceding
+        // the pod that doesn't already have a pod attached.
+        foreach ($podEvents as $pe) {
+            $podTs = strtotime($pe['at']);
+            $bestIdx = -1;
+            $bestTs = 0;
+            foreach ($out as $idx => $de) {
+                if ($de['pod'] !== null) continue;
+                if ($de['ship'] === null) continue;
+                $deTs = strtotime($de['at']);
+                if ($deTs > $podTs) continue;
+                if ($deTs > $bestTs) {
+                    $bestIdx = $idx;
+                    $bestTs = $deTs;
+                }
+            }
+            if ($bestIdx === -1 && $out !== []) {
+                // No prior ship death; if the pilot did die in a ship
+                // somewhere in this theater (just none before the pod
+                // timestamp), still attach to the earliest unmatched
+                // one — operator wants the pod ISK to land on a ship.
+                foreach ($out as $idx => $de) {
+                    if ($de['pod'] === null && $de['ship'] !== null) { $bestIdx = $idx; break; }
+                }
+            }
+            if ($bestIdx !== -1) {
+                $out[$bestIdx]['pod'] = ['tid' => $pe['tid'], 'km' => $pe['km'], 'value' => $pe['value']];
+            }
+            // else: pilot has no ship death in this theater — drop pod.
+        }
+        $deathEventsByChar[$cid] = $out;
+    }
+
     $killmailUrl = function (int $kmId) use ($hide_bloc_names): string {
         return $hide_bloc_names
             ? "/kills/{$kmId}"
@@ -1065,66 +1441,37 @@
                 ->values();
             $sideColor = $sideColorByKey[$sideKey] ?? '#7a7a82';
             $sideLbl = $sideLabelByKey[$sideKey] ?? '';
+            // Cap default render at top 100 pilots per side. Rest are
+            // wrapped in a CSS-toggle <details> so the initial DOM is
+            // bounded — 11k pilot rows on a single page tanks LCP +
+            // forced-reflow on mobile.
+            $pilotRenderCap = 100;
+            $sidePilotsTotal = $sidePilots->count();
+            $sidePilotsHead = $sidePilots->take($pilotRenderCap);
+            $sidePilotsTail = $sidePilots->slice($pilotRenderCap);
         @endphp
         <div class="side-card" style="--side-color: {{ $sideColor }};">
             <h3>
                 Pilots — {{ $sideLbl }}
-                <span class="muted">· {{ $sidePilots->count() }}</span>
+                <span class="muted">· {{ number_format($sidePilotsTotal) }}</span>
                 @if ($s['headline']) <span class="headline">{{ $s['headline'] }}</span> @endif
             </h3>
             @if ($sidePilots->isEmpty())
                 <div style="font-size:0.78rem;color:#7a7a82;font-style:italic;">No pilots.</div>
             @else
-                @foreach ($sidePilots as $p)
-                    @php
-                        $cid = (int) $p->character_id;
-                        $cName = $names[$cid] ?? 'Character #'.$cid;
-                        $aName = $p->alliance_id ? ($names[(int) $p->alliance_id] ?? '#'.$p->alliance_id) : null;
-                        $allShips = $allShipsOf($cid);
-                        $isFB = $p->final_blows > 0;
-                        $lossKm = $lossKmByChar[$cid] ?? null;
-                    @endphp
-                    @if ($lossKm)
-                    <a href="{{ $killmailUrl($lossKm) }}" class="bt-pilot-link">
-                    @endif
-                    <div class="km-attacker {{ $isFB ? 'km-final-blow' : '' }} {{ $lossKm ? 'bt-pilot-clickable' : '' }}">
-                        <img src="https://images.evetech.net/characters/{{ $cid }}/portrait?size=64"
-                             referrerpolicy="no-referrer" class="km-attacker-portrait" alt="">
-                        <div class="km-attacker-info">
-                            <div class="km-attacker-name">
-                                {{ $cName }}
-                                {!! $roleBadge((int) $cid) !!}
-                                @if ($isFB) <span class="km-badge km-badge-red" style="margin-left: 4px;">FB × {{ $p->final_blows }}</span> @endif
-                            </div>
-                            <div class="km-attacker-corp">{{ $aName ?? '—' }}</div>
-                            @if ($allShips !== [])
-                                <div class="km-attacker-ship" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
-                                    @foreach ($allShips as $sh)
-                                        <span style="display:inline-flex;align-items:center;gap:3px;" title="appeared on {{ $sh['count'] }} killmails flying {{ $sh['name'] }}">
-                                            <img src="https://images.evetech.net/types/{{ $sh['type_id'] }}/icon?size=32"
-                                                 referrerpolicy="no-referrer" style="width:16px;height:16px;border-radius:2px;" alt="">
-                                            {{ $sh['name'] }}@if ($sh['count'] > 1) <span style="color:#7a7a82;font-size:0.7em;">×{{ $sh['count'] }} km</span>@endif
-                                        </span>
-                                    @endforeach
-                                </div>
-                            @endif
-                        </div>
-                        <div class="km-attacker-damage" style="font-variant-numeric:tabular-nums;">
-                            @if ($p->damage_done > 0)
-                                <div>{{ number_format($p->damage_done) }} <span style="font-size:0.6rem;color:#7a7a82;">dmg</span></div>
-                            @endif
-                            @if ($p->kills > 0)
-                                <div style="color:#4ade80;">{{ $p->kills }} <span style="font-size:0.6rem;color:#7a7a82;">kills</span></div>
-                            @endif
-                            @if ($p->deaths > 0)
-                                <div style="color:#ff3838;">{{ $formatIsk((float) $p->isk_lost) }}</div>
-                            @endif
-                        </div>
-                    </div>
-                    @if ($lossKm)
-                    </a>
-                    @endif
+                @foreach ($sidePilotsHead as $p)
+                    @include('partials.battle-pilot-row')
                 @endforeach
+                @if ($sidePilotsTail->isNotEmpty() && ($hide_bloc_names ?? false))
+                    <a href="/battles/{{ $theater->public_slug ?? $theater->id }}/pilots/{{ strtolower($sideKey) }}"
+                       class="bt-pilot-more-link">
+                        Show {{ number_format($sidePilotsTail->count()) }} more pilot(s) →
+                    </a>
+                @elseif ($sidePilotsTail->isNotEmpty())
+                    <div class="bt-pilot-more-note">
+                        + {{ number_format($sidePilotsTail->count()) }} more pilot(s) (top {{ $pilotRenderCap }} shown)
+                    </div>
+                @endif
             @endif
         </div>
     @endforeach
@@ -1180,8 +1527,174 @@
 @endauth
 
 {{-- ================================================================
-     SYSTEMS
+     SYSTEMS — region map (shared partial) + per-system list
      ================================================================ --}}
+@php
+    // Reuse the dotlan-style activity-map partial used by the /me
+    // public page and the winterco portal so battle theaters get the
+    // same map look (region polygons, real stargate edges, sov
+    // overlays, ansiblex bridges) instead of a parallel implementation.
+    $_btActiveMap = [];
+    $_btActiveCounts = [];
+    foreach ($systems as $sys) {
+        $ss = $sys->solarSystem;
+        if ($ss === null || $ss->position2d_x === null || $ss->position2d_y === null) continue;
+        $sid = (int) $sys->solar_system_id;
+        $_btActiveMap[$sid] = [
+            'id' => $sid,
+            'name' => (string) $ss->name,
+            'x' => (float) $ss->position2d_x,
+            'y' => (float) $ss->position2d_y,
+            'sec' => $ss->security_status !== null ? (float) $ss->security_status : null,
+            'region_id' => (int) ($ss->region_id ?? 0),
+            'n' => (int) $sys->kill_count,
+            'active' => true,
+        ];
+        $_btActiveCounts[$sid] = (int) $sys->kill_count;
+    }
+    $_btActivityMap = ['regions' => [], 'active_count' => count($_btActiveMap), 'neighbor_count' => 0];
+    // Per-theater map cleanup overrides — manually-curated exclusions
+    // for systems that show up as 1-3 hop neighbors but are visual
+    // noise (off the actual battle path). Add new entries here as
+    // they come up; small enough to not warrant a DB table.
+    $_btMapExclusions = [
+        1454466 => [30000252], // 4-HWWF: drop IPAY-2 (3-hop drive-by, off the battle path)
+    ];
+    $_btExcludedSids = $_btMapExclusions[$theater->id] ?? [];
+
+    if ($_btActiveMap !== []) {
+        $_btActiveIds = array_keys($_btActiveMap);
+        $_btAdj = \Illuminate\Support\Facades\Cache::remember('map.stargate_adj.v1', 3600, function (): array {
+            $a = [];
+            \Illuminate\Support\Facades\DB::table('ref_stargates')
+                ->whereNotNull('destination_system_id')
+                ->select('solar_system_id', 'destination_system_id')
+                ->get()
+                ->each(function ($r) use (&$a): void {
+                    $a[(int) $r->solar_system_id][(int) $r->destination_system_id] = true;
+                });
+            return $a;
+        });
+        // BFS from every active system, capped at $_btMaxHops jumps.
+        // Limits the neighbor pool to a focused halo around the
+        // battle so the map zooms in instead of dumping the whole
+        // region. Hop distance also drives the partial's label-
+        // decay rule: nearer neighbors get bigger / brighter names.
+        $_btMaxHops = 3;
+        $_btDepth = [];
+        foreach ($_btActiveIds as $aid) $_btDepth[$aid] = 0;
+        $_btQueue = $_btActiveIds;
+        while ($_btQueue !== []) {
+            $u = array_shift($_btQueue);
+            $d = $_btDepth[$u];
+            if ($d >= $_btMaxHops) continue;
+            foreach ($_btAdj[$u] ?? [] as $v => $_) {
+                if (isset($_btDepth[$v])) continue;
+                $_btDepth[$v] = $d + 1;
+                $_btQueue[] = $v;
+            }
+        }
+        $_btRegionIds = array_values(array_unique(array_column($_btActiveMap, 'region_id')));
+        $_btRegionIds = array_filter($_btRegionIds, fn ($r) => $r > 0);
+        $_btNeighborMap = [];
+        if ($_btDepth !== []) {
+            $_btNeighborSids = [];
+            foreach ($_btDepth as $sid => $d) {
+                if (isset($_btActiveMap[$sid])) continue;
+                if (in_array($sid, $_btExcludedSids, true)) continue;
+                $_btNeighborSids[] = $sid;
+            }
+            if ($_btNeighborSids !== []) {
+                $coords = \Illuminate\Support\Facades\DB::table('ref_solar_systems')
+                    ->whereIn('id', $_btNeighborSids)
+                    ->whereNotNull('position2d_x')
+                    ->select('id', 'name', 'position2d_x', 'position2d_y', 'security_status', 'region_id')
+                    ->get();
+                foreach ($coords as $sys) {
+                    $sid = (int) $sys->id;
+                    $_btNeighborMap[$sid] = [
+                        'id' => $sid,
+                        'name' => (string) $sys->name,
+                        'x' => (float) $sys->position2d_x,
+                        'y' => (float) $sys->position2d_y,
+                        'sec' => $sys->security_status !== null ? (float) $sys->security_status : null,
+                        'region_id' => (int) $sys->region_id,
+                        'n' => 0,
+                        'active' => false,
+                        'hop' => (int) ($_btDepth[$sid] ?? 99),
+                    ];
+                }
+            }
+        }
+        // Stargate edges among the union (active + region neighbors).
+        $_btShown = array_flip(array_merge($_btActiveIds, array_keys($_btNeighborMap)));
+        $_btGatePairs = [];
+        foreach ($_btShown as $a => $_) {
+            foreach ($_btAdj[$a] ?? [] as $b => $__) {
+                if (! isset($_btShown[$b])) continue;
+                $key = $a < $b ? "{$a}-{$b}" : "{$b}-{$a}";
+                $_btGatePairs[$key] = [$a < $b ? $a : $b, $a < $b ? $b : $a];
+            }
+        }
+        $_btGatePairs = array_values($_btGatePairs);
+        // Sov overlay (alliance ownership) for systems in view.
+        $_btSov = [];
+        if ($_btShown !== []) {
+            \Illuminate\Support\Facades\DB::table('system_sovereignty AS s')
+                ->leftJoin('esi_entity_names AS ea', function ($j): void {
+                    $j->on('ea.entity_id', '=', 's.alliance_id')->where('ea.category', 'alliance');
+                })
+                ->whereIn('s.solar_system_id', array_keys($_btShown))
+                ->whereNotNull('s.alliance_id')
+                ->select('s.solar_system_id', 's.alliance_id', 'ea.name AS alliance_name')
+                ->get()
+                ->each(function ($r) use (&$_btSov): void {
+                    $_btSov[(int) $r->solar_system_id] = [
+                        'alliance_id' => (int) $r->alliance_id,
+                        'alliance' => $r->alliance_name ? (string) $r->alliance_name : null,
+                    ];
+                });
+        }
+        // Region names + group active/neighbors per region.
+        $_btRegionNames = \Illuminate\Support\Facades\DB::table('ref_regions')
+            ->whereIn('id', $_btRegionIds)
+            ->pluck('name', 'id')
+            ->all();
+        $_btRegions = [];
+        foreach ($_btRegionIds as $rid) {
+            $regionActive = array_filter($_btActiveMap, fn ($s) => (int) $s['region_id'] === (int) $rid);
+            $regionNeighbors = array_filter($_btNeighborMap, fn ($n) => (int) $n['region_id'] === (int) $rid);
+            $regionShown = array_flip(array_merge(array_keys($regionActive), array_keys($regionNeighbors)));
+            $regionGates = array_values(array_filter($_btGatePairs, fn ($p) => isset($regionShown[$p[0]]) && isset($regionShown[$p[1]])));
+            $regionSov = [];
+            foreach ($regionShown as $sid => $_) {
+                if (isset($_btSov[$sid])) $regionSov[$sid] = $_btSov[$sid];
+            }
+            $_btRegions[] = [
+                'id' => (int) $rid,
+                'name' => (string) ($_btRegionNames[$rid] ?? "Region #{$rid}"),
+                'active' => array_values($regionActive),
+                'neighbors' => array_values($regionNeighbors),
+                'gates' => $regionGates,
+                'ansiblex' => [],
+                'sov' => $regionSov,
+            ];
+        }
+        usort($_btRegions, fn ($a, $b) => array_sum(array_column($b['active'], 'n')) <=> array_sum(array_column($a['active'], 'n')));
+        $_btActivityMap = [
+            'regions' => $_btRegions,
+            'active_count' => count($_btActiveMap),
+            'neighbor_count' => count($_btNeighborMap),
+        ];
+    }
+@endphp
+@if (! empty($_btActivityMap['regions']))
+    <div class="km-card" style="margin-bottom: 1rem;">
+        <h3>Region map <span class="muted">· active hotspots highlighted</span></h3>
+        @include('filament.portal.partials.activity-map', ['c' => $_btActivityMap, 'mapLayout' => 'wide'])
+    </div>
+@endif
+
 <div class="km-card" style="margin-bottom: 1.5rem;">
     <h3>Systems <span class="muted">· {{ $systems->count() }}</span></h3>
     @foreach ($systems as $s)

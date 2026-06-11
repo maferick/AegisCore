@@ -41,7 +41,8 @@ final class BackfillZkillCapitalValuesCommand extends Command
         {--refresh : refetch even rows that already have zkill_value_fetched_at}
         {--include-structures : also backfill upwell structures (Keepstars, etc.)}
         {--structures-only : only structures, skip cap+ ships}
-        {--suspicious-cargo= : alt mode — fetch zkill values for kms with cargo_value > N ISK regardless of ship class (corrects base_price-inflated mining hauls etc.)}';
+        {--suspicious-cargo= : alt mode — fetch zkill values for kms with cargo_value > N ISK regardless of ship class (corrects base_price-inflated mining hauls etc.)}
+        {--theater= : alt mode — fetch zkill values for ALL kms in a battle theater_id, no class filter. Used to enable per-km zKill totals on the battle report comparison line.}';
 
     protected $description = 'Pull zKill totalValue/fittedValue for capital+ kills and (optionally) overwrite our under-priced hulls.';
 
@@ -91,8 +92,25 @@ final class BackfillZkillCapitalValuesCommand extends Command
         $labelMap = self::CAPITAL_GROUPS + self::STRUCTURE_GROUPS;
 
         $suspiciousCargo = $this->option('suspicious-cargo');
+        $theaterId = $this->option('theater');
 
-        if ($suspiciousCargo !== null) {
+        if ($theaterId !== null) {
+            // Theater mode: fetch zkill totalValue for every km in this
+            // theater regardless of ship class. Powers the per-km zKill
+            // aggregate shown on the battle report (so the "zKill" line
+            // can reflect ALL killmails not just /api/related/'s 1h × 1
+            // system window).
+            $q = DB::table('battle_theater_killmails as btk')
+                ->join('killmails as k', 'k.killmail_id', '=', 'btk.killmail_id')
+                ->where('btk.theater_id', (int) $theaterId)
+                ->selectRaw('k.killmail_id, k.victim_ship_type_name, k.total_value,
+                             k.hull_value, k.fitted_value, k.cargo_value, k.drone_value,
+                             k.killed_at, 0 AS group_id');
+            if (! $refresh) {
+                $q->whereNull('k.zkill_value_fetched_at');
+            }
+            $rows = $q->orderBy('k.total_value', 'desc')->limit($limit)->get();
+        } elseif ($suspiciousCargo !== null) {
             // Cargo-inflated mode: target kms whose cargo_value exceeds
             // the operator-set threshold. base_price fallback paths
             // (compressed ores etc.) routinely produce 200B+ Mackinaw

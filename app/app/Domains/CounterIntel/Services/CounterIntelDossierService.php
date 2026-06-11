@@ -472,6 +472,34 @@ final class CounterIntelDossierService
             ];
         }
 
+        // §5.4 Presence without contribution — pilot shows up on
+        // killmails but consistently delivers near-zero damage. Classic
+        // intel-alt / observer signature ("seen but not doing"). Gates
+        // on >=5 attacker killmails so single-fight noise can't fire,
+        // and on >=2 battles so a single oddball blob doesn't dominate.
+        // (calibration proposal 2026-05-01 phase-a-spy-signals)
+        $avgDmg = $feature->avg_damage_share !== null ? (float) $feature->avg_damage_share : null;
+        $atkN_lc = (int) ($feature->killmails_attacker ?? 0);
+        $battlesN = (int) ($feature->battles ?? 0);
+        if ($avgDmg !== null && $atkN_lc >= 5 && $battlesN >= 2 && $avgDmg <= 0.05) {
+            $signals[] = [
+                'key' => 'low_contribution',
+                'reason_code' => 'low_contribution',
+                'severity' => $avgDmg <= 0.02 && $atkN_lc >= 15 ? 'flag' : 'note',
+                'text' => sprintf(
+                    'Presence without contribution: average damage share %.1f%% across %d attacker killmails (%d battles). Pattern matches intel-alt / observer profile.',
+                    $avgDmg * 100, $atkN_lc, $battlesN,
+                ),
+                'confidence' => $atkN_lc >= 30 ? 'high' : ($atkN_lc >= 15 ? 'medium' : 'low'),
+                'sample_size' => $atkN_lc,
+                'raw' => [
+                    'avg_damage_share' => $avgDmg,
+                    'killmails_attacker' => $atkN_lc,
+                    'battles' => $battlesN,
+                ],
+            ];
+        }
+
         // §5.2 Controlled loss / cheap-feed pattern.
         $cheap = $feature->cheap_loss_rate !== null ? (float) $feature->cheap_loss_rate : null;
         if ($cheap !== null && $shipN >= 10 && $cheap >= 0.70) {
@@ -490,9 +518,14 @@ final class CounterIntelDossierService
         }
 
         // §1.2 Asymmetric mutual presence — directional handler/asset.
+        // Sample gate lowered from ≥5 to ≥3 shared days (calibration
+        // proposal 2026-05-01 phase-a-spy-signals). Confidence band
+        // collapses to 'low' below 5 so the dossier UX still reflects
+        // sample-size doubt; banding logic in this method already
+        // demotes 'low'-confidence aggregates one band per ADR 0013.
         if ($anomaly !== null
             && ($anomaly->asymmetric_top_pair_character_id ?? null) !== null
-            && ($anomaly->asymmetric_top_pair_battles ?? 0) >= 5
+            && ($anomaly->asymmetric_top_pair_battles ?? 0) >= 3
         ) {
             $oppCid = (int) $anomaly->asymmetric_top_pair_character_id;
             $oppName = DB::table('esi_entity_names')
@@ -515,7 +548,7 @@ final class CounterIntelDossierService
                         (int) round($outbound * 100), (int) round($inbound * 100),
                         $oppName, $battles,
                     ),
-                    'confidence' => $battles >= 20 ? 'high' : ($battles >= 10 ? 'medium' : 'low'),
+                    'confidence' => $battles >= 20 ? 'high' : ($battles >= 10 ? 'medium' : ($battles >= 5 ? 'low' : 'low')),
                     'sample_size' => $battles,
                     'raw' => [
                         'opp_character_id' => $oppCid,
@@ -601,9 +634,14 @@ final class CounterIntelDossierService
         //     the pilot's own alliance" — finds infiltrators inside
         //     hostile alliances too without flooding on baseline truth.
         $declaredInBloc = $declaredAllyId !== null && in_array($declaredAllyId, $friendlyAllyIds, true);
+        // Sample gate lowered from ≥20 to ≥5 graph neighbours
+        // (calibration proposal 2026-05-01 phase-a-spy-signals).
+        // Confidence below 50 stays 'low'; the dossier banding logic
+        // demotes 'low' aggregates one band per ADR 0013 so small-
+        // sample fires don't dominate the queue.
         if ($anomaly !== null
             && $anomaly->community_hostile_pct !== null
-            && (int) ($anomaly->community_neighbor_count ?? 0) >= 20
+            && (int) ($anomaly->community_neighbor_count ?? 0) >= 5
         ) {
             $pct = (float) $anomaly->community_hostile_pct;
             $n = (int) $anomaly->community_neighbor_count;

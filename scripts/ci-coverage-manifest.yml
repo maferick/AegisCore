@@ -1,0 +1,200 @@
+# CI / operational compute coverage manifest.
+#
+# Each entry binds a materialised table to:
+#   - timestamp_col:  authoritative compute time
+#   - max_age_hours:  hard alert threshold; if MAX(timestamp_col) is
+#                     older than this, ci-coverage-check.sh logs WARN +
+#                     writes an intel_quality_event row.
+#   - pipeline:       which Make target is responsible
+#   - schedule:       expected cron line (descriptive only — verified
+#                     by the check script's coverage audit)
+#   - notes:          free-form
+#
+# This file is the single source of truth for "is the CI pipeline
+# reaching every output it's supposed to reach". Adding a table here
+# without a schedule is a launch blocker.
+#
+# Maintained alongside scripts/ci-coverage-check.sh — when adding a
+# new compute pass, add a manifest entry in the same commit.
+
+tables:
+
+  # ---- Phase 0/1/2 — character feature + signal layer -------------
+  - table: ci_character_features_rolling
+    timestamp_col: computed_at
+    max_age_hours: 30        # daily ci-features
+    pipeline: ci-features
+    schedule: ci-daily-pipeline.sh @ 05:00 UTC
+
+  - table: ci_character_anomalies_rolling
+    timestamp_col: computed_at
+    max_age_hours: 30        # daily ci-anomalies (was the 2026-05-01 incident)
+    pipeline: ci-anomalies
+    schedule: ci-daily-pipeline.sh @ 05:00 UTC
+
+  - table: ci_character_graph_features_rolling
+    timestamp_col: computed_at
+    max_age_hours: 30        # daily ci-graph-features
+    pipeline: ci-graph-features
+    schedule: ci-daily-pipeline.sh @ 05:00 UTC
+
+  - table: ci_alliance_community_baseline
+    timestamp_col: computed_at
+    max_age_hours: 30        # daily ci-phase2-baseline
+    pipeline: ci-phase2-baseline
+    schedule: ci-daily-pipeline.sh @ 05:00 UTC
+
+  - table: ci_hostile_triangulation
+    timestamp_col: computed_at
+    max_age_hours: 30        # daily ci-phase2-triangulation
+    pipeline: ci-phase2-triangulation
+    schedule: ci-daily-pipeline.sh @ 05:00 UTC
+
+  - table: ci_combat_anomalies
+    timestamp_col: computed_at
+    max_age_hours: 30        # daily counter-intel:compute-combat-anomalies
+    pipeline: counter-intel:compute-combat-anomalies (Laravel)
+    schedule: app/routes/console.php Schedule entry
+
+  # ---- ADR-0014 correlation signals (B-1..B-5) --------------------
+  # Skip max_age until the signal ships; placeholder so the audit
+  # surfaces "scheduled but not yet implemented".
+  - table: ci_opposite_side_correlations
+    timestamp_col: computed_at
+    max_age_hours: null      # B-1 not yet shipped
+    pipeline: ci-correlation-signals (B-1)
+    schedule: pending B-1 commit
+
+  - table: ci_participation_selectivity
+    timestamp_col: computed_at
+    max_age_hours: null      # B-2 not yet shipped
+    pipeline: ci-correlation-signals (B-2)
+    schedule: pending B-2 commit
+
+  - table: ci_event_triggered_activity
+    timestamp_col: computed_at
+    max_age_hours: null      # B-4 not yet shipped
+    pipeline: ci-correlation-signals (B-4)
+    schedule: pending B-4 commit
+
+  - table: ci_reaction_timing_correlations
+    timestamp_col: computed_at
+    max_age_hours: null      # B-4 not yet shipped
+    pipeline: ci-correlation-signals (B-4)
+    schedule: pending B-4 commit
+
+  - table: ci_cohort_behavior_deviation
+    timestamp_col: computed_at
+    max_age_hours: null      # B-5 not yet shipped
+    pipeline: ci-correlation-signals (B-5)
+    schedule: pending B-5 commit
+
+  # ---- Phase 4 — operational analytics ----------------------------
+  # operator-dependent: caps at eve_log_events freshness (dscan uploads).
+  # 72h tolerates a long quiet weekend without false-CRIT.
+  - table: operational_incidents
+    timestamp_col: end_at
+    max_age_hours: 72
+    pipeline: ci-phase4-incidents
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: operational_hostile_clusters
+    timestamp_col: end_at
+    max_age_hours: 72
+    pipeline: ci-phase4-hostile-clusters
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: operational_corridors
+    timestamp_col: computed_at
+    max_age_hours: 30
+    pipeline: ci-phase4-corridors
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: system_response_times
+    timestamp_col: computed_at
+    max_age_hours: 30
+    pipeline: ci-phase4-response-times
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: system_threat_surface
+    timestamp_col: computed_at
+    max_age_hours: 30
+    pipeline: ci-phase4-threat-surface
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  # ---- Phase 4.5 — force composition ------------------------------
+  - table: operational_force_compositions
+    timestamp_col: computed_at
+    max_age_hours: 48
+    pipeline: ci-phase45-force-compositions
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: operational_force_transitions
+    timestamp_col: computed_at
+    max_age_hours: 48
+    pipeline: ci-phase45-force-transitions
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  # ---- Phase 4.6 — coalition profiles -----------------------------
+  - table: alliance_operational_profiles
+    timestamp_col: computed_at
+    max_age_hours: 30
+    pipeline: ci-phase46-alliance-profiles
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: coalition_behavior_comparisons
+    timestamp_col: computed_at
+    max_age_hours: 30
+    pipeline: ci-phase46-coalition-comparisons
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  # sparse: only writes when doctrine evolution detected. 7-day max
+  # tolerates dry weeks; if 7d passes with nothing detected, surface
+  # for human inspection.
+  - table: doctrine_evolution_events
+    timestamp_col: computed_at
+    max_age_hours: 168
+    pipeline: ci-phase46-doctrine-evolution
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  # ---- Phase 4.7 — workflow surfaces ------------------------------
+  - table: daily_operational_digest
+    timestamp_col: generated_at
+    max_age_hours: 30
+    pipeline: ci-phase47-daily-digest
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  # operator-dependent + sparse: alerts piggyback on incidents which
+  # cap at dscan upload freshness. 72h same as upstream.
+  - table: strategic_alerts
+    timestamp_col: detected_at
+    max_age_hours: 72
+    pipeline: ci-phase47-strategic-alerts
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  - table: incident_narratives
+    timestamp_col: computed_at
+    max_age_hours: 30
+    pipeline: ci-phase47-incident-narratives
+    schedule: ci-operational-pipeline.sh @ 06:00 UTC
+
+  # ---- Phase 4.8 — governance + trust -----------------------------
+  # (suppression rules, trust metrics — partly Laravel-side)
+
+  # ---- Phase 17 — operational change synthesis --------------------
+  # sparse: only writes when phase17 detects a delta. Cron fires every
+  # 15 min for 1h window so the absence of recent rows means "no
+  # changes worth recording" not "compute is stale". 26h tolerates a
+  # full quiet day; if nothing detected in 26h, worth a human check.
+  - table: operational_change_summaries
+    timestamp_col: generated_at
+    max_age_hours: 26
+    pipeline: ci-phase17-what-changed
+    schedule: 4 cron entries (3,18,33,48 * * * *  /  12 * * * *  /  22 */4 * * *  /  30 4 * * *)
+
+  # ---- Phase 18 — hypothesis fusion -------------------------------
+  - table: counter_intel_hypotheses
+    timestamp_col: last_recomputed_at
+    max_age_hours: 2         # hourly cron (27 *)
+    pipeline: ci-phase18-hypothesis-fusion
+    schedule: 27 * * * *

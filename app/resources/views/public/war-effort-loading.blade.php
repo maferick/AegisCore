@@ -62,17 +62,35 @@
         ];
         $saying = $sayings[array_rand($sayings)];
     @endphp
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link href="/css/hud.css?v=3" rel="stylesheet">
+    <link href="/css/hud-elevated.css?v=4" rel="stylesheet">
+    <script src="/js/auto-refresh.js?v=1" defer></script>
     <style>
-        :root { color-scheme: dark; }
+        :root {
+            color-scheme: dark;
+            --bg-deep: #050913;
+            --hud-cyan: #6dd6ff;
+            --hud-gold: #f4c75c;
+            --hud-platinum: #d6dbe4;
+            --font-head: 'Orbitron','Rajdhani',system-ui,sans-serif;
+            --font-body: 'Rajdhani','Inter',system-ui,sans-serif;
+            --font-mono: 'Share Tech Mono','JetBrains Mono',ui-monospace,monospace;
+        }
         body {
             margin: 0;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #050709;
-            color: #e5e5e7;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif;
+            background:
+                radial-gradient(rgba(109,214,255,0.04) 1px, transparent 1.5px) 0 0 / 28px 28px,
+                radial-gradient(ellipse at 50% 50%, rgba(109,214,255,0.10) 0%, transparent 50%),
+                var(--bg-deep);
+            color: var(--hud-platinum);
+            font-family: var(--font-body);
         }
         .panel {
             text-align: center;

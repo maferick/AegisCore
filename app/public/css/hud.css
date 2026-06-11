@@ -1,0 +1,115 @@
+/* HUD theme — capsuleer console look. Loaded by all public pages
+   (war-report, battles, /me) so card chrome stays consistent.
+   Palette + fonts are defined per-layout in :root before this file
+   loads. */
+
+:root {
+    --bg-deep: #050913;
+    --bg-panel: #06090f;
+    --bg-card: rgba(8,12,22,0.80);
+    --hud-cyan: #6dd6ff;
+    --hud-cyan-soft: rgba(109,214,255,0.20);
+    --hud-magenta: #c474a8;
+    --hud-magenta-soft: rgba(196,116,168,0.20);
+    --hud-gold: #f4c75c;
+    --hud-gold-soft: rgba(244,199,92,0.18);
+    --hud-platinum: #d6dbe4;
+    --hud-platinum-dim: #8c95a4;
+    --hud-line: rgba(109,214,255,0.18);
+    --font-head: 'Orbitron','Rajdhani',system-ui,sans-serif;
+    --font-body: 'Rajdhani','Inter',system-ui,sans-serif;
+    --font-mono: 'Share Tech Mono','JetBrains Mono',ui-monospace,monospace;
+}
+
+/* Section panel: rectangle + hairline border + 4 corner brackets +
+   thin gold top strip. NO clip-path. Targets every section-style
+   container we use across the public site. */
+:is(
+    .km-card,
+    .hud-card,
+    div[style*="border-radius:8px"][style*="padding:0.85rem 1rem"],
+    div[style*="border-radius:8px"][style*="padding:1rem"],
+    .wc-region-panel
+) {
+    position: relative;
+    background:
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 0 / 14px 1px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 0 / 1px 14px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 0 / 14px 1px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 0 / 1px 14px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 100% / 14px 1px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 calc(100% - 14px) / 1px 14px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 100% / 14px 1px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% calc(100% - 14px) / 1px 14px no-repeat,
+        linear-gradient(180deg, rgba(109,214,255,0.025) 0%, transparent 60%),
+        radial-gradient(rgba(109,214,255,0.05) 1px, transparent 1.5px) 0 0 / 22px 22px,
+        var(--bg-card) !important;
+    border: 1px solid rgba(109,214,255,0.10) !important;
+    border-radius: 0 !important;
+}
+:is(
+    .km-card,
+    .hud-card,
+    div[style*="border-radius:8px"][style*="padding:0.85rem 1rem"],
+    div[style*="border-radius:8px"][style*="padding:1rem"],
+    .wc-region-panel
+)::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 22%; right: 22%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--hud-gold) 30%, var(--hud-gold) 70%, transparent 100%);
+    opacity: 0.75;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Section heads: Orbitron caps, platinum, tracked. */
+:is(.km-card, .hud-card) :is(h1, h2, h3) {
+    font-family: var(--font-head);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: 700;
+    color: var(--hud-platinum);
+}
+:is(.km-card, .hud-card) :is(h2, h3) .muted {
+    font-family: var(--font-body);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    color: var(--hud-platinum-dim);
+}
+
+/* Numerics: Share Tech Mono everywhere they live. */
+:is(
+    .km-stat-value, .km-attacker-damage, .bt-vs-stats, .bt-vs-eff,
+    .wr-stat-num, .wr-pill-value, .wr-vs-stats, .wr-vs-eff,
+    .wr-balance-legend, .wr-war-verdict
+) {
+    font-family: var(--font-mono) !important;
+    letter-spacing: 0.02em;
+}
+
+/* Badge pills (Tip of the Spear, etc.) — outlined gold, not filled. */
+:is(
+    span[style*="background:rgba(229,169,0"][style*="color:#fde68a"],
+    span[style*="background:rgba(202,138,4"],
+    span[style*="background:rgba(250,204,21"]
+) {
+    background: transparent !important;
+    border: 1px solid var(--hud-gold) !important;
+    color: var(--hud-gold) !important;
+    font-family: var(--font-body) !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.10em !important;
+    text-shadow: 0 0 6px rgba(244,199,92,0.35);
+    transition: background 0.12s ease;
+}
+:is(
+    span[style*="background:rgba(229,169,0"][style*="color:#fde68a"]:hover,
+    span[style*="background:rgba(202,138,4"]:hover,
+    span[style*="background:rgba(250,204,21"]:hover
+) {
+    background: var(--hud-gold-soft) !important;
+    color: #ffffff !important;
+}

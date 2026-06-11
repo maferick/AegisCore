@@ -497,6 +497,14 @@ ci-phase2-baseline:
 ci-phase2-cohort-features:
 	$(COMPOSE) --profile tools run --rm --build counter_intel phase2-cohort-features $(CI_ARGS)
 
+# Counter-Intel ADR-0014 — advanced correlation signals (subtle-spy /
+# handler-pattern detection). B-0 scaffold; individual signal computers
+# land in phases B-1..B-5. The make target dispatches the run() entry
+# which gracefully skips deferred signals until they ship.
+# Args: VIEWER_BLOC=1 CI_ARGS="--window-end=2026-05-01"
+ci-correlation-signals:
+	$(COMPOSE) --profile tools run --rm --build counter_intel correlation-signals --viewer-bloc-id $(VIEWER_BLOC) $(CI_ARGS)
+
 # Counter-Intel Phase 4 — log-derived operational analytics. Each
 # pass is idempotent (UPSERT). Run after eve-log-ingest is producing
 # events.

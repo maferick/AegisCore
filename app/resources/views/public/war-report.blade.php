@@ -7,15 +7,43 @@
     <meta name="description" content="Live war report — {{ $display_label ?? 'WinterCo vs Imperium' }}. Conflict floor 2026-04-02.">
     <meta name="robots" content="index, follow">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%E2%9A%94%3C/text%3E%3C/svg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link href="/css/hud.css?v=3" rel="stylesheet">
+    <link href="/css/hud-elevated.css?v=4" rel="stylesheet">
+    <script src="/js/auto-refresh.js?v=1" defer></script>
     <style>
-        :root { color-scheme: dark; }
+        :root {
+            color-scheme: dark;
+            --bg-deep: #050913;
+            --bg-panel: #06090f;
+            --bg-card: rgba(8,12,22,0.80);
+            --hud-cyan: #6dd6ff;
+            --hud-cyan-soft: rgba(109,214,255,0.20);
+            --hud-magenta: #c474a8;
+            --hud-magenta-soft: rgba(196,116,168,0.20);
+            --hud-gold: #f4c75c;
+            --hud-gold-soft: rgba(244,199,92,0.18);
+            --hud-platinum: #d6dbe4;
+            --hud-platinum-dim: #8c95a4;
+            --hud-line: rgba(109,214,255,0.18);
+            --font-head: 'Orbitron','Rajdhani',system-ui,sans-serif;
+            --font-body: 'Rajdhani','Inter',system-ui,sans-serif;
+            --font-mono: 'Share Tech Mono','JetBrains Mono',ui-monospace,monospace;
+        }
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif;
-            background: #050709;
-            color: #e5e5e7;
-            font-size: 0.85rem;
+            font-family: var(--font-body);
+            background:
+                radial-gradient(rgba(109,214,255,0.04) 1px, transparent 1.5px) 0 0 / 28px 28px,
+                radial-gradient(ellipse at 15% -10%, rgba(109,214,255,0.10) 0%, transparent 45%),
+                radial-gradient(ellipse at 85% 110%, rgba(244,199,92,0.04) 0%, transparent 45%),
+                var(--bg-deep);
+            background-attachment: fixed;
+            color: var(--hud-platinum);
+            font-size: 0.9rem;
             line-height: 1.45;
         }
         .container {
@@ -58,7 +86,7 @@
     </style>
     @include('partials.aegis-public-bg')
 </head>
-<body class="aegis-public-bg" data-page="{{ $conflict_key ?? 'war-report' }}">
+<body class="aegis-public-bg" data-page="{{ $conflict_key ?? 'war-report' }}" data-auto-refresh-seconds="180">
     {{-- Watermark logos — Fraternity (anchor of WinterCo, the panda
          coalition) on the left, opposing-bloc anchor on the right.
          Pulled via the local /img proxy so the page renders without

@@ -1,0 +1,684 @@
+/* HUD elevated — design pass on top of hud.css. Goal: elevate from
+   "cards with brackets" to a real EVE tactical-console readout.
+   Loaded after hud.css so every override wins on cascade. */
+
+/* ============================================================
+   1. CRT atmosphere — faint horizontal scanlines + bloom vignette
+   over the entire viewport. Subtle enough to read as "this is a
+   screen" without fighting the content. */
+body::before {
+    content: '';
+    position: fixed; inset: 0;
+    pointer-events: none; z-index: 1;
+    background:
+        repeating-linear-gradient(0deg,
+            rgba(109,214,255,0.025) 0,
+            rgba(109,214,255,0.025) 1px,
+            transparent 1px,
+            transparent 3px),
+        radial-gradient(ellipse at 50% 100%, transparent 55%, rgba(0,0,0,0.45) 100%),
+        radial-gradient(ellipse at 50% 0%, transparent 55%, rgba(0,0,0,0.30) 100%);
+    mix-blend-mode: screen;
+}
+.container, main.public-main { position: relative; z-index: 2; }
+
+/* ============================================================
+   2. Section spacing rhythm — golden-ratio gaps (8/13/21px-derived)
+   instead of uniform 1rem. Gives the eye natural settling points. */
+.km-card,
+div[style*="border-radius:8px"][style*="padding:0.85rem 1rem"],
+div[style*="border-radius:8px"][style*="padding:1rem"] {
+    margin-bottom: 1.3rem !important;
+    padding: 1.05rem 1.35rem 1.1rem !important;
+}
+#war-hero {
+    padding: 1.6rem 1.8rem 1.3rem !important;
+    margin-bottom: 1.6rem !important;
+}
+
+/* ============================================================
+   3. Hero composition. Pull the title out as a massive Orbitron
+   moment. Add a faux readout strip above with timecode + a
+   pulsing live indicator. Lay the verdict directly below. */
+#war-hero h1 {
+    font-size: clamp(1.75rem, 3.4vw, 2.6rem) !important;
+    line-height: 1.05 !important;
+    letter-spacing: 0.20em !important;
+    margin: 0.6rem 0 0.5rem !important;
+    text-shadow: 0 0 24px rgba(109,214,255,0.18);
+    position: relative;
+}
+#war-hero > div[style*="font-size:0.6rem"]:first-of-type {
+    /* "Active conflict" kicker — turn it into a sci-fi readout. */
+    display: inline-flex !important;
+    align-items: center; gap: 0.55rem;
+    padding: 0.18rem 0.7rem 0.18rem 0.55rem !important;
+    border: 1px solid var(--hud-line);
+    background: rgba(109,214,255,0.04);
+    color: var(--hud-cyan) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 0.62rem !important;
+    letter-spacing: 0.18em !important;
+}
+#war-hero > div[style*="font-size:0.6rem"]:first-of-type::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--hud-cyan);
+    box-shadow: 0 0 10px var(--hud-cyan);
+    animation: hud-blink 1.6s ease-in-out infinite;
+}
+@keyframes hud-blink {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.65); }
+}
+
+/* ============================================================
+   4. Pip bars — tick marks above the track + scanning shimmer
+   sweep. Reads less like a Prometheus stat and more like a power
+   readout on a ship console. */
+.wr-balance {
+    background:
+        repeating-linear-gradient(90deg,
+            transparent 0,
+            transparent 24px,
+            rgba(109,214,255,0.08) 24px,
+            rgba(109,214,255,0.08) 25px),
+        rgba(109,214,255,0.05) !important;
+    border: 1px solid rgba(109,214,255,0.12) !important;
+    box-shadow:
+        inset 0 0 0 1px rgba(0,0,0,0.4),
+        inset 0 1px 0 rgba(255,255,255,0.04);
+    overflow: hidden;
+    position: relative !important;
+}
+/* Sweep line — diagonal cyan glint that travels left-to-right
+   once on page load, then settles. */
+.wr-balance::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 60px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255,255,255,0.18) 50%,
+        transparent 100%);
+    transform: translateX(-100%);
+    animation: hud-sweep 1.6s ease-out 0.4s 1 both;
+    z-index: 3; pointer-events: none;
+}
+@keyframes hud-sweep {
+    0%   { transform: translateX(-60px); opacity: 0; }
+    20%  { opacity: 1; }
+    100% { transform: translateX(calc(100vw)); opacity: 0; }
+}
+.wr-balance-fill {
+    box-shadow: 0 0 12px currentColor, inset 0 0 8px rgba(255,255,255,0.12);
+    filter: saturate(1.05);
+}
+
+/* ============================================================
+   5. Side chips — sci-fi faction-frame treatment. Add a slow
+   scan line animating down the alliance logo column, hex chevron
+   in the corner, and an inset glass highlight at the top edge.  */
+.wr-vs-chip { overflow: hidden; }
+.wr-vs-chip::before {
+    /* Glass highlight along the top inside edge. */
+    content: '';
+    position: absolute;
+    top: 1px; left: 16px; right: 16px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.30), transparent);
+    pointer-events: none;
+}
+.wr-vs-chip::after {
+    /* Hex chevron decal — purely decorative, anchors the corner. */
+    content: 'ALPHA';
+    position: absolute;
+    bottom: 7px; right: 10px;
+    font-family: var(--font-mono);
+    font-size: 0.52rem;
+    letter-spacing: 0.20em;
+    color: var(--side-color);
+    opacity: 0.45;
+    pointer-events: none;
+}
+.wr-vs-chip:nth-of-type(2)::after { content: 'BRAVO'; }
+.wr-vs-logo {
+    position: relative;
+    overflow: hidden;
+}
+.wr-vs-logo::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--hud-cyan), transparent);
+    box-shadow: 0 0 8px var(--hud-cyan);
+    animation: hud-logo-scan 4.2s linear infinite;
+    pointer-events: none;
+}
+@keyframes hud-logo-scan {
+    0%, 12%   { top: 0; opacity: 0; }
+    18%       { opacity: 1; }
+    82%       { opacity: 1; }
+    88%, 100% { top: 100%; opacity: 0; }
+}
+.wr-vs-eff {
+    /* Make the efficiency number the loudest stat in the chip. */
+    font-size: 1.35rem !important;
+    line-height: 1 !important;
+    text-shadow: 0 0 18px var(--side-color);
+    margin-top: 0.3rem !important;
+}
+.wr-vs-sep {
+    font-size: 1.1rem !important;
+    color: var(--hud-gold) !important;
+    text-shadow: 0 0 14px rgba(244,199,92,0.55);
+    position: relative;
+}
+.wr-vs-sep::before, .wr-vs-sep::after {
+    content: '';
+    position: absolute; left: 50%; transform: translateX(-50%);
+    width: 1px; height: 28px;
+    background: linear-gradient(180deg, transparent, var(--hud-gold) 50%, transparent);
+}
+.wr-vs-sep::before { top: -36px; }
+.wr-vs-sep::after  { bottom: -36px; }
+
+/* ============================================================
+   6. Stat pills — extra polish. Inset top highlight + drop the
+   lower-right corner so the strip reads as a continuous bank.  */
+.wr-pill {
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.04),
+        0 1px 0 rgba(0,0,0,0.5);
+}
+.wr-pill-value {
+    font-size: 1.2rem !important;
+    line-height: 1 !important;
+    text-shadow: 0 0 12px rgba(109,214,255,0.20);
+}
+.wr-pill:nth-child(4) .wr-pill-value {
+    text-shadow: 0 0 14px rgba(244,199,92,0.45) !important;
+}
+
+/* ============================================================
+   7. Section header — section number tag + horizontal divider line
+   so each h2 reads like a console panel marker. */
+.km-card > h2,
+.km-card > h3,
+div[style*="border-radius:8px"] > h2,
+div[style*="border-radius:8px"] > h3 {
+    position: relative;
+    padding-left: 1.6rem !important;
+    margin-bottom: 0.85rem !important;
+}
+.km-card > h2::before,
+.km-card > h3::before,
+div[style*="border-radius:8px"] > h2::before,
+div[style*="border-radius:8px"] > h3::before {
+    content: '◢';
+    position: absolute;
+    left: 0; top: 50%; transform: translateY(-50%);
+    color: var(--hud-cyan);
+    font-size: 0.7rem;
+    text-shadow: 0 0 8px var(--hud-cyan);
+}
+.km-card > h2::after,
+.km-card > h3::after,
+div[style*="border-radius:8px"] > h2::after,
+div[style*="border-radius:8px"] > h3::after {
+    content: '';
+    position: absolute;
+    left: 1.6rem; right: 0; bottom: -6px;
+    height: 1px;
+    background: linear-gradient(90deg, var(--hud-cyan) 0%, transparent 70%);
+    opacity: 0.35;
+}
+
+/* ============================================================
+   8. Jump nav — refine the tab strip. Active tab gets a slow
+   pulse-glow, hover lifts with cyan ring, and a thin readout line
+   sits underneath the strip with start/end coordinate labels.  */
+.wr-jump-nav {
+    padding: 0.55rem 1.5rem !important;
+    gap: 0.35rem !important;
+    position: sticky; top: 0; z-index: 40;
+}
+.wr-jump-nav a {
+    padding: 0.35rem 0.85rem !important;
+    font-size: 0.62rem !important;
+    position: relative;
+}
+.wr-jump-nav a::after {
+    /* Bottom underline that grows on hover. */
+    content: '';
+    position: absolute;
+    left: 50%; bottom: -1px;
+    width: 0; height: 1px;
+    background: var(--hud-cyan);
+    transform: translateX(-50%);
+    transition: width 0.18s ease;
+}
+.wr-jump-nav a:hover::after { width: 70%; }
+.wr-jump-nav a.active {
+    animation: hud-tab-pulse 2.8s ease-in-out infinite;
+}
+@keyframes hud-tab-pulse {
+    0%, 100% { box-shadow: 0 0 12px rgba(244,199,92,0.30); }
+    50%      { box-shadow: 0 0 20px rgba(244,199,92,0.55); }
+}
+
+/* ============================================================
+   9. Quote box — give it character. Old typewriter-style cursor
+   blink at the end of the current quote.                       */
+.wr-quote-stage::after {
+    content: '▌';
+    color: var(--hud-cyan);
+    margin-left: 4px;
+    animation: hud-cursor 1.1s steps(1) infinite;
+    font-family: var(--font-mono);
+}
+@keyframes hud-cursor { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+.wr-q-current {
+    transition: opacity 0.4s ease, letter-spacing 0.4s ease !important;
+}
+.wr-q-current.fading { letter-spacing: 0.06em; }
+
+/* ============================================================
+   10. First-paint staggered reveal — sections rise into view in
+   sequence on initial load. Cheap, big perceived-quality lift. */
+@keyframes hud-rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+#war-hero,
+.wr-jump-nav,
+.km-card,
+div[style*="border-radius:8px"][style*="padding:0.85rem 1rem"],
+div[style*="border-radius:8px"][style*="padding:1rem"] {
+    animation: hud-rise 0.45s ease-out both;
+}
+#war-hero          { animation-delay: 0.00s; }
+.wr-jump-nav       { animation-delay: 0.08s; }
+.km-card:nth-of-type(1),
+div[style*="border-radius:8px"]:nth-of-type(1) { animation-delay: 0.16s; }
+.km-card:nth-of-type(2),
+div[style*="border-radius:8px"]:nth-of-type(2) { animation-delay: 0.24s; }
+.km-card:nth-of-type(3),
+div[style*="border-radius:8px"]:nth-of-type(3) { animation-delay: 0.32s; }
+.km-card:nth-of-type(4),
+div[style*="border-radius:8px"]:nth-of-type(4) { animation-delay: 0.40s; }
+.km-card:nth-of-type(n+5) { animation-delay: 0.48s; }
+
+/* ============================================================
+   11. Watermark refinement — the existing alliance watermarks
+   are good background atmosphere. Slow drift so they aren't
+   static, plus chromatic-aberration filter for sci-fi vibe.   */
+.aegis-watermark {
+    filter: saturate(0.55) hue-rotate(-10deg);
+    animation: hud-watermark-drift 24s ease-in-out infinite;
+}
+.aegis-watermark.right { animation-delay: -12s; }
+@keyframes hud-watermark-drift {
+    0%, 100% { transform: translate(0, 0); }
+    50%      { transform: translate(8px, -6px); }
+}
+
+/* ============================================================
+   12. War-block label — turn the all-caps "ISK WAR" / "STRUCTURE
+   WAR" / etc. into proper console panel headers with frame.  */
+.wr-war-label {
+    display: inline-flex !important;
+    align-items: center; gap: 0.4rem;
+    padding: 0.18rem 0.55rem 0.18rem 0.45rem;
+    border: 1px solid var(--hud-line);
+    background: rgba(109,214,255,0.04);
+    margin-bottom: 0.45rem !important;
+}
+.wr-war-label::before {
+    content: '◣';
+    color: var(--hud-cyan);
+    font-size: 0.6rem;
+    text-shadow: 0 0 6px var(--hud-cyan);
+}
+.wr-war-verdict {
+    font-size: 0.95rem !important;
+    line-height: 1.35;
+    margin-bottom: 0.5rem !important;
+}
+
+/* ============================================================
+   13. Pip bar legend — tabular grid with mini side-color squares
+   instead of inline-text-only.                                 */
+.wr-balance-legend {
+    margin-top: 0.4rem !important;
+    font-size: 0.66rem !important;
+}
+.wr-balance-legend span {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+}
+.wr-balance-legend span::before {
+    content: '';
+    width: 8px; height: 8px;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+}
+
+/* ============================================================
+   15. Live-now banner — sonar pulse rings around the active-dot
+   and a faint sweep across the banner background so it reads as
+   "active sensor contact" not "success message".               */
+.wr-live-dot,
+[style*="aegis-live-pulse"] {
+    position: relative;
+}
+[style*="aegis-live-pulse"]::before,
+[style*="aegis-live-pulse"]::after {
+    content: '';
+    position: absolute; inset: -3px;
+    border-radius: 50%;
+    border: 1px solid var(--hud-cyan);
+    animation: hud-sonar 2.4s ease-out infinite;
+    pointer-events: none;
+}
+[style*="aegis-live-pulse"]::after { animation-delay: 1.2s; }
+@keyframes hud-sonar {
+    0%   { transform: scale(0.6); opacity: 0.9; }
+    100% { transform: scale(3.2); opacity: 0; }
+}
+
+/* ============================================================
+   16. Viewport tactical corners — fixed L-brackets at the four
+   page corners. Reads as "you are inside a tactical readout
+   frame" the moment the page paints.                          */
+body::after {
+    content: '';
+    position: fixed; inset: 8px;
+    pointer-events: none; z-index: 3;
+    background:
+        /* top-left */
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 0 0 / 20px 1px no-repeat,
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 0 0 / 1px 20px no-repeat,
+        /* top-right */
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 100% 0 / 20px 1px no-repeat,
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 100% 0 / 1px 20px no-repeat,
+        /* bottom-left */
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 0 100% / 20px 1px no-repeat,
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 0 calc(100% - 19px) / 1px 20px no-repeat,
+        /* bottom-right */
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 100% 100% / 20px 1px no-repeat,
+        linear-gradient(var(--hud-gold), var(--hud-gold)) 100% calc(100% - 19px) / 1px 20px no-repeat;
+    opacity: 0.75;
+}
+
+/* ============================================================
+   17. Page top tactical readout — coordinates / timecode strip
+   above the .container content so the page reads as a console
+   frame rather than a Jekyll blog. */
+.public-header {
+    position: relative;
+    padding-top: 1.4rem !important;
+}
+.public-header::before {
+    content: 'TQ // CONFLICT BRIEF // 0.0 SOV THEATER';
+    position: absolute;
+    top: 0; left: 0;
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.30em;
+    color: var(--hud-cyan);
+    text-shadow: 0 0 6px rgba(109,214,255,0.45);
+}
+.public-header::after {
+    content: 'OPERATIVE: PUBLIC CHANNEL · UNCLASS';
+    position: absolute;
+    top: 0; right: 0;
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.20em;
+    color: var(--hud-platinum-dim);
+}
+.public-header h1 {
+    font-family: var(--font-head) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.12em !important;
+    font-size: 1.05rem !important;
+}
+
+/* ============================================================
+   18. Section dividers — between every .km-card the page now
+   shows a thin glyph divider. Pure decoration via ::before on
+   each card after the first, so spacing rhythm gets a beat. */
+.km-card + .km-card,
+div[style*="border-radius:8px"][style*="padding:0.85rem 1rem"] + .km-card,
+div[style*="border-radius:8px"][style*="padding:1rem"] + .km-card,
+.km-card + div[style*="border-radius:8px"] {
+    /* Use container's own ::before slot would conflict with the
+       gold accent strip — instead extend margin-top + use a
+       background-painted glyph at the very top of the card. */
+    margin-top: 1.6rem !important;
+}
+
+/* ============================================================
+   19. Live-banner glassy chrome — replace the inline gradient
+   with a darker cyan-tinted strip so it doesn't look like a
+   "success" notification anymore.                              */
+div[style*="rgba(109,214,255,0.10) 0%"] {
+    background: linear-gradient(90deg,
+        rgba(109,214,255,0.08) 0%,
+        rgba(8,12,22,0.85) 60%,
+        rgba(109,214,255,0.04) 100%) !important;
+    border-color: rgba(109,214,255,0.30) !important;
+    border-radius: 0 !important;
+    position: relative;
+}
+div[style*="rgba(109,214,255,0.10) 0%"]::before {
+    /* Vertical accent bar on left edge — "channel: open". */
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--hud-cyan);
+    box-shadow: 0 0 10px var(--hud-cyan);
+}
+
+/* ============================================================
+   20. Older-battles button + battle chips — sci-fi affordance. */
+a[href*="/battles"][style*="border:1px solid rgba(255,255,255,0.10)"] {
+    border: 1px solid rgba(109,214,255,0.30) !important;
+    background: rgba(109,214,255,0.06) !important;
+    border-radius: 0 !important;
+    color: var(--hud-cyan) !important;
+    font-family: var(--font-mono) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+a[href*="/battles"][style*="border:1px solid rgba(255,255,255,0.10)"]:hover {
+    background: rgba(109,214,255,0.16) !important;
+    color: #fff !important;
+    box-shadow: 0 0 12px rgba(109,214,255,0.30);
+}
+/* Live battle chips inside the banner. */
+a[href^="/battles/"][style*="border:1px solid rgba(109,214,255,0.30)"] {
+    border-radius: 0 !important;
+    border: 1px solid rgba(109,214,255,0.40) !important;
+    background:
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 0 / 8px 1px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 0 / 1px 8px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 100% / 8px 1px no-repeat,
+        linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% calc(100% - 8px) / 1px 8px no-repeat,
+        rgba(8,12,22,0.65) !important;
+}
+
+/* ============================================================
+   21. Recent-losses tactical log — single dense row per kill.
+   4-column grid: stacked icons | ship+system | victim+alliance+FB
+   | ISK + time. Treats the feed like a sensor printout, not a
+   bullet list. */
+.wr-killfeed > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 0.35rem 0.6rem;
+    background: rgba(109,214,255,0.05);
+    border: 1px solid rgba(109,214,255,0.18);
+    color: var(--hud-cyan);
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin-bottom: 0.4rem;
+    user-select: none;
+}
+.wr-killfeed > summary::-webkit-details-marker { display: none; }
+.wr-killfeed > summary::before {
+    content: '◢ ';
+    color: var(--hud-cyan);
+    text-shadow: 0 0 6px var(--hud-cyan);
+    margin-right: 0.4rem;
+}
+.wr-killfeed-body {
+    display: flex; flex-direction: column;
+    gap: 1px;
+}
+.wr-killrow {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1.1fr) minmax(0, 1.3fr) auto;
+    gap: 0.6rem;
+    align-items: center;
+    padding: 0.4rem 0.6rem 0.4rem 0.5rem;
+    background: rgba(8,12,22,0.55);
+    border-left: 2px solid transparent;
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.12s ease, border-color 0.12s ease;
+    line-height: 1.25;
+    position: relative;
+}
+.wr-killrow + .wr-killrow { border-top: 1px solid rgba(109,214,255,0.06); }
+.wr-killrow:hover {
+    background: rgba(109,214,255,0.06);
+    border-left-color: var(--hud-cyan);
+}
+.wr-killrow.is-pod         { background: rgba(8,12,22,0.40); }
+.wr-killrow.is-clean-pod   { opacity: 0.6; }
+
+.wr-kr-icons {
+    display: flex; align-items: center; justify-content: center;
+    position: relative; width: 36px; height: 28px;
+}
+.wr-kr-ship {
+    width: 28px; height: 28px; border-radius: 2px;
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(109,214,255,0.18);
+}
+.wr-kr-char {
+    position: absolute; right: -2px; bottom: -3px;
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 1px solid var(--bg-deep);
+    background: rgba(0,0,0,0.4);
+}
+
+.wr-kr-ship-cell,
+.wr-kr-victim-cell {
+    display: flex; flex-direction: column;
+    min-width: 0;
+}
+.wr-kr-ship-name {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--hud-platinum);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wr-kr-system {
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    color: var(--hud-cyan);
+    letter-spacing: 0.05em;
+}
+.wr-kr-victim {
+    font-size: 0.66rem;
+    color: var(--hud-platinum);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wr-kr-alliance {
+    font-size: 0.56rem;
+    color: var(--hud-platinum-dim);
+    letter-spacing: 0.04em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wr-kr-fb {
+    font-family: var(--font-mono);
+    font-size: 0.54rem;
+    color: var(--hud-magenta);
+    letter-spacing: 0.04em;
+    margin-top: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wr-kr-meta {
+    display: flex; flex-direction: column; align-items: flex-end;
+    gap: 1px;
+    min-width: 64px;
+}
+.wr-kr-isk {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--hud-gold);
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(244,199,92,0.30);
+}
+.wr-kr-isk.wr-kr-clean {
+    color: var(--hud-platinum-dim);
+    font-size: 0.58rem;
+    letter-spacing: 0.10em;
+    text-shadow: none;
+    font-weight: 500;
+}
+.wr-kr-time {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    color: var(--hud-platinum-dim);
+    letter-spacing: 0.05em;
+}
+
+@media (max-width: 580px) {
+    .wr-killrow { grid-template-columns: 28px 1fr auto; }
+    .wr-kr-victim-cell { display: none; }
+    .wr-kr-icons { width: 28px; }
+}
+
+/* ============================================================
+   22. Tabbed war report. body[data-active-tab="X"] is set by
+   /js/war-tabs.js. Hide every pane except the matching one.
+   The live banner + jump-nav stay visible across tabs. */
+body[data-active-tab] [data-tab] { display: none !important; }
+body[data-active-tab="overview"]        [data-tab="overview"],
+body[data-active-tab="hotspots"]        [data-tab="hotspots"],
+body[data-active-tab="leaderboards"]    [data-tab="leaderboards"],
+body[data-active-tab="top-kills"]       [data-tab="top-kills"],
+body[data-active-tab="pilots"]          [data-tab="pilots"],
+body[data-active-tab="alliances"]       [data-tab="alliances"],
+body[data-active-tab="implants"]        [data-tab="implants"],
+body[data-active-tab="structures"]      [data-tab="structures"],
+body[data-active-tab="side-breakdowns"] [data-tab="side-breakdowns"] {
+    display: block !important;
+}
+/* Restore grid layout for tabs whose container is a CSS grid. */
+body[data-active-tab="pilots"]    [data-tab="pilots"],
+body[data-active-tab="alliances"] [data-tab="alliances"],
+body[data-active-tab="side-breakdowns"] [data-tab="side-breakdowns"] {
+    display: grid !important;
+}
+
+/* ============================================================
+   14. Reduced motion — respect the user's preference. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
+}

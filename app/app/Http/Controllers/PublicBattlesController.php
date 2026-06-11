@@ -72,6 +72,25 @@ class PublicBattlesController
     }
 
     /**
+     * Full per-side pilot list. The main battle page truncates to top
+     * 100 per side for LCP / DOM-size reasons; this returns the rest
+     * (sorted same way) without the rest of the report chrome.
+     */
+    public function pilots(string $record, string $side, BattleTheaterViewData $builder): View
+    {
+        $theater = $this->resolveTheater($record);
+        $sideKey = strtoupper($side);
+        if (! in_array($sideKey, ['A', 'B', 'C'], true)) {
+            abort(404);
+        }
+
+        $data = $builder->build($theater, viewer: null, hideBlocNames: true);
+        $data['side_key'] = $sideKey;
+
+        return view('public.battles.pilots', $data);
+    }
+
+    /**
      * Accept either a numeric id (legacy share URLs) or a stable
      * public_slug (preferred; survives clustering re-passes). When
      * the slug resolves to multiple rows — possible if the clusterer

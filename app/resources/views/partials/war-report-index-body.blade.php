@@ -23,7 +23,7 @@
                     @php
                         $label = $c['label'];
                         [$leftRaw, $rightRaw] = array_pad(array_map('trim', explode(' vs ', $label, 2)), 2, '');
-                        $colorOf = fn (string $name) => $name === 'WinterCo' ? '#86efac' : $tint;
+                        $colorOf = fn (string $name) => $name === 'WinterCo' ? '#6dd6ff' : $tint;
                     @endphp
                     <span style="color:{{ $colorOf($leftRaw) }};">{{ $leftRaw }}</span>
                     <span style="color:#7a7a82; font-weight:400;"> vs </span>
@@ -37,15 +37,15 @@
                         </div>
                         <div style="padding:0.45rem 0.6rem; border:1px solid rgba(255,255,255,0.08); border-radius:5px; background:rgba(0,0,0,0.20);">
                             <div style="font-size:0.55rem; color:#7a7a82; text-transform:uppercase; letter-spacing:0.06em;">ISK destroyed</div>
-                            <div style="font-size:1.15rem; color:#fde68a; font-weight:600;">{{ $fmtIsk((float) ($totals['wc']['isk'] + $totals['op']['isk'])) }}</div>
+                            <div style="font-size:1.15rem; color:#f4c75c; font-weight:600;">{{ $fmtIsk((float) ($totals['wc']['isk'] + $totals['op']['isk'])) }}</div>
                         </div>
                         <div style="padding:0.4rem 0.6rem;">
-                            <div style="font-size:0.55rem; color:#86efac; text-transform:uppercase; letter-spacing:0.06em;">WinterCo losses</div>
-                            <div style="font-size:0.85rem; color:#cbd5e1;">{{ $fmtNum($totals['wc']['kms']) }} <span style="color:#fde68a; font-size:0.7rem;">· {{ $fmtIsk((float) $totals['wc']['isk']) }}</span></div>
+                            <div style="font-size:0.55rem; color:#6dd6ff; text-transform:uppercase; letter-spacing:0.06em;">WinterCo losses</div>
+                            <div style="font-size:0.85rem; color:#cbd5e1;">{{ $fmtNum($totals['wc']['kms']) }} <span style="color:#f4c75c; font-size:0.7rem;">· {{ $fmtIsk((float) $totals['wc']['isk']) }}</span></div>
                         </div>
                         <div style="padding:0.4rem 0.6rem;">
                             <div style="font-size:0.55rem; color:{{ $tint }}; text-transform:uppercase; letter-spacing:0.06em;">{{ $c['opposing_label'] }} losses</div>
-                            <div style="font-size:0.85rem; color:#cbd5e1;">{{ $fmtNum($totals['op']['kms']) }} <span style="color:#fde68a; font-size:0.7rem;">· {{ $fmtIsk((float) $totals['op']['isk']) }}</span></div>
+                            <div style="font-size:0.85rem; color:#cbd5e1;">{{ $fmtNum($totals['op']['kms']) }} <span style="color:#f4c75c; font-size:0.7rem;">· {{ $fmtIsk((float) $totals['op']['isk']) }}</span></div>
                         </div>
                     </div>
                 @else
@@ -58,25 +58,65 @@
 </div>
 
 <style>
+    /* Conflict cards — HUD console panels with corner brackets,
+       hairline cyan border, faction-tinted glow on hover. Match the
+       war-report .km-card chrome so the homepage feels like the
+       same console. */
     .aegis-conflict-card {
         display: block;
         text-decoration: none;
         color: inherit;
-        border-radius: 10px;
-        padding: 1px;
-        background: linear-gradient(135deg, rgba(34,197,94,0.10) 0%, rgba(0,0,0,0.45) 50%, color-mix(in srgb, var(--tint) 30%, transparent) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.10);
-        box-shadow: 0 0 24px rgba(0,0,0,0.35), 0 0 32px color-mix(in srgb, var(--tint) 10%, transparent);
+        position: relative;
+        border-radius: 0;
+        padding: 0;
+        background:
+            /* 4 corner L-brackets in cyan */
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 0 / 16px 1px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 0 / 1px 16px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 0 / 16px 1px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 0 / 1px 16px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 100% / 16px 1px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 0 calc(100% - 16px) / 1px 16px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% 100% / 16px 1px no-repeat,
+            linear-gradient(var(--hud-cyan), var(--hud-cyan)) 100% calc(100% - 16px) / 1px 16px no-repeat,
+            linear-gradient(135deg,
+                rgba(109,214,255,0.06) 0%,
+                rgba(8,12,22,0.85) 50%,
+                color-mix(in srgb, var(--tint) 20%, transparent) 100%);
+        border: 1px solid rgba(109,214,255,0.10);
+        box-shadow:
+            0 0 18px rgba(0,0,0,0.50),
+            0 0 28px color-mix(in srgb, var(--tint) 8%, transparent);
         transition: box-shadow 0.25s, transform 0.15s, border-color 0.2s;
+    }
+    .aegis-conflict-card::before {
+        /* Gold accent strip across the top edge — single rare cue. */
+        content: '';
+        position: absolute;
+        top: 0; left: 22%; right: 22%;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--hud-gold), transparent);
+        opacity: 0.75;
+        pointer-events: none;
+        z-index: 1;
     }
     .aegis-conflict-card:hover {
         border-color: color-mix(in srgb, var(--tint) 60%, transparent);
-        box-shadow: 0 0 32px rgba(0,0,0,0.4), 0 0 56px color-mix(in srgb, var(--tint) 35%, transparent);
+        box-shadow:
+            0 0 24px rgba(0,0,0,0.45),
+            0 0 48px color-mix(in srgb, var(--tint) 35%, transparent);
         transform: translateY(-1px);
     }
     .aegis-conflict-card-inner {
         padding: 1.25rem 1.5rem;
-        background: rgba(8, 10, 14, 0.6);
-        border-radius: 9px;
+        background: transparent;
+        border-radius: 0;
+        position: relative;
+        z-index: 2;
+    }
+    .aegis-conflict-card h2 {
+        font-family: var(--font-head);
+        text-transform: uppercase;
+        letter-spacing: 0.14em !important;
     }
 </style>

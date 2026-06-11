@@ -153,6 +153,13 @@ Route::get('/battles/{conflict}', [PublicBattlesController::class, 'index'])
 Route::get('/battles/{record}', [PublicBattlesController::class, 'show'])
     ->where('record', '[A-Za-z0-9\-]+')
     ->name('public.battles.show');
+// Full per-side pilot list. Truncated to top 100 on the main battle
+// page for LCP / DOM-size reasons; this dedicated route returns the
+// rest without the rest of the report chrome.
+Route::get('/battles/{record}/pilots/{side}', [PublicBattlesController::class, 'pilots'])
+    ->where('record', '[A-Za-z0-9\-]+')
+    ->where('side', '[abc]')
+    ->name('public.battles.pilots');
 
 // Public killmail detail — same rollup the authed portal killmail
 // page renders. All killmail fields are already public via

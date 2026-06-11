@@ -41,7 +41,7 @@ class ComputeAutoDoctrinesCommand extends Command
     private const FLOOR_BY_ROLE = ['fc' => 2, 'command' => 2];
     private const FLOOR_CAPITAL = 5;
     private const FLOOR_DEFAULT = 10;
-    private const CAPITAL_HULL_GROUPS = [485, 547, 659, 30, 1538];
+    private const CAPITAL_HULL_GROUPS = [485, 547, 659, 30, 1538, 4594];
     private const MONITOR_TYPE_ID = 45534;
 
     /** @var array<string, array> Cluster state across batches. Key = "$hull|$role|$fp". */

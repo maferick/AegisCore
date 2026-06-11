@@ -1,37 +1,91 @@
 #!/usr/bin/env bash
-# Counter-Intel staleness prevention — append daily refresh of
-# ci_character_features_rolling + Neo4j projection to the operator
-# host crontab. Run once on the host.
+# Counter-Intel scheduling installer.
 #
-# Without these, phase18 fusion + character-lookup graph insights
-# read a frozen window: defector / recruit transitions (e.g.
-# Dracarys → Insidious) lag in the surface for weeks.
+# Installs three crons:
+#   - 05:00 UTC daily   ci-daily-pipeline.sh         (character + Phase 1/2)
+#   - 06:00 UTC daily   ci-operational-pipeline.sh   (Phase 4 / 4.5 / 4.6 / 4.7)
+#   - hourly @ :05      ci-coverage-check.sh         (staleness alert)
 #
-# Idempotent: re-running re-appends only if missing.
+# Removes superseded individual cron lines that are now folded into
+# the pipelines. Repairs the historical phase17 1h cron line that was
+# missing `cd /opt/AegisCore` (caused make: *** No rule to make target).
+#
+# Idempotent: safe to re-run.
 
 set -euo pipefail
 
 LOG_DIR="/opt/AegisCore/scripts/log"
 mkdir -p "$LOG_DIR"
 
-CRON_LINE_FEATURES='35 4 * * * cd /opt/AegisCore && CI_ARGS="--window-end $(date -u +\%Y-\%m-\%d)" make ci-features >> /opt/AegisCore/scripts/log/ci-features.log 2>&1'
-CRON_LINE_PROJECTION='55 4 * * * cd /opt/AegisCore && make ci-projection >> /opt/AegisCore/scripts/log/ci-projection.log 2>&1'
+WANTED_CRONS=(
+    '0 5 * * * /opt/AegisCore/scripts/ci-daily-pipeline.sh'
+    '0 6 * * * /opt/AegisCore/scripts/ci-operational-pipeline.sh'
+    '5 * * * * /opt/AegisCore/scripts/ci-coverage-check.sh'
+)
+
+# Cron lines this script previously installed but no longer want — they
+# are now folded into pipelines.
+SUPERSEDED_PATTERNS=(
+    'make ci-features'
+    'make ci-projection'
+    'make ci-phase1-relative'
+    'make ci-phase2-triangulation'
+)
 
 CURRENT="$(crontab -l 2>/dev/null || true)"
 
-add_if_missing() {
-    local line="$1"
-    if printf '%s\n' "$CURRENT" | grep -Fq "$line"; then
+# 1. Drop superseded lines.
+TMP_PATTERNS="$(mktemp)"
+trap 'rm -f "$TMP_PATTERNS"' EXIT
+for p in "${SUPERSEDED_PATTERNS[@]}"; do
+    printf '%s\n' "$p" >> "$TMP_PATTERNS"
+done
+FILTERED="$(printf '%s\n' "$CURRENT" | awk -v pf="$TMP_PATTERNS" '
+    BEGIN {
+        n = 0
+        while ((getline ln < pf) > 0) { n++; arr[n] = ln }
+        close(pf)
+    }
+    {
+        keep = 1
+        for (i = 1; i <= n; i++) {
+            if (index($0, arr[i]) > 0) { keep = 0; break }
+        }
+        if (keep) print $0
+    }
+')"
+
+# 2. Repair phase17 1h cron line — historical entry missed the
+#    `cd /opt/AegisCore` so make ran from cron home and got
+#    "No rule to make target ci-phase17-what-changed". Repair by
+#    rewriting any line that has the symptom into a working version.
+FIXED="$(printf '%s\n' "$FILTERED" | awk '
+    /WINDOW=1h.*make ci-phase17-what-changed/ && !/cd \/opt\/AegisCore/ {
+        # rewrite to a working line, preserving the cron schedule prefix
+        # (everything up to the env vars).
+        match($0, /^([^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*) +/, sched)
+        if (sched[0]) {
+            print sched[0] "cd /opt/AegisCore && VIEWER_BLOC=1 WINDOW=1h make ci-phase17-what-changed >> /opt/AegisCore/scripts/log/phase17-what-changed.log 2>&1"
+            next
+        }
+    }
+    { print }
+')"
+
+# 3. Append wanted lines if not already present.
+APPENDED="$FIXED"
+for line in "${WANTED_CRONS[@]}"; do
+    if printf '%s\n' "$APPENDED" | grep -Fq "$line"; then
         echo "already present: $line"
-        return
+    else
+        APPENDED="${APPENDED}"$'\n'"${line}"
+        echo "appending: $line"
     fi
-    CURRENT="${CURRENT}"$'\n'"${line}"
-    echo "appending: $line"
-}
+done
 
-add_if_missing "$CRON_LINE_FEATURES"
-add_if_missing "$CRON_LINE_PROJECTION"
+# 4. Squash double blank lines.
+CLEANED="$(printf '%s\n' "$APPENDED" | awk 'NF || prev_nf { print } { prev_nf = NF }')"
 
-printf '%s\n' "$CURRENT" | crontab -
-echo "done. current cron tail:"
-crontab -l | tail -8
+printf '%s\n' "$CLEANED" | crontab -
+echo "done. current cron:"
+crontab -l

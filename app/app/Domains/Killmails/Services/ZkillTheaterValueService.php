@@ -27,6 +27,41 @@ final class ZkillTheaterValueService
     private const CACHE_TTL_SECONDS = 86400;
     private const REQUEST_TIMEOUT_SECONDS = 8;
     private const USER_AGENT = 'AegisCore/0.1 (+ops@example.com; WinterCo battle reports)';
+    /** Min per-km zkill coverage to use the DB aggregate vs the related/ fallback. */
+    private const COVERAGE_THRESHOLD = 0.95;
+
+    /**
+     * Per-km zkill_total_value aggregate across all kms in the theater.
+     * Returns null if coverage is too low (caller falls back to
+     * /api/related/'s 1h × primary system summary).
+     *
+     * @return array{sum_isk: float, covered: int, total: int}|null
+     */
+    public function aggregateForTheater(BattleTheater $theater): ?array
+    {
+        $row = \Illuminate\Support\Facades\DB::table('battle_theater_killmails as btk')
+            ->join('killmails as k', 'k.killmail_id', '=', 'btk.killmail_id')
+            ->where('btk.theater_id', $theater->id)
+            ->selectRaw('
+                COUNT(*) AS total_km,
+                SUM(CASE WHEN k.zkill_total_value IS NOT NULL THEN 1 ELSE 0 END) AS covered_km,
+                COALESCE(SUM(k.zkill_total_value), 0) AS sum_zkill
+            ')
+            ->first();
+        if ($row === null || (int) $row->total_km === 0) {
+            return null;
+        }
+        $covered = (int) $row->covered_km;
+        $total = (int) $row->total_km;
+        if ($covered / $total < self::COVERAGE_THRESHOLD) {
+            return null;
+        }
+        return [
+            'sum_isk' => (float) $row->sum_zkill,
+            'covered' => $covered,
+            'total' => $total,
+        ];
+    }
 
     public function totalForTheater(BattleTheater $theater): ?float
     {

@@ -55,6 +55,28 @@ class SyncSovereigntyCommand extends Command
             DB::table('system_sovereignty')->insert($chunk);
         }
         $this->info('Sovereignty synced.');
+
+        // Daily snapshot into system_sovereignty_history. Powers
+        // sov-flip diffing on the war report Sov war scoreboard. We
+        // re-write today's rows on each run so the latest state of
+        // the day wins; dates earlier than today are immutable.
+        $today = $now->copy()->startOfDay()->toDateString();
+        $histBatch = [];
+        foreach ($batch as $r) {
+            $histBatch[] = [
+                'solar_system_id' => $r['solar_system_id'],
+                'alliance_id' => $r['alliance_id'],
+                'corporation_id' => $r['corporation_id'],
+                'faction_id' => $r['faction_id'],
+                'captured_on' => $today,
+                'captured_at' => $now,
+            ];
+        }
+        DB::table('system_sovereignty_history')->where('captured_on', $today)->delete();
+        foreach (array_chunk($histBatch, 1000) as $chunk) {
+            DB::table('system_sovereignty_history')->insert($chunk);
+        }
+        $this->info('Sovereignty history snapshot for ' . $today . ' written.');
         return 0;
     }
 }

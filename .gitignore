@@ -22,3 +22,7 @@ nginx/certs/
 
 # caveman compress backups
 *.original.md
+/backups/
+/letsencrypt/
+/nginx/letsencrypt/
+/scripts/log/

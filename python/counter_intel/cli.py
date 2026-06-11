@@ -76,6 +76,7 @@ from counter_intel.phase17_change_synthesis import (
 from counter_intel.phase18_hypothesis_fusion import (
     run_hypothesis_fusion as phase18_hypothesis_fusion,
 )
+from counter_intel.correlation_signals import run as correlation_signals_run
 from counter_intel.market_order_aggregator import (
     run_backfill as market_order_aggregator_backfill,
 )
@@ -262,6 +263,13 @@ def main() -> int:
                             help="§18 — fuse CI signals into ranked hypotheses.")
     p18hf.add_argument("--viewer-bloc-id", type=int, required=True)
 
+    p_cs = sub.add_parser("correlation-signals",
+                          help="ADR-0014 — compute advanced correlation signals (opposite-side, participation, etc).")
+    p_cs.add_argument("--viewer-bloc-id", type=int, required=True)
+    p_cs.add_argument("--window-end", type=str, default=None,
+                      help="YYYY-MM-DD (default: today UTC)")
+    p_cs.add_argument("--window-days", type=int, default=90)
+
     p_mkt = sub.add_parser("market-order-aggregator-backfill",
                            help="Emergency: aggregate market_orders → market_order_daily_aggregates.")
     p_mkt.add_argument("--start-date", type=str, required=True,
@@ -352,6 +360,8 @@ def main() -> int:
         return _run_market_order_aggregator_backfill(args)
     if args.cmd == "phase17-what-changed":
         return _run_phase17_what_changed(args)
+    if args.cmd == "correlation-signals":
+        return _run_correlation_signals(args)
     if args.cmd == "phase18-hypothesis-fusion":
         return _run_phase18_hypothesis_fusion(args)
     parser.print_help()
@@ -1074,4 +1084,23 @@ def _run_phase18_hypothesis_fusion(args) -> int:
             r.set_generated_rows(int(stats.get("hypotheses_written") or 0))
             r.set_stats(stats or {})
     log.info("phase18-hypothesis-fusion complete", stats)
+    return 0
+
+
+def _run_correlation_signals(args) -> int:
+    """ADR-0014 — advanced correlation signal compute pass.
+
+    B-0 scaffold: every individual signal raises NotImplementedError
+    inside `correlation_signals.run()`, which catches and records as
+    deferred. This entrypoint exists so Phase B-1+ commits land as
+    pure additions without touching the CLI surface again.
+    """
+    from datetime import date as _date
+    window_end = _date.fromisoformat(args.window_end) if args.window_end else _date.today()
+    results = correlation_signals_run(
+        viewer_bloc_id=args.viewer_bloc_id,
+        window_end=window_end,
+        window_days=args.window_days,
+    )
+    log.info("correlation-signals complete", {"results": results})
     return 0

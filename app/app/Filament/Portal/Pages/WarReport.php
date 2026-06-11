@@ -47,7 +47,7 @@ class WarReport extends Page
     public const array CONFLICTS = [
         self::CONFLICT_IMPERIUM => [
             'opposing_label' => 'Imperium',
-            'opposing_tint' => '#fca5a5',
+            'opposing_tint' => '#c474a8',
             'start' => '2026-04-02 00:00:00',
         ],
         self::CONFLICT_INITIATIVE => [
@@ -56,7 +56,7 @@ class WarReport extends Page
             // 2025 — anchor the floor at 2025-10-01 so this report
             // covers the full conflict, not just post-April action.
             'opposing_label' => 'Initiative',
-            'opposing_tint' => '#fdba74',
+            'opposing_tint' => '#d49862',
             'start' => '2025-10-01 00:00:00',
         ],
     ];
@@ -114,7 +114,7 @@ class WarReport extends Page
      *  edit will trip "incomplete object" 500s in the blade once
      *  the new compiled view tries to read keys that don't exist.
      *  Bump → operator runs `php artisan cache:clear` once. */
-    public const string VIEW_CACHE_KEY = 'war_report.view_data.v14';
+    public const string VIEW_CACHE_KEY = 'war_report.view_data.v19';
 
     /** Per-metric rank-1/2/3 podium titles. Reddit-flavored,
      *  curse-word-free, distinct per leaderboard. */
@@ -230,6 +230,9 @@ class WarReport extends Page
 
         $hotspots = $this->systemHotspots($start, $wcAlly, $opposingAlly);
         $structures = $this->upwellStructureTimeline($start, $wcAlly, $opposingAlly);
+        $structureWar = $this->structureWarTotals($wcAlly, $opposingAlly);
+        $systemsWar = $this->systemsWarTotals($wcAlly, $opposingAlly);
+        $sovWar = $this->sovWarTotals($wcAlly, $opposingAlly, $start);
         $topImplantPods = $this->topImplantPods($start, $wcAlly, $opposingAlly);
         $leaderboards = $this->leaderboards($start, $wcAlly, $opposingAlly);
         $liveBattles = $this->liveBattles($wcAlly, $opposingAlly);
@@ -250,6 +253,9 @@ class WarReport extends Page
             'recent' => $recent,
             'hotspots' => $hotspots,
             'structures' => $structures,
+            'structure_war' => $structureWar,
+            'systems_war' => $systemsWar,
+            'sov_war' => $sovWar,
             'top_implant_pods' => $topImplantPods,
             'leaderboards' => $leaderboards,
             'live_battles' => $liveBattles,
@@ -811,26 +817,64 @@ class WarReport extends Page
     private function sideLossTotals(string $start, array $victimAlliances, array $hostileAlliances): array
     {
         if ($victimAlliances === [] || $hostileAlliances === []) {
-            return ['kms' => 0, 'isk' => 0.0];
+            return ['kms' => 0, 'isk' => 0.0, 'pilots' => 0, 'lead_alliance_id' => null, 'lead_alliance_name' => null];
         }
         // Reads from the materialised _war_kms temp table built once
         // per request — see materialiseWarKillSet(). Filters by victim
         // side and the (separate) opposing-attacker set so we can
         // reuse a single shared killmail set without rebuilding it
         // for each (victim, hostile) pair.
+        $victimList = implode(',', $victimAlliances);
+        $hostileList = implode(',', $hostileAlliances);
         $row = DB::selectOne("
             SELECT COUNT(*) AS n,
                    COALESCE(SUM(k.total_value), 0) AS isk
             FROM _war_kms wk
             JOIN killmails k ON k.killmail_id = wk.killmail_id
-            WHERE k.victim_alliance_id IN (" . implode(',', $victimAlliances) . ")
+            WHERE k.victim_alliance_id IN ({$victimList})
               AND EXISTS (
                   SELECT 1 FROM killmail_attackers a
                   WHERE a.killmail_id = k.killmail_id
-                    AND a.alliance_id IN (" . implode(',', $hostileAlliances) . ")
+                    AND a.alliance_id IN ({$hostileList})
               )
         ");
-        return ['kms' => (int) $row->n, 'isk' => (float) $row->isk];
+
+        // Pilot count = distinct character_ids who appeared as
+        // attackers on the war's killmails on this side. Powers the
+        // "Xp" stat on the war-report VS header (mirrors the battle
+        // report's per-side pilot count).
+        $pilotsRow = DB::selectOne("
+            SELECT COUNT(DISTINCT a.character_id) AS pilots
+            FROM _war_attackers a
+            WHERE a.alliance_id IN ({$victimList})
+              AND a.character_id IS NOT NULL AND a.character_id > 0
+        ");
+
+        // Lead alliance for this side = whichever alliance lost the
+        // most ISK over the war window. Mirrors the battle report's
+        // bt-vs-chip headline pick. Falls back to most-loss-count when
+        // ISK ties at 0.
+        $leadRow = DB::selectOne("
+            SELECT k.victim_alliance_id AS aid,
+                   en.name AS name,
+                   COUNT(*) AS losses,
+                   COALESCE(SUM(k.total_value), 0) AS isk
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            LEFT JOIN esi_entity_names en ON en.entity_id = k.victim_alliance_id AND en.category = 'alliance'
+            WHERE k.victim_alliance_id IN ({$victimList})
+            GROUP BY k.victim_alliance_id, en.name
+            ORDER BY isk DESC, losses DESC
+            LIMIT 1
+        ");
+
+        return [
+            'kms' => (int) $row->n,
+            'isk' => (float) $row->isk,
+            'pilots' => (int) ($pilotsRow->pilots ?? 0),
+            'lead_alliance_id' => $leadRow ? (int) $leadRow->aid : null,
+            'lead_alliance_name' => $leadRow && $leadRow->name ? (string) $leadRow->name : null,
+        ];
     }
 
     /**
@@ -1105,6 +1149,218 @@ class WarReport extends Page
      * @param  list<int>  $hostile
      * @return list<object>
      */
+    /**
+     * Structure war scoreboard: count + ISK of upwell structures
+     * (category 65) destroyed per side over the war window. The
+     * "destroyed by X" totals are the mirror of the "lost by Y"
+     * totals — same rule as the ISK war.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $hostile
+     * @return array{wc: array{lost: int, isk_lost: float}, op: array{lost: int, isk_lost: float}}
+     */
+    private function structureWarTotals(array $wcAlly, array $hostile): array
+    {
+        $empty = ['wc' => ['lost' => 0, 'isk_lost' => 0.0], 'op' => ['lost' => 0, 'isk_lost' => 0.0]];
+        if ($wcAlly === [] || $hostile === []) {
+            return $empty;
+        }
+        $wcStr = implode(',', $wcAlly);
+        $hStr = implode(',', $hostile);
+        $rows = DB::select("
+            SELECT
+                CASE
+                    WHEN k.victim_alliance_id IN ($wcStr) THEN 'wc'
+                    WHEN k.victim_alliance_id IN ($hStr)  THEN 'op'
+                    ELSE 'other'
+                END AS side,
+                COUNT(*) AS lost,
+                COALESCE(SUM(k.total_value), 0) AS isk_lost
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            WHERE k.victim_ship_category_id = 65
+            GROUP BY side
+        ");
+        $out = $empty;
+        foreach ($rows as $r) {
+            if (! in_array($r->side, ['wc', 'op'], true)) continue;
+            $out[$r->side]['lost'] = (int) $r->lost;
+            $out[$r->side]['isk_lost'] = (float) $r->isk_lost;
+        }
+        return $out;
+    }
+
+    /**
+     * Systems war scoreboard: per system, whichever side landed more
+     * kills on the war's killmails "wins" that system. Count of
+     * systems each side dominates is the headline metric. Excludes
+     * systems where the kill count tied between sides.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $hostile
+     * @return array{wc: array{dominated: int, contested: int, total: int}, op: array{dominated: int, contested: int, total: int}}
+     */
+    private function systemsWarTotals(array $wcAlly, array $hostile): array
+    {
+        $empty = ['wc' => ['dominated' => 0, 'contested' => 0, 'total' => 0],
+                  'op' => ['dominated' => 0, 'contested' => 0, 'total' => 0]];
+        if ($wcAlly === [] || $hostile === []) {
+            return $empty;
+        }
+        $wcStr = implode(',', $wcAlly);
+        $hStr = implode(',', $hostile);
+        // Per system: count kms where WC was the killing side
+        // (victim ∈ hostile) vs Op was the killing side (victim ∈ wc).
+        $rows = DB::select("
+            SELECT k.solar_system_id AS sid,
+                   SUM(CASE WHEN k.victim_alliance_id IN ($hStr) THEN 1 ELSE 0 END) AS wc_kills,
+                   SUM(CASE WHEN k.victim_alliance_id IN ($wcStr) THEN 1 ELSE 0 END) AS op_kills
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            GROUP BY k.solar_system_id
+        ");
+        $wcDom = 0; $opDom = 0; $contested = 0; $total = 0;
+        foreach ($rows as $r) {
+            $w = (int) $r->wc_kills;
+            $o = (int) $r->op_kills;
+            $total++;
+            if ($w > $o) {
+                $wcDom++;
+            } elseif ($o > $w) {
+                $opDom++;
+            } else {
+                $contested++;
+            }
+        }
+        return [
+            'wc' => ['dominated' => $wcDom, 'contested' => $contested, 'total' => $total],
+            'op' => ['dominated' => $opDom, 'contested' => $contested, 'total' => $total],
+        ];
+    }
+
+    /**
+     * Sov war scoreboard: how many sov-defining structures each side
+     * destroyed of the OTHER side's. Sov Hub (type 32458) kills are
+     * the strongest proxy we have for "system taken over" without a
+     * sov-history table — when Sov Hub goes boom in a system, control
+     * has typically flipped.
+     *
+     * Also counts current sov ownership snapshot among systems where
+     * war kills happened so the operator can see the standing balance
+     * even though we don't track flip history yet.
+     *
+     * @param  list<int>  $wcAlly
+     * @param  list<int>  $hostile
+     * @return array{
+     *   wc: array{hubs_killed: int, hubs_lost: int, sov_now: int},
+     *   op: array{hubs_killed: int, hubs_lost: int, sov_now: int}
+     * }
+     */
+    private function sovWarTotals(array $wcAlly, array $hostile, ?string $warStart = null): array
+    {
+        $empty = ['wc' => ['hubs_killed' => 0, 'hubs_lost' => 0, 'sov_now' => 0,
+                            'flips_gained' => 0, 'flips_lost' => 0, 'baseline_date' => null],
+                  'op' => ['hubs_killed' => 0, 'hubs_lost' => 0, 'sov_now' => 0,
+                            'flips_gained' => 0, 'flips_lost' => 0, 'baseline_date' => null]];
+        if ($wcAlly === [] || $hostile === []) {
+            return $empty;
+        }
+        $wcStr = implode(',', $wcAlly);
+        $hStr = implode(',', $hostile);
+        // Sov Hub kills (type 32458, group 1012). Count where each
+        // side was the VICTIM — that's their lost sov nodes.
+        $rows = DB::select("
+            SELECT
+                CASE
+                    WHEN k.victim_alliance_id IN ($wcStr) THEN 'wc'
+                    WHEN k.victim_alliance_id IN ($hStr)  THEN 'op'
+                    ELSE 'other'
+                END AS side,
+                COUNT(*) AS lost
+            FROM _war_kms wk
+            JOIN killmails k ON k.killmail_id = wk.killmail_id
+            WHERE k.victim_ship_type_id = 32458
+            GROUP BY side
+        ");
+        $wcLost = 0; $opLost = 0;
+        foreach ($rows as $r) {
+            if ($r->side === 'wc') $wcLost = (int) $r->lost;
+            if ($r->side === 'op') $opLost = (int) $r->lost;
+        }
+        // Snapshot of current sov ownership in war-touched systems.
+        $sovRows = DB::select("
+            SELECT
+                SUM(CASE WHEN ss.alliance_id IN ($wcStr) THEN 1 ELSE 0 END) AS wc_sov,
+                SUM(CASE WHEN ss.alliance_id IN ($hStr)  THEN 1 ELSE 0 END) AS op_sov
+            FROM (
+                SELECT DISTINCT k.solar_system_id
+                FROM _war_kms wk
+                JOIN killmails k ON k.killmail_id = wk.killmail_id
+            ) sys
+            JOIN system_sovereignty ss ON ss.solar_system_id = sys.solar_system_id
+        ");
+        $wcNow = (int) ($sovRows[0]->wc_sov ?? 0);
+        $opNow = (int) ($sovRows[0]->op_sov ?? 0);
+
+        // Real flips computed from system_sovereignty_history. Find
+        // the earliest snapshot AT or AFTER war start (or oldest
+        // snapshot if war started before our history began) and diff
+        // ownership against today.
+        $wcGained = 0; $wcLostFlips = 0; $opGained = 0; $opLostFlips = 0;
+        $baselineDate = null;
+        if ($warStart !== null) {
+            $baseline = DB::selectOne(
+                "SELECT MIN(captured_on) AS d FROM system_sovereignty_history
+                  WHERE captured_on >= ?",
+                [substr($warStart, 0, 10)],
+            );
+            if ($baseline === null || $baseline->d === null) {
+                // Fall back to oldest snapshot — better than nothing.
+                $baseline = DB::selectOne("SELECT MIN(captured_on) AS d FROM system_sovereignty_history");
+            }
+            $baselineDate = $baseline?->d;
+            if ($baselineDate !== null) {
+                // Today's snapshot for diffing.
+                $today = DB::selectOne("SELECT MAX(captured_on) AS d FROM system_sovereignty_history");
+                if ($today !== null && $today->d !== null && $today->d !== $baselineDate) {
+                    $rows = DB::select(
+                        "SELECT b.solar_system_id, b.alliance_id AS base_aid, t.alliance_id AS today_aid
+                         FROM system_sovereignty_history b
+                         LEFT JOIN system_sovereignty_history t
+                                ON t.solar_system_id = b.solar_system_id
+                               AND t.captured_on = ?
+                         WHERE b.captured_on = ?",
+                        [$today->d, $baselineDate],
+                    );
+                    foreach ($rows as $r) {
+                        $base = $r->base_aid !== null ? (int) $r->base_aid : 0;
+                        $now  = $r->today_aid !== null ? (int) $r->today_aid : 0;
+                        if ($base === $now) continue;
+                        $baseSide = in_array($base, $wcAlly, true) ? 'wc' : (in_array($base, $hostile, true) ? 'op' : null);
+                        $nowSide  = in_array($now, $wcAlly, true) ? 'wc' : (in_array($now, $hostile, true) ? 'op' : null);
+                        if ($baseSide === 'wc' && $nowSide === 'op') { $wcLostFlips++; $opGained++; }
+                        elseif ($baseSide === 'op' && $nowSide === 'wc') { $opLostFlips++; $wcGained++; }
+                        // Flips to/from neutral (e.g. dropped sov) we ignore here.
+                    }
+                }
+            }
+        }
+
+        return [
+            // hubs_killed = Sov Hubs each side destroyed of the OTHER side
+            'wc' => [
+                'hubs_killed' => $opLost, 'hubs_lost' => $wcLost, 'sov_now' => $wcNow,
+                'flips_gained' => $wcGained, 'flips_lost' => $wcLostFlips,
+                'baseline_date' => $baselineDate,
+            ],
+            'op' => [
+                'hubs_killed' => $wcLost, 'hubs_lost' => $opLost, 'sov_now' => $opNow,
+                'flips_gained' => $opGained, 'flips_lost' => $opLostFlips,
+                'baseline_date' => $baselineDate,
+            ],
+        ];
+    }
+
     private function upwellStructureTimeline(string $start, array $wcAlly, array $hostile): array
     {
         if ($wcAlly === [] || $hostile === []) {

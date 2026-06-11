@@ -39,7 +39,7 @@ final class BattleTheaterViewData
     {
         $participants = $theater->participants()->orderByDesc('isk_lost')->get();
         $systems = $theater->systems()
-            ->with('solarSystem:id,name,security_status')
+            ->with('solarSystem:id,name,security_status,position2d_x,position2d_y,region_id')
             ->orderByDesc('kill_count')
             ->get();
 
@@ -84,6 +84,21 @@ final class BattleTheaterViewData
             sides: $sides,
             participants: $participants,
             overrides: $overrides,
+        );
+
+        // Side C reclassification by shoot-direction (per-character):
+        //   killed only A-victims  → move to Side B (they fought against A)
+        //   killed only B-victims  → move to Side A (they fought against B)
+        //   killed both sides      → stay Side C (genuine free-for-all)
+        //   killed neither + not killed by A or B → drop entirely (drive-by
+        //     ratters / unaffiliated noise that the kill-graph happened to
+        //     pull into the cluster).
+        // Runs AFTER the alliance-level resolver so per-character
+        // shoot-direction overrides bloc-anchor noise.
+        [$sides, $participants] = $this->reclassifyThirdParties(
+            theaterId: $theater->id,
+            sides: $sides,
+            participants: $participants,
         );
 
         $blocIds = array_values(array_filter([
@@ -139,6 +154,13 @@ final class BattleTheaterViewData
         $sideKillCounts = $this->buildKillCountsBySide($killmailIds, $sides);
         $iskKilledBySide = $sideKillCounts['isk'];
         $killsBySide = $sideKillCounts['kills'];
+
+        // Strip non-kill kms (bubbles / MTUs / fighters / drones) from
+        // per-pilot kill counts so the per-pilot card doesn't inflate
+        // someone who shot a bunch of anchored bubbles. Loss counters
+        // unchanged — destroying a bubble still costs the owner.
+        $this->stripNonKillsFromParticipants($killmailIds, $participants);
+
         $sideTotals = $this->computeSideTotals($participants, $sides, $iskKilledBySide, $killsBySide);
 
         // Alliance-level kill involvements = COUNT(DISTINCT killmail_id)
@@ -201,9 +223,23 @@ final class BattleTheaterViewData
             + $sideTotals[BattleTheaterSideResolver::SIDE_C]['deaths']
         );
 
-        // zKill total for the same window — shown alongside our valuation
-        // in the battle overview. Fetched on-demand, cached 24h.
-        $zkillTotalIskLost = $this->zkillValues->totalForTheater($theater);
+        // zKill comparison — prefer per-km aggregate from the
+        // zkill_total_value column (covers ALL kms in the theater)
+        // when coverage ≥ 95%. Falls back to /api/related/'s 1h ×
+        // primary system summary when coverage is too sparse to be
+        // representative.
+        $zkillAggregate = $this->zkillValues->aggregateForTheater($theater);
+        $zkillTotalIskLost = null;
+        $zkillCoverage = null;
+        $zkillScope = null;
+        if ($zkillAggregate !== null) {
+            $zkillTotalIskLost = $zkillAggregate['sum_isk'];
+            $zkillCoverage = ['covered' => $zkillAggregate['covered'], 'total' => $zkillAggregate['total']];
+            $zkillScope = 'all_kms';
+        } else {
+            $zkillTotalIskLost = $this->zkillValues->totalForTheater($theater);
+            $zkillScope = $zkillTotalIskLost !== null ? 'related_1h' : null;
+        }
 
         return [
             'theater' => $theater,
@@ -211,6 +247,8 @@ final class BattleTheaterViewData
             'reconciled_total_isk_lost' => $reconciledTotalIskLost,
             'reconciled_total_kills' => $reconciledTotalKills,
             'zkill_total_isk_lost' => $zkillTotalIskLost,
+            'zkill_coverage' => $zkillCoverage,
+            'zkill_scope' => $zkillScope,
             'blocs' => $blocs,
             'names' => $names,
             'participants' => $participants,
@@ -281,6 +319,150 @@ final class BattleTheaterViewData
      * @param  \Illuminate\Support\Collection<int, \App\Domains\KillmailsBattleTheaters\Models\BattleTheaterSideOverride>  $overrides
      * @return array{0: BattleTheaterSideResolution, 1: Collection<int, BattleTheaterParticipant>, 2: list<int>}
      */
+    /**
+     * Per-character Side C reclassification by shoot-direction.
+     *
+     *   killed only A-victims  → Side B
+     *   killed only B-victims  → Side A
+     *   killed both sides      → stay Side C
+     *   killed neither + not killed by A or B → drop entirely
+     *
+     * Operator rationale: bloc-anchor + alliance-level resolution
+     * sometimes leaves real combatants in Side C (small alliances /
+     * solo pilots / unaffiliated mercs) when their alliance had no
+     * resolver-detectable bloc tie. This pass uses the most direct
+     * signal — who they shot in this fight — to fold them into the
+     * side they actually fought against. Pilots who neither killed
+     * nor were killed by either bloc were drive-bys swept into the
+     * cluster; they get dropped from the rollup.
+     *
+     * @return array{0: BattleTheaterSideResolution, 1: Collection<int, BattleTheaterParticipant>}
+     */
+    private function reclassifyThirdParties(
+        int $theaterId,
+        BattleTheaterSideResolution $sides,
+        Collection $participants,
+    ): array {
+        $sideByChar = $sides->sideByCharacterId;
+        $thirdPartyChars = [];
+        foreach ($sideByChar as $cid => $side) {
+            if ($side === BattleTheaterSideResolver::SIDE_C) {
+                $thirdPartyChars[(int) $cid] = true;
+            }
+        }
+        if ($thirdPartyChars === []) {
+            return [$sides, $participants];
+        }
+
+        $killmailIds = DB::table('battle_theater_killmails')
+            ->where('theater_id', $theaterId)
+            ->pluck('killmail_id')
+            ->all();
+        if ($killmailIds === []) {
+            return [$sides, $participants];
+        }
+
+        // Per-km victim side lookup (excludes NPC victims).
+        $victimSidePerKm = [];
+        DB::table('killmails')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereNotNull('victim_character_id')
+            ->select(['killmail_id', 'victim_character_id'])
+            ->get()
+            ->each(function ($r) use (&$victimSidePerKm, $sideByChar): void {
+                $vid = (int) $r->victim_character_id;
+                $vSide = $sideByChar[$vid] ?? null;
+                if ($vSide !== null) {
+                    $victimSidePerKm[(int) $r->killmail_id] = $vSide;
+                }
+            });
+
+        // Tally per third-party char: how many A-victim and B-victim kms
+        // they were on as attacker.
+        $aKills = [];
+        $bKills = [];
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $killmailIds)
+            ->whereIn('character_id', array_keys($thirdPartyChars))
+            ->select(['killmail_id', 'character_id'])
+            ->get()
+            ->each(function ($r) use (&$aKills, &$bKills, $victimSidePerKm): void {
+                $cid = (int) $r->character_id;
+                $vSide = $victimSidePerKm[(int) $r->killmail_id] ?? null;
+                if ($vSide === BattleTheaterSideResolver::SIDE_A) {
+                    $aKills[$cid] = ($aKills[$cid] ?? 0) + 1;
+                } elseif ($vSide === BattleTheaterSideResolver::SIDE_B) {
+                    $bKills[$cid] = ($bKills[$cid] ?? 0) + 1;
+                }
+            });
+
+        // Per third-party char: were they killed by Side A or Side B?
+        // Pull km → FB attacker side via killmail_attackers + sideByChar.
+        $killedBy = [];
+        DB::table('killmail_attackers as a')
+            ->join('killmails as k', 'k.killmail_id', '=', 'a.killmail_id')
+            ->whereIn('a.killmail_id', $killmailIds)
+            ->where('a.is_final_blow', true)
+            ->whereIn('k.victim_character_id', array_keys($thirdPartyChars))
+            ->whereNotNull('a.character_id')
+            ->select(['a.character_id as fb_cid', 'k.victim_character_id as victim_cid'])
+            ->get()
+            ->each(function ($r) use (&$killedBy, $sideByChar): void {
+                $fbSide = $sideByChar[(int) $r->fb_cid] ?? null;
+                if ($fbSide === BattleTheaterSideResolver::SIDE_A || $fbSide === BattleTheaterSideResolver::SIDE_B) {
+                    $killedBy[(int) $r->victim_cid][$fbSide] = true;
+                }
+            });
+
+        $newMap = $sideByChar;
+        $excludedChars = [];
+        foreach ($thirdPartyChars as $cid => $_) {
+            $a = $aKills[$cid] ?? 0;
+            $b = $bKills[$cid] ?? 0;
+            $killedByA = isset($killedBy[$cid][BattleTheaterSideResolver::SIDE_A]);
+            $killedByB = isset($killedBy[$cid][BattleTheaterSideResolver::SIDE_B]);
+            if ($a > 0 && $b > 0) {
+                continue; // genuine free-for-all → stay C
+            }
+            if ($a > 0 && $b === 0) {
+                $newMap[$cid] = BattleTheaterSideResolver::SIDE_B;
+                continue;
+            }
+            if ($b > 0 && $a === 0) {
+                $newMap[$cid] = BattleTheaterSideResolver::SIDE_A;
+                continue;
+            }
+            // Neither side killed. If they got killed by one side, fold
+            // them into the OTHER side (they were a target the side
+            // shot at = they were on the opposing side from the shooter).
+            if ($killedByA && ! $killedByB) {
+                $newMap[$cid] = BattleTheaterSideResolver::SIDE_B;
+                continue;
+            }
+            if ($killedByB && ! $killedByA) {
+                $newMap[$cid] = BattleTheaterSideResolver::SIDE_A;
+                continue;
+            }
+            if ($killedByA && $killedByB) {
+                continue; // killed by both → genuine third party, stay C
+            }
+            // Didn't kill either side AND not killed by either → drop.
+            unset($newMap[$cid]);
+            $excludedChars[$cid] = true;
+        }
+
+        $newSides = new BattleTheaterSideResolution(
+            sideByCharacterId: $newMap,
+            sideABlocId: $sides->sideABlocId,
+            sideBBlocId: $sides->sideBBlocId,
+            allianceToBloc: $sides->allianceToBloc,
+        );
+        if ($excludedChars !== []) {
+            $participants = $participants->reject(fn ($p) => isset($excludedChars[(int) $p->character_id]))->values();
+        }
+        return [$newSides, $participants];
+    }
+
     private function applyOverrides(
         BattleTheaterSideResolution $sides,
         Collection $participants,
@@ -838,12 +1020,15 @@ final class BattleTheaterViewData
             return $out;
         }
 
-        // Load killmail meta (victim, time, ship group) + totalValue
-        // so we can both credit by FB and rescue capsule kills that
-        // have no character FB by linking them back to the parent
-        // ship kill.
+        // Load killmail meta (victim, time, ship group + category) +
+        // totalValue. Category is needed to filter out "roadblock" kills
+        // — Mobile Warp Disruptor bubbles, MTUs, fighters, drones —
+        // which DO count as the owner's loss (their stuff was destroyed)
+        // but DON'T count as a kill for the destroyer (it's a deployable,
+        // not a player ship). See $nonKillCategories below.
         $kmMeta = DB::table('killmails as k')
             ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
             ->whereIn('k.killmail_id', $killmailIds)
             ->select([
                 'k.killmail_id',
@@ -851,6 +1036,7 @@ final class BattleTheaterViewData
                 'k.victim_character_id',
                 'k.total_value',
                 't.group_id as ship_group_id',
+                'g.category_id as ship_category_id',
             ])
             ->get()
             ->keyBy('killmail_id');
@@ -912,7 +1098,11 @@ final class BattleTheaterViewData
         }
 
         // Credit each side. FB character first; capsule-linked
-        // parent FB as fallback for the pod kms.
+        // parent FB as fallback for the pod kms. ISK destroyed always
+        // counts (so totals balance with ISK lost). Kill counter
+        // skipped for "roadblock" victims (deployables / fighters /
+        // drones) — destroying a bubble or MTU isn't a player kill,
+        // see isNonKillVictim().
         foreach ($kmMeta as $kmId => $row) {
             $kmId = (int) $kmId;
             $charId = $fbCharByKm[$kmId] ?? $capsuleLinked[$kmId] ?? null;
@@ -921,10 +1111,88 @@ final class BattleTheaterViewData
             }
             $side = $sides->sideByCharacterId[$charId] ?? BattleTheaterSideResolver::SIDE_C;
             $out['isk'][$side] += (float) $row->total_value;
-            $out['kills'][$side] += 1;
+            if (! $this->isNonKillVictim((int) ($row->ship_category_id ?? 0))) {
+                $out['kills'][$side] += 1;
+            }
         }
 
         return $out;
+    }
+
+    /**
+     * "Roadblock" victim categories — destruction counts as the
+     * owner's loss but NOT as a kill for the destroyer. Same rule
+     * EVE players apply mentally: shooting someone's MTU or anchored
+     * bubble isn't a "kill", it's a chore.
+     *
+     *   22 — Deployable (Mobile Warp Disruptor, MTU, Mobile Depot,
+     *        Mobile Cyno Inhibitor, Mobile Scan Inhibitor, Encounter
+     *        Surveillance System, Networked Sensor Array, etc.)
+     *   87 — Fighter (Light/Heavy/Support fighter squadrons —
+     *        Dragonfly, Firbolg, Templar, Garde II, Equite, etc.)
+     *   18 — Drone (Combat drones — Garde, Hammerhead etc.) — rarely
+     *        appear as victim, but when they do they are ammunition
+     *        not a kill.
+     */
+    private function isNonKillVictim(int $categoryId): bool
+    {
+        return in_array($categoryId, [22, 87, 18], true);
+    }
+
+    /**
+     * Subtract non-kill victim kms (bubbles / MTUs / fighters / drones)
+     * from each participant's `kills` and `final_blows` counters in the
+     * loaded collection. Mutates the collection in-place. Loss counters
+     * are intentionally untouched — a destroyed bubble still costs its
+     * owner the deploy fee.
+     *
+     * @param  list<int>  $killmailIds
+     * @param  Collection<int, BattleTheaterParticipant>  $participants
+     */
+    private function stripNonKillsFromParticipants(array $killmailIds, Collection $participants): void
+    {
+        if ($killmailIds === [] || $participants->isEmpty()) {
+            return;
+        }
+        $nonKillKms = DB::table('killmails as k')
+            ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
+            ->whereIn('k.killmail_id', $killmailIds)
+            ->whereIn('g.category_id', [22, 87, 18])
+            ->pluck('k.killmail_id')
+            ->all();
+        if ($nonKillKms === []) {
+            return;
+        }
+        // Per-character: how many of these km they were on as attacker
+        // (distinct, mirroring participant.kills semantics) + how many
+        // they final-blew.
+        $killStrip = [];
+        $fbStrip = [];
+        DB::table('killmail_attackers')
+            ->whereIn('killmail_id', $nonKillKms)
+            ->whereNotNull('character_id')
+            ->select(['character_id', 'killmail_id', 'is_final_blow'])
+            ->get()
+            ->each(function ($r) use (&$killStrip, &$fbStrip): void {
+                $cid = (int) $r->character_id;
+                $kmId = (int) $r->killmail_id;
+                if (! isset($killStrip[$cid][$kmId])) {
+                    $killStrip[$cid][$kmId] = true;
+                }
+                if ((int) $r->is_final_blow === 1) {
+                    $fbStrip[$cid] = ($fbStrip[$cid] ?? 0) + 1;
+                }
+            });
+        foreach ($participants as $p) {
+            $cid = (int) $p->character_id;
+            if (isset($killStrip[$cid])) {
+                $p->kills = max(0, (int) $p->kills - count($killStrip[$cid]));
+            }
+            if (isset($fbStrip[$cid])) {
+                $p->final_blows = max(0, (int) $p->final_blows - $fbStrip[$cid]);
+            }
+        }
     }
 
     /**
@@ -953,17 +1221,27 @@ final class BattleTheaterViewData
             return [];
         }
 
-        // km → victim side (for blue-on-blue filter below).
+        // km → victim side (for blue-on-blue filter below). Also
+        // capture victim category so we can drop "roadblock" kills
+        // (deployables / fighters / drones) — destroying a bubble or
+        // an MTU isn't a kill, see isNonKillVictim().
         $victimSidePerKm = [];
-        DB::table('killmails')
-            ->whereIn('killmail_id', $killmailIds)
-            ->select(['killmail_id', 'victim_character_id'])
+        $nonKillKms = [];
+        DB::table('killmails as k')
+            ->leftJoin('ref_item_types as t', 't.id', '=', 'k.victim_ship_type_id')
+            ->leftJoin('ref_item_groups as g', 'g.id', '=', 't.group_id')
+            ->whereIn('k.killmail_id', $killmailIds)
+            ->select(['k.killmail_id', 'k.victim_character_id', 'g.category_id'])
             ->get()
-            ->each(function ($r) use (&$victimSidePerKm, $sides): void {
+            ->each(function ($r) use (&$victimSidePerKm, &$nonKillKms, $sides): void {
+                $kmId = (int) $r->killmail_id;
                 $vid = $r->victim_character_id ? (int) $r->victim_character_id : null;
-                $victimSidePerKm[(int) $r->killmail_id] = $vid !== null
+                $victimSidePerKm[$kmId] = $vid !== null
                     ? ($sides->sideByCharacterId[$vid] ?? BattleTheaterSideResolver::SIDE_C)
                     : BattleTheaterSideResolver::SIDE_C;
+                if ($this->isNonKillVictim((int) ($r->category_id ?? 0))) {
+                    $nonKillKms[$kmId] = true;
+                }
             });
 
         // Alliance → its side. An alliance's side is the side its
@@ -994,9 +1272,12 @@ final class BattleTheaterViewData
             ->whereNotNull('alliance_id')
             ->select(['alliance_id', 'killmail_id'])
             ->get()
-            ->each(function ($row) use (&$seen, $victimSidePerKm, $allianceSide): void {
+            ->each(function ($row) use (&$seen, $victimSidePerKm, $allianceSide, $nonKillKms): void {
                 $aid = (int) $row->alliance_id;
                 $kmId = (int) $row->killmail_id;
+                if (isset($nonKillKms[$kmId])) {
+                    return; // bubble / MTU / fighter — not a kill
+                }
                 $victimSide = $victimSidePerKm[$kmId] ?? BattleTheaterSideResolver::SIDE_C;
                 $allySide = $allianceSide[$aid] ?? null;
                 // Filter same-side: if the alliance is on Side A and
@@ -1094,6 +1375,10 @@ final class BattleTheaterViewData
             BattleTheaterSideResolver::SIDE_B => [],
             BattleTheaterSideResolver::SIDE_C => [],
         ];
+        // Each (pilot, hull) pair contributes 1. A pilot who reshipped
+        // Monitor → Claymore → Loki adds 3 hulls to the side composition,
+        // not 1. This makes composition counts line up with reship-driven
+        // kill / loss volume instead of under-counting fleet presence.
         foreach ($participants as $p) {
             $cid = (int) $p->character_id;
             $side = $sides->sideByCharacterId[$cid] ?? BattleTheaterSideResolver::SIDE_C;
@@ -1101,12 +1386,13 @@ final class BattleTheaterViewData
             if ($hulls === []) {
                 continue;
             }
-            arsort($hulls);
-            $primaryTid = (int) array_key_first($hulls);
-            $group = (string) ($shipGroupNames[$primaryTid] ?? 'Unknown');
-            $row = $bySide[$side][$group] ?? ['class' => $group, 'count' => 0, 'sample_type_id' => $primaryTid];
-            $row['count']++;
-            $bySide[$side][$group] = $row;
+            foreach (array_keys($hulls) as $tid) {
+                $tid = (int) $tid;
+                $group = (string) ($shipGroupNames[$tid] ?? 'Unknown');
+                $row = $bySide[$side][$group] ?? ['class' => $group, 'count' => 0, 'sample_type_id' => $tid];
+                $row['count']++;
+                $bySide[$side][$group] = $row;
+            }
         }
         $out = [];
         foreach ($bySide as $side => $rows) {
